@@ -1,241 +1,243 @@
 # odsslicer
 
-Lecteur Python pour les fichiers `.ods` (OpenDocument Spreadsheet, LibreOffice/OpenOffice Calc),
-avec une API d'indexation inspirée de numpy : `sheet["A1"]`, `sheet[0, 0]`, `sheet["A1:B3"]`,
-slices Python classiques, etc.
+Python reader for `.ods` files (OpenDocument Spreadsheet, LibreOffice/OpenOffice Calc), with a
+numpy-inspired indexing API: `sheet["A1"]`, `sheet[0, 0]`, `sheet["A1:B3"]`, plain Python
+slices, etc.
 
-Le module parse directement `content.xml` (via BeautifulSoup) et gère les types de cellule
-ODF (texte, nombre, pourcentage, devise, date, heure, booléen), les formules, ainsi que les
-lignes/colonnes répétées et fusionnées.
+The module parses `content.xml` directly (via BeautifulSoup) and handles ODF cell types
+(text, number, percentage, currency, date, time, boolean), formulas, as well as repeated and
+merged rows/columns.
 
-Support d'écriture : `cell.value = ...` puis `reader.save(...)`. Les cellules répétées ou
-fusionnées sont automatiquement dépliées/défusionnées en arrière-plan au premier accès en
-écriture, et écrire au-delà de l'étendue actuelle d'une feuille l'agrandit automatiquement
-(nouvelles lignes/colonnes) — voir [Écriture](#écriture-expérimentale) ci-dessous pour le
-détail et les limites restantes.
+Write support: `cell.value = ...` then `reader.save(...)`. Repeated or merged cells are
+automatically unrolled/unmerged in the background on first write access, and writing beyond a
+sheet's current extent grows it automatically (new rows/columns) — see
+[Writing](#writing-experimental) below for details and remaining limitations.
 
 ## Installation
 
-Pas encore publié sur PyPI (nom réservé : `odsslicer`). En attendant, copier le dossier
-`odsslicer/` dans un projet qui l'a comme sous-dossier importable, ou l'ajouter au `PYTHONPATH`.
+Not published on PyPI yet. Clone the repo — since the checked-out folder is itself named
+`odsslicer`, add its parent directory to `PYTHONPATH` (or copy it into a project that already
+has it as an importable subfolder):
 
-### Dépendances
+```bash
+git clone https://github.com/antnardo/odsslicer.git
+```
 
-- [`beautifulsoup4`](https://pypi.org/project/beautifulsoup4/) + `lxml` (parseur XML)
+### Dependencies
+
+- [`beautifulsoup4`](https://pypi.org/project/beautifulsoup4/) + `lxml` (XML parser)
 - [`numpy`](https://pypi.org/project/numpy/)
 
 ```bash
 pip install beautifulsoup4 lxml numpy
 ```
 
-## Usage rapide
+## Quick usage
 
 ```python
 from odsslicer import ODSReader
 from pathlib import Path
 
-table = ODSReader(Path("classeur.ods"))
+table = ODSReader(Path("workbook.ods"))
 table.sheets_names        # ["Sheet1", "Sheet2", ...]
-table.sheets               # liste de Sheet (mise en cache)
+table.sheets               # list of Sheet (cached)
 sheet = table.sheet("Sheet1")
 
-sheet["A1"]                # cellule A1 (Cell)
-sheet[0, 0]                 # équivalent : (ligne, colonne), 0-indexé
-sheet[0]                    # ligne 1 entière (comme sheet["1"])
-sheet[:, 0]                  # colonne A entière (comme sheet["A"])
-sheet["A1:B3"]               # bloc, équivalent à sheet[0:3, 0:2]
+sheet["A1"]                # cell A1 (Cell)
+sheet[0, 0]                 # equivalent: (row, col), 0-indexed
+sheet[0]                    # entire row 1 (same as sheet["1"])
+sheet[:, 0]                  # entire column A (same as sheet["A"])
+sheet["A1:B3"]               # block, equivalent to sheet[0:3, 0:2]
 
-sheet["ZZZ100000"]          # hors du tableau : renvoie une cellule vide (value=None), pas d'erreur
+sheet["ZZZ100000"]          # outside the data: returns an empty cell (value=None), no error
 ```
 
-Une adresse ou un slice hors des données renvoie toujours des cellules vides (`value=None`)
-de la bonne forme, plutôt qu'une erreur — la forme (shape) suit les mêmes conventions que
-numpy (une colonne (n, 1) reste bien 2D, cf. `to_vector()` ci-dessous pour l'aplatir).
+An address or slice outside the data always returns empty cells (`value=None`) of the correct
+shape, rather than an error — the shape follows the same conventions as numpy (a (n, 1) column
+stays 2D, see `to_vector()` below to flatten it).
 
-### Cellules (`Cell`)
+### Cells (`Cell`)
 
 ```python
 cell = sheet["A1"]
-cell.value          # valeur typée (str / float / bool / datetime.date / datetime.time / None)
-cell.text           # texte tel qu'affiché dans le tableur (toujours une str, ou None)
-str(cell)            # == cell.text (ou "None")
+cell.value          # typed value (str / float / bool / datetime.date / datetime.time / None)
+cell.text           # text as displayed in the spreadsheet (always a str, or None)
+str(cell)            # == cell.text (or "None")
 cell.format          # "string" / "float" / "percentage" / "currency" / "date" / "time" / "boolean" / None
-cell.row, cell.col   # position 0-indexée
-cell.address         # adresse style tableur, ex. "A1", "AZ12"
-cell.is_formula      # True si la cellule contient une formule ODF
-cell.is_empty        # True si aucune valeur/texte/format n'est défini
+cell.row, cell.col   # 0-indexed position
+cell.address         # spreadsheet-style address, e.g. "A1", "AZ12"
+cell.is_formula      # True if the cell holds an ODF formula
+cell.is_empty        # True if no value/text/format is set
 ```
 
-`Cell` supporte les conversions numériques usuelles (`int()`, `float()`, `round()`, `abs()`,
-`-`, `+`, `math.trunc/ceil/floor`) et les comparaisons (`==`, `<`, `>`, `<=`, `>=`), qui portent
-toutes sur `cell.value`. Attention : comparer une cellule vide (`value=None`) à une cellule
-numérique lève un `TypeError`, comme en Python normal (`None < 3.4`).
+`Cell` supports the usual numeric conversions (`int()`, `float()`, `round()`, `abs()`, `-`,
+`+`, `math.trunc/ceil/floor`) and comparisons (`==`, `<`, `>`, `<=`, `>=`), all of which operate
+on `cell.value`. Note: comparing an empty cell (`value=None`) to a numeric cell raises a
+`TypeError`, just like plain Python (`None < 3.4`).
 
-Les formats disponibles sont listés dans `odsslicer.FORMATS` (dict format ODF -> callable de
-conversion).
+Available formats are listed in `odsslicer.FORMATS` (ODF format -> conversion callable).
 
-### Tableaux (`ArrayValues`)
+### Arrays (`ArrayValues`)
 
-Toute sélection multi-cellules (`sheet[0]`, `sheet[:, 0]`, `sheet["A1:B3"]`, itération sur une
-`Sheet`...) renvoie un objet `ArrayValues`, wrapper autour d'une liste de `Cell` (1D) ou d'une
-liste de listes de `Cell` (2D) :
+Any multi-cell selection (`sheet[0]`, `sheet[:, 0]`, `sheet["A1:B3"]`, iterating over a
+`Sheet`...) returns an `ArrayValues` object, a wrapper around a list of `Cell` (1D) or a list
+of lists of `Cell` (2D):
 
 ```python
 arr = sheet["A1:B3"]
-arr.dimension     # 0 (une cellule seule), 1 (ligne/colonne) ou 2 (bloc)
-arr.size           # shape façon numpy, ex. (3, 2)
-arr.to_list()       # valeurs brutes (list ou list de list), sans les objets Cell
-arr.to_numpy()      # np.array des valeurs
-arr.to_vector()     # pour une shape (n, 1) : renvoie un ArrayValues 1D de taille (n,)
+arr.dimension     # 0 (a single cell), 1 (row/column), or 2 (block)
+arr.size           # numpy-style shape, e.g. (3, 2)
+arr.to_list()       # raw values (list or list of list), without the Cell objects
+arr.to_numpy()      # np.array of the values
+arr.to_vector()     # for a (n, 1) shape: returns a 1D ArrayValues of size (n,)
 ```
 
-L'égalité (`==`) entre deux `ArrayValues` compare les valeurs (`to_list()`), pas l'identité des
-objets `Cell`.
+Equality (`==`) between two `ArrayValues` compares the values (`to_list()`), not the identity
+of the `Cell` objects.
 
-### Itération
+### Iteration
 
 ```python
-for row in sheet:              # équivalent à sheet[:]
+for row in sheet:              # equivalent to sheet[:]
     for cell in row:
         print(cell.address, cell.value)
 ```
 
-## Écriture (expérimentale)
+## Writing (experimental)
 
-`Cell.value` est réinscriptible — la nouvelle valeur remplace le contenu XML sous-jacent
-directement en mémoire :
+`Cell.value` is writable — the new value replaces the underlying XML content directly in
+memory:
 
 ```python
 from odsslicer import ODSReader
 
-table = ODSReader("classeur.ods")
+table = ODSReader("workbook.ods")
 sheet = table.sheet("Sheet1")
 
-sheet["A1"].value = "nouveau texte"
+sheet["A1"].value = "new text"
 sheet["A2"].value = 42.5
-sheet["A3"].value = None              # vide la cellule
+sheet["A3"].value = None              # clears the cell
 
-table.save("classeur_modifie.ods")     # ou table.save() pour écraser le fichier source
+table.save("modified_workbook.ods")    # or table.save() to overwrite the source file
 ```
 
-Types acceptés en écriture : `str`, `int`/`float`, `bool`, `datetime.date`, `datetime.time`, et
-`None` (vide la cellule). En écrivant un nombre sur une cellule déjà au format `percentage` ou
-`currency`, ce format est conservé. Écrire sur une cellule qui contenait une formule efface
-la formule (`is_formula` redevient `False`).
+Accepted types for writing: `str`, `int`/`float`, `bool`, `datetime.date`, `datetime.time`,
+and `None` (clears the cell). Writing a number over a cell already formatted as `percentage`
+or `currency` keeps that format. Writing over a cell that held a formula erases the formula
+(`is_formula` becomes `False` again).
 
-`ODSReader.save(path=None)` réécrit le `.ods` : `content.xml` est régénéré à partir de l'arbre
-en mémoire, tous les autres membres du zip (`styles.xml`, `meta.xml`, `settings.xml`,
-`manifest.xml`, miniature...) sont recopiés tels quels depuis le fichier source, et la
-convention ODF (`mimetype` en premier, non compressé) est respectée. Sans argument, `save()`
-écrase le fichier source.
+`ODSReader.save(path=None)` rewrites the `.ods`: `content.xml` is regenerated from the
+in-memory tree, every other zip member (`styles.xml`, `meta.xml`, `settings.xml`,
+`manifest.xml`, thumbnail...) is copied through unchanged from the source file, and the ODF
+convention (`mimetype` first, uncompressed) is respected. With no argument, `save()`
+overwrites the source file.
 
-### Dépliage automatique des cellules répétées et fusionnées
+### Automatic unrolling of repeated and merged cells
 
-ODS compresse les lignes/colonnes identiques en un seul élément XML partagé entre plusieurs
-`Cell`, et représente une fusion via une cellule maîtresse (haut-gauche, porteuse des attributs
-`table:number-*-spanned`) plus des cellules `table:covered-table-cell` cachées. Écrire dans une
-de ces cellules déclenche automatiquement, en arrière-plan, le "dépliage" de la structure
-concernée — la ligne/colonne compressée est scindée en éléments XML individuels, et/ou la
-fusion est défaite — avant que la nouvelle valeur ne soit posée :
+ODS compresses identical rows/columns into a single XML element shared between several
+`Cell`s, and represents a merge via a top-left "master" cell (carrying the
+`table:number-*-spanned` attributes) plus hidden `table:covered-table-cell` cells. Writing to
+one of these cells automatically triggers, in the background, the "unrolling" of the
+structure involved — the compressed row/column is split into individual XML elements, and/or
+the merge is undone — before the new value is applied:
 
 ```python
-sheet["C5"].value = 42   # C5 faisait partie d'un bloc de 6 lignes compressées : le bloc
-                          # est scindé en 6 lignes indépendantes, seule C5 change de valeur,
-                          # les 35 autres cellules du bloc gardent leur valeur d'origine
+sheet["C5"].value = 42   # C5 was part of a block of 6 compressed rows: the block is split
+                          # into 6 independent rows, only C5's value changes, the other 35
+                          # cells in the block keep their original value
 ```
 
-Écrire dans une cellule fusionnée (maîtresse ou cachée) défait toute la fusion : chaque
-cellule auparavant cachée redevient indépendante et révèle sa propre valeur — ODF la conserve
-déjà en interne sous `table:covered-table-cell`, exactement comme le ferait LibreOffice en
-défusionnant manuellement. Les objets `Cell` déjà obtenus avant l'écriture restent valides et
-sont automatiquement repointés vers leur nouvel élément XML individuel ; `sheet.size` ne change
-jamais suite à un dépliage (le nombre de lignes/colonnes logiques était déjà celui-là).
+Writing to a merged cell (master or hidden) undoes the whole merge: every previously hidden
+cell becomes independent again and reveals its own value — ODF already stores it internally
+under `table:covered-table-cell`, exactly as LibreOffice would when manually un-merging.
+`Cell` objects already obtained before the write remain valid and are automatically repointed
+to their new individual XML element; `sheet.size` never changes as a result of unrolling (the
+logical row/column count was already that value).
 
-### Agrandissement automatique de la feuille
+### Automatic sheet growth
 
-Écrire sur une adresse en dehors de l'étendue actuelle (`sheet.size`) agrandit la feuille au
-lieu de lever une erreur : les lignes existantes sont élargies avec des cellules vides si la
-colonne demandée dépasse la largeur actuelle, puis de nouvelles lignes (pleine largeur, vides)
-sont ajoutées si la ligne demandée dépasse la hauteur actuelle — y compris pour agrandir une
-feuille totalement vide (`sheet.size == (0, 0)`) depuis rien :
+Writing to an address outside the current extent (`sheet.size`) grows the sheet instead of
+raising an error: existing rows are widened with blank cells if the requested column exceeds
+the current width, then new (full-width, blank) rows are appended if the requested row
+exceeds the current height — including growing a completely empty sheet
+(`sheet.size == (0, 0)`) from scratch:
 
 ```python
 sheet.size            # (9, 2)
-sheet["E12"].value = "coin"
-sheet.size            # (12, 5) : lignes 10-12 ajoutées, colonnes C-E ajoutées, tout le reste vide
+sheet["E12"].value = "corner"
+sheet.size            # (12, 5): rows 10-12 added, columns C-E added, everything else blank
 ```
 
-`sheet.size`/`n_rows`/`n_cols` reflètent immédiatement la nouvelle étendue, et un simple accès
-en lecture (`sheet.get_row(50)`, `sheet["Z1"].value` sans assignation) n'agrandit jamais rien —
-seule une écriture (`.value = ...`) déclenche la croissance. Les nouvelles lignes/cellules
-n'héritent d'aucun style particulier (formatage par défaut).
+`sheet.size`/`n_rows`/`n_cols` immediately reflect the new extent, and a plain read
+(`sheet.get_row(50)`, `sheet["Z1"].value` with no assignment) never grows anything — only a
+write (`.value = ...`) triggers growth. New rows/cells don't inherit any particular style
+(default formatting).
 
-### Texte affiché : appris d'un exemple plutôt qu'une conversion brute
+### Displayed text: learned from an example rather than a raw conversion
 
-ODF ne stocke pas que la valeur d'une cellule (`office:value`) : il stocke aussi le texte tel
-qu'affiché (`text:p`), typiquement formaté selon la locale du document (séparateur décimal,
-suffixe `%`/`€`, format de date...). Plutôt que d'imposer un format arbitraire à l'écriture,
-`odsslicer` cherche une **autre cellule du même format** dans le document (en priorité
-l'ancien contenu de la cellule elle-même si elle avait déjà une valeur), compare sa valeur
-brute à son texte affiché pour en déduire un patron (séparateur décimal, nombre de décimales,
-préfixe/suffixe, ou motif de date `%d/%m/%y` etc.), vérifie que ce patron reproduit bien
-l'exemple, puis l'applique à la nouvelle valeur :
+ODF doesn't just store a cell's value (`office:value`): it also stores the text as displayed
+(`text:p`), typically formatted according to the document's locale (decimal separator,
+`%`/`€` suffix, date format...). Rather than imposing an arbitrary format on write,
+`odsslicer` looks for **another cell of the same format** in the document (preferring the
+cell's own prior content if it already had a value), compares its raw value to its displayed
+text to infer a pattern (decimal separator, decimal count, prefix/suffix, or a date pattern
+like `%d/%m/%y` etc.), checks that the pattern reproduces the example exactly, then applies it
+to the new value:
 
 ```python
-sheet["A6"].text    # "200,00 %" (valeur 2.0)
+sheet["A6"].text    # "200.00 %" (value 2.0)
 sheet["A6"].value = 0.5
-sheet["A6"].text    # "50,00 %" — même style que l'ancien contenu de la cellule
+sheet["A6"].text    # "50.00 %" — same style as the cell's previous content
 
-sheet["A8"].text    # "28/02/21" (format jour/mois/année sur 2 chiffres)
+sheet["A8"].text    # "28/02/21" (day/month/2-digit-year format)
 sheet["A8"].value = date(2030, 1, 5)
 sheet["A8"].text    # "05/01/30"
 ```
 
-Si aucun exemple n'est trouvé, ou si le patron déduit ne reproduit pas exactement le texte de
-l'exemple (donc jugé non fiable), `odsslicer` revient sur une conversion Python simple plutôt
-que de produire un texte incohérent. Pour les nombres "généraux" (format `float` simple, pas
-pourcentage/devise), seul le séparateur décimal est repris — jamais le nombre de décimales,
-qui tronquerait la précision de la nouvelle valeur.
+If no example is found, or if the inferred pattern doesn't reproduce the example's text
+exactly (and is therefore deemed unreliable), `odsslicer` falls back to a plain Python
+conversion rather than producing incoherent text. For "general" numbers (plain `float`
+format, not percentage/currency), only the decimal separator is reused — never the decimal
+count, which would truncate the new value's precision.
 
-### Ce qui n'est **pas** supporté
+### What is **not** supported
 
-- Pas d'écriture de formule, pas de création de nouvelle feuille.
-- Pas de véritable moteur de formatage ODF (résolution de `styles.xml`, locale du document,
-  devise réelle) : l'inférence ci-dessus est une heuristique par exemple, pas une lecture du
-  style de la cellule — elle peut échouer silencieusement (repli sur une conversion simple)
-  sur un format qu'aucune autre cellule du document n'illustre déjà.
+- No formula writing, no creating new sheets.
+- No real ODF formatting engine (resolving `styles.xml`, the document's locale, the actual
+  currency): the inference above is a learn-by-example heuristic, not a read of the cell's
+  style — it can silently fail (falling back to a plain conversion) for a format no other
+  cell in the document already illustrates.
 
-## Adressage des cellules
+## Cell addressing
 
-`Sheet.address(string, n_rows=1)` convertit une adresse texte en index/slice Python :
+`Sheet.address(string, n_rows=1)` converts a text address into a Python index/slice:
 
-| Notation      | Résultat                              |
-|---------------|----------------------------------------|
-| `"A1"`        | `(0, 0)` — (ligne, colonne)             |
-| `"1"`         | `0` — ligne seule                       |
-| `"A"`         | `(slice(n_rows), 0)` — colonne entière  |
-| `"A1:B3"`     | `(slice(0, 3), slice(0, 2))`            |
-| `"A:B"`       | `(slice(n_rows), slice(0, 2))`          |
-| `"1:2"`       | `slice(0, 2)`                            |
+| Notation      | Result                                 |
+|---------------|------------------------------------------|
+| `"A1"`        | `(0, 0)` — (row, col)                     |
+| `"1"`         | `0` — single row                          |
+| `"A"`         | `(slice(n_rows), 0)` — entire column       |
+| `"A1:B3"`     | `(slice(0, 3), slice(0, 2))`               |
+| `"A:B"`       | `(slice(n_rows), slice(0, 2))`             |
+| `"1:2"`       | `slice(0, 2)`                              |
 
-Une adresse malformée (`"1A"`, `"A:2"`, `"2:A"`, `"B:A"`...) lève un `ValueError`.
+A malformed address (`"1A"`, `"A:2"`, `"2:A"`, `"B:A"`...) raises a `ValueError`.
 
-`Sheet.string_address(row, col)` fait la conversion inverse (index 0-indexé -> `"A1"`,
-`"AZ12"`...) et `Sheet.string_to_col("AZ")` convertit des lettres de colonne en index — les
-deux utilisent la numération bijective en base 26 habituelle des tableurs (`Z` = 25,
-`AA` = 26, `AZ` = 51, `BA` = 52...).
+`Sheet.string_address(row, col)` performs the reverse conversion (0-indexed index -> `"A1"`,
+`"AZ12"`...) and `Sheet.string_to_col("AZ")` converts column letters to an index — both use
+the usual spreadsheet bijective base-26 numbering (`Z` = 25, `AA` = 26, `AZ` = 51, `BA` =
+52...).
 
-## Limites connues
+## Known limitations
 
-- **Écriture** : voir les limites détaillées dans [Écriture (expérimentale)](#écriture-expérimentale)
-  ci-dessus — seules les cellules simples (non répétées, non fusionnées) sont modifiables.
-- **Formules** : la valeur mise en cache par le tableur est lue (`office:value`), la formule
-  elle-même n'est pas ré-évaluée (et l'écriture ne recalcule évidemment rien non plus).
-- Les feuilles/lignes/colonnes vides au-delà de `MAX_REPEAT_ROWS` / `MAX_REPEAT_COLS`
-  (voir `classes.py`) sont détectées et écartées pour éviter de matérialiser des lignes ou
-  colonnes de taille `2**20`/`2**10` créées par LibreOffice pour le style par défaut d'une
-  feuille — un avertissement `[WARNING]` est affiché si une incohérence de longueur de ligne
-  est détectée après ce nettoyage.
+- **Writing**: see the detailed limitations in [Writing (experimental)](#writing-experimental)
+  above.
+- **Formulas**: the value cached by the spreadsheet is read (`office:value`), the formula
+  itself is not re-evaluated (and writing obviously doesn't recompute anything either).
+- Sheets/rows/columns beyond `MAX_REPEAT_ROWS` / `MAX_REPEAT_COLS` (see `classes.py`) are
+  detected and discarded to avoid materializing rows or columns of size `2**20`/`2**10`
+  created by LibreOffice for a sheet's default styling — a `[WARNING]` is printed if a row
+  length inconsistency is detected after this cleanup.
 
 ## Tests
 
@@ -244,85 +246,74 @@ pip install pytest beautifulsoup4 lxml numpy
 pytest odsslicer/tests/
 ```
 
-La suite (`odsslicer/tests/test_odsslicer.py`) couvre l'adressage (`Sheet.address`,
-`Sheet.string_address`/`string_to_col`), les types de cellule, les lignes/colonnes répétées et
-fusionnées, les feuilles vides, `ArrayValues`, l'écriture (`Cell.value = ...`, `ODSReader.save()`
-et ses garde-fous), ainsi que des tests de non-régression pour les bugs corrigés (voir plus bas).
+The suite (`odsslicer/tests/test_odsslicer.py`) covers addressing (`Sheet.address`,
+`Sheet.string_address`/`string_to_col`), cell types, repeated and merged rows/columns, empty
+sheets, `ArrayValues`, writing (`Cell.value = ...`, `ODSReader.save()` and its safeguards), as
+well as regression tests for the fixed bugs (see below).
 
-## Historique des corrections apportées avant publication
+## History of fixes made before publication
 
-En relisant le module pour cette publication, les bugs suivants (présents dans la version
-interne) ont été corrigés dans `classes.py` :
+While rereading the module for this publication, the following bugs (present in the internal
+version) were fixed in `classes.py`:
 
-1. **`Sheet.string_address`** produisait une adresse fausse pour la plupart des colonnes
-   multi-lettres (ex. colonne 27 → `"BB1"` au lieu de `"AB1"`, colonne 51 → `"ZZ1"` au lieu de
-   `"AZ1"`) à cause d'une numération en base 26 mal implémentée. Corrigé avec l'algorithme de
-   numération bijective standard.
-2. **`Sheet.get_col`** comparait l'index de colonne demandé à `self.n_rows` au lieu de
-   `self.n_cols` pour détecter un dépassement : sur toute feuille où il y a plus de lignes que
-   de colonnes, demander une colonne hors bornes levait une `IndexError` au lieu de renvoyer
-   une colonne vide.
-3. L'avertissement `[WARNING]` de lignes de longueurs différentes ne se déclenchait **jamais**,
-   même en présence d'une vraie incohérence : `rows_len` était un itérateur `map` épuisé une
-   première fois par `max()`, donc vide lors de la seconde lecture pour le calcul de
-   l'avertissement.
-4. **`Sheet.empty_row` / `Sheet.empty_col`**, quand on leur passait explicitement l'argument
-   `slice`, renvoyaient un élément de moins que prévu (un nombre d'éléments était recalculé
-   puis réutilisé à tort comme borne d'arrêt d'un `range`).
-5. **`ODSReader.sheets`** était une propriété-générateur à usage unique (impossible d'en faire
-   `len()` ou de la parcourir deux fois), avec en plus du code mort après le `yield` qui ne
-   pouvait jamais s'exécuter. Remplacé par une liste simple, réutilisable.
-6. `Cell.__floot__` (faute de frappe pour `__floor__`) a été corrigé — sans impact fonctionnel
-   observé (Python retombait sur `__float__` pour `math.floor()`), mais gardait un nom trompeur.
-7. **Lecture des cellules booléennes** : le format `"boolean"` cherchait la valeur dans
-   `office:value` (comme les nombres) au lieu de l'attribut ODF réel `office:boolean-value`, et
-   la convertissait avec `bool(s)` — qui renvoie `True` pour la chaîne non vide `"false"`. Une
-   vraie cellule booléenne ODF se lisait donc toujours comme `False`. Corrigé (lecture et
-   écriture désormais symétriques pour ce format).
-8. **`Cell.text`/`str(cell)` renvoyaient la chaîne littérale `"None"`** au lieu du texte réel,
-   dans deux cas fréquents : une cellule dont le `<text:p>` est vide (typiquement une formule
-   dont le résultat mis en cache est une chaîne vide) et une cellule dont le texte est réparti
-   sur plusieurs nœuds (`<text:span>` pour une mise en forme partielle, ex. "1er" avec le "er"
-   en exposant). Dans les deux cas, `text:p.string` (bs4) vaut `None` dès qu'il n'y a pas
-   *exactement* un seul enfant texte, et l'ancien code faisait `str(p.string)`, transformant ce
-   `None` en la chaîne `"None"`. Corrigé en utilisant `p.get_text()`, qui concatène correctement
-   tout le texte descendant (et renvoie `""` pour une cellule réellement vide).
+1. **`Sheet.string_address`** produced a wrong address for most multi-letter columns (e.g.
+   column 27 → `"BB1"` instead of `"AB1"`, column 51 → `"ZZ1"` instead of `"AZ1"`) due to a
+   poorly implemented base-26 numbering. Fixed with the standard bijective numbering
+   algorithm.
+2. **`Sheet.get_col`** compared the requested column index to `self.n_rows` instead of
+   `self.n_cols` to detect an out-of-range access: on any sheet with more rows than columns,
+   requesting an out-of-range column raised an `IndexError` instead of returning an empty
+   column.
+3. The `[WARNING]` for rows of differing lengths **never** fired, even in the presence of a
+   genuine inconsistency: `rows_len` was a `map` iterator already exhausted once by `max()`,
+   hence empty on the second read used to compute the warning.
+4. **`Sheet.empty_row` / `Sheet.empty_col`**, when explicitly passed the `slice` argument,
+   returned one fewer element than expected (an element count was recomputed and then
+   mistakenly reused as a `range` stop bound).
+5. **`ODSReader.sheets`** was a single-use generator property (couldn't `len()` it or iterate
+   it twice), with dead code after the `yield` that could never execute. Replaced with a
+   plain, reusable list.
+6. `Cell.__floot__` (a typo for `__floor__`) was fixed — with no observed functional impact
+   (Python fell back to `__float__` for `math.floor()`), but it kept a misleading name.
+7. **Reading boolean cells**: the `"boolean"` format looked up the value in `office:value`
+   (like numbers) instead of the actual ODF attribute `office:boolean-value`, and converted
+   it with `bool(s)` — which returns `True` for the non-empty string `"false"`. A real ODF
+   boolean cell therefore always read back as `False`. Fixed (reading and writing are now
+   symmetric for this format).
+8. **`Cell.text`/`str(cell)` returned the literal string `"None"`** instead of the actual
+   text, in two common cases: a cell whose `<text:p>` is empty (typically a formula whose
+   cached result is an empty string) and a cell whose text is spread across several nodes
+   (`<text:span>` for partial formatting, e.g. "1st" with "st" as superscript). In both
+   cases, `text:p.string` (bs4) is `None` whenever there isn't *exactly* one text child, and
+   the old code did `str(p.string)`, turning that `None` into the string `"None"`. Fixed by
+   using `p.get_text()`, which correctly concatenates all descendant text (and returns `""`
+   for a genuinely empty cell).
 
-Tous ces cas sont couverts par des tests de non-régression dans
-`odsslicer/tests/test_odsslicer.py`.
+All of these cases are covered by regression tests in `odsslicer/tests/test_odsslicer.py`.
 
-## Existe-t-il déjà des modules PyPI équivalents ?
+## Are there already equivalent PyPI modules?
 
-| Package | Lecture/Écriture | Dernière release | Statut |
+| Package | Read/Write | Latest release | Status |
 |---|---|---|---|
-| `odfpy` | R/W bas niveau | jan. 2020 | Quasi à l'abandon (82 issues ouvertes), mais reste la brique utilisée en interne par pandas |
-| `pyexcel-ods(3)` | R/W | > 1 an | Inactif |
-| `ezodf` | R/W | déc. 2015 | Abandonné depuis 10 ans |
-| `pandas` (`engine="odf"`) | Lecture (délègue à odfpy) | suit pandas | Pratique mais perd formules/formats fins |
-| `python-calamine` | Lecture seule (Rust), rapide | active | Le plus activement maintenu pour de la lecture pure |
-| `odfdo` (fork moderne d'odfpy) | R/W complet | récente, régulière | Activement maintenu, API DOM-like |
-| `pandas-ods-reader` | Lecture seule -> DataFrame | mai 2025 | Maintenu, périmètre limité |
+| `odfpy` | Low-level R/W | Jan. 2020 | Nearly abandoned (82 open issues), but still the brick pandas uses internally |
+| `pyexcel-ods(3)` | R/W | > 1 year | Inactive |
+| `ezodf` | R/W | Dec. 2015 | Abandoned for 10 years |
+| `pandas` (`engine="odf"`) | Read (delegates to odfpy) | follows pandas | Convenient but loses formulas/fine-grained formats |
+| `python-calamine` | Read-only (Rust), fast | active | The most actively maintained option for pure reading |
+| `odfdo` (modern fork of odfpy) | Full R/W | recent, regular | Actively maintained, DOM-like API |
+| `pandas-ods-reader` | Read-only -> DataFrame | May 2025 | Maintained, limited scope |
 
-Aucun de ces paquets n'offre l'API de type numpy (`sheet["A1"]`, slicing par adresse de
-cellule) ni la même granularité sur les formats de cellule (devise/pourcentage/date/heure) et
-les cellules fusionnées/répétées — c'est le principal argument pour publier ce module plutôt
-que de simplement recommander `odfdo` ou `python-calamine`.
+None of these packages offer a numpy-style API (`sheet["A1"]`, slicing by cell address) or the
+same granularity on cell formats (currency/percentage/date/time) and merged/repeated cells —
+that's the main argument for publishing this module rather than simply recommending `odfdo`
+or `python-calamine`.
 
-## À faire avant de publier sur GitHub
+## License
 
-- Créer le dépôt / réserver le nom `odsslicer` sur PyPI (disponible au 2026-07-29).
+[MIT](LICENSE) — reuse with essentially no restriction, just keep the copyright notice.
 
-`legacy.py` (implémentation historique de 2014, non importée par le package) a été supprimé.
-Le dossier `odsslicer/writing tests/` (scratch de développement, doublon de
-`odsslicer/tests/TEST.ods`) et les fichiers `.xml`/`.txt` générés par `export_content_xml()`
-sont désormais dans `.gitignore` plutôt que trackés.
+## Project name
 
-## Licence
-
-[MIT](LICENSE) — réutilisation quasi sans contrainte, juste garder la mention copyright.
-
-## Nom du projet
-
-Nom retenu : **`odsslicer`** (disponible sur PyPI au 2026-07-29), pour refléter le vrai
-différenciateur du module — l'indexation/slicing façon numpy par adresse de cellule — plutôt
-qu'un simple "lecteur ods" générique.
+Chosen name: **`odsslicer`** (available on PyPI as of 2026-07-29), to reflect the module's
+real differentiator — numpy-style indexing/slicing by cell address — rather than a generic
+"ods reader".
