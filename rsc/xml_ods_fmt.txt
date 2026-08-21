@@ -1,0 +1,57 @@
+office:document-content
+    office:scripts/
+    office:font-face-decls
+        style:font-face/ :name="Liberation Sans" :font-family-generic="swiss" :font-pitch="variable"
+    office:automatic-styles
+        style:style :name :data-style-name :family="table-cell" :parent-style-name="Default"
+        style:style :name :master-page-name="Default" :family="table"/"table-column"/"table-row"
+            style:table-properties/[SHEET, dépend du style:family] :writing-mode="lr-tb" :display="true
+            style:table-column-properties/[o, dépend du style:family] fo:break-before="auto" :column-width="2.258cm"
+            style:table-row-properties/[o, dépend du style:family]
+                -> fo:break-before="auto" :row-height="0.452cm" :use-optimal-row-height="true"
+        number:percentage-style :name=[data-style-name]
+            number:number/ :decimal-places="2" :min-decimal-places="2" :min-integer-digits="1"
+            number:text
+        number:date-style :name=[style:data-style-name] :automatic-order="true"
+            number:day/ :style="long"
+            number:text
+            number:month/ :style="long"
+            number:text
+            number:year/
+    office:body
+        office:spreadsheet
+            table:calculation-settings/
+                -> :automatic-find-labels="false" :use-regular-expressions="false" :use-wildcards="true"/>
+            table:table :name=[SHEET] :style-name=[style:name(table family)]
+                table:table-column/ [DEF DES STYLES DES COLONNES, largeurs etc]
+                    -> :default-cell-style-name="Default" :number-columns-repeated="2"
+                       :style-name=[style:name(table column)]
+                table:table-row :style-name 
+                    +> :number-rows-repeated
+                    table:table-cell
+                        -> calcext:value-type="string"
+                           office:value-type="string
+                        -> calcext:value-type="float"
+                           office:value-type="float"
+                           office:value="3.4"
+                        -> calcext:value-type="float"
+                           office:value-type="float"
+                           office:value="6.4"
+                           table:formula="of:=SUM([.A2:.A3])"
+                        -> calcext:value-type="percentage"
+                           office:value-type="percentage"
+                           office:value="2"
+                           table:style-name="ce1"
+                        -> calcext:value-type="currency"
+                           office:value-type="currency"
+                           office:currency="EUR"
+                           office:value="2"
+                           table:style-name="ce2"
+                        -> calcext:value-type="date"
+                           office:value-type="date"
+                           office:date-value="2021-02-02"
+                           table:style-name="ce3"
+                        +> table:number-columns-repeated="4"
+                        text:p
+                    table:table-cell/ : EMPTY CELL
+            table:named-expressions/
