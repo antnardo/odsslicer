@@ -1,5 +1,7 @@
 # odsslicer
 
+[![CI](https://github.com/antnardo/odsslicer/actions/workflows/ci.yml/badge.svg)](https://github.com/antnardo/odsslicer/actions/workflows/ci.yml)
+
 Python reader for `.ods` files (OpenDocument Spreadsheet, LibreOffice/OpenOffice Calc), with a
 numpy-inspired indexing API: `sheet["A1"]`, `sheet[0, 0]`, `sheet["A1:B3"]`, plain Python
 slices, etc.
@@ -15,12 +17,18 @@ sheet's current extent grows it automatically (new rows/columns) — see
 
 ## Installation
 
-Not published on PyPI yet. Clone the repo — since the checked-out folder is itself named
-`odsslicer`, add its parent directory to `PYTHONPATH` (or copy it into a project that already
-has it as an importable subfolder):
+Not published on PyPI yet. Install directly from GitHub in the meantime:
+
+```bash
+pip install git+https://github.com/antnardo/odsslicer.git
+```
+
+Or clone it and install it editable (for local development):
 
 ```bash
 git clone https://github.com/antnardo/odsslicer.git
+cd odsslicer
+pip install -e ".[test]"
 ```
 
 ### Dependencies
@@ -28,9 +36,7 @@ git clone https://github.com/antnardo/odsslicer.git
 - [`beautifulsoup4`](https://pypi.org/project/beautifulsoup4/) + `lxml` (XML parser)
 - [`numpy`](https://pypi.org/project/numpy/)
 
-```bash
-pip install beautifulsoup4 lxml numpy
-```
+Installed automatically as dependencies of the package above.
 
 ## Quick usage
 
@@ -234,7 +240,7 @@ the usual spreadsheet bijective base-26 numbering (`Z` = 25, `AA` = 26, `AZ` = 5
   above.
 - **Formulas**: the value cached by the spreadsheet is read (`office:value`), the formula
   itself is not re-evaluated (and writing obviously doesn't recompute anything either).
-- Sheets/rows/columns beyond `MAX_REPEAT_ROWS` / `MAX_REPEAT_COLS` (see `classes.py`) are
+- Sheets/rows/columns beyond `MAX_REPEAT_ROWS` / `MAX_REPEAT_COLS` (see `src/odsslicer/classes.py`) are
   detected and discarded to avoid materializing rows or columns of size `2**20`/`2**10`
   created by LibreOffice for a sheet's default styling — a `[WARNING]` is printed if a row
   length inconsistency is detected after this cleanup.
@@ -242,19 +248,22 @@ the usual spreadsheet bijective base-26 numbering (`Z` = 25, `AA` = 26, `AZ` = 5
 ## Tests
 
 ```bash
-pip install pytest beautifulsoup4 lxml numpy
-pytest odsslicer/tests/
+git clone https://github.com/antnardo/odsslicer.git
+cd odsslicer
+pip install -e ".[test]"
+pytest
 ```
 
-The suite (`odsslicer/tests/test_odsslicer.py`) covers addressing (`Sheet.address`,
+The suite (`tests/test_odsslicer.py`) covers addressing (`Sheet.address`,
 `Sheet.string_address`/`string_to_col`), cell types, repeated and merged rows/columns, empty
 sheets, `ArrayValues`, writing (`Cell.value = ...`, `ODSReader.save()` and its safeguards), as
-well as regression tests for the fixed bugs (see below).
+well as regression tests for the fixed bugs (see below). It runs on every push/PR via
+[GitHub Actions](.github/workflows/ci.yml) across Python 3.10 to 3.13.
 
 ## History of fixes made before publication
 
 While rereading the module for this publication, the following bugs (present in the internal
-version) were fixed in `classes.py`:
+version) were fixed in `src/odsslicer/classes.py`:
 
 1. **`Sheet.string_address`** produced a wrong address for most multi-letter columns (e.g.
    column 27 → `"BB1"` instead of `"AB1"`, column 51 → `"ZZ1"` instead of `"AZ1"`) due to a
@@ -289,7 +298,7 @@ version) were fixed in `classes.py`:
    using `p.get_text()`, which correctly concatenates all descendant text (and returns `""`
    for a genuinely empty cell).
 
-All of these cases are covered by regression tests in `odsslicer/tests/test_odsslicer.py`.
+All of these cases are covered by regression tests in `tests/test_odsslicer.py`.
 
 ## Are there already equivalent PyPI modules?
 
@@ -307,6 +316,32 @@ None of these packages offer a numpy-style API (`sheet["A1"]`, slicing by cell a
 same granularity on cell formats (currency/percentage/date/time) and merged/repeated cells —
 that's the main argument for publishing this module rather than simply recommending `odfdo`
 or `python-calamine`.
+
+## Releasing
+
+The package layout is a standard `src/` layout (`src/odsslicer/`, with `tests/`, `example/`
+and `rsc/` at the repo root, dev-only). Versioning is fully automatic via
+[`setuptools-scm`](https://github.com/pypa/setuptools-scm): the version is derived from git
+tags, there's no version number to bump by hand anywhere in the source.
+
+To cut a release:
+
+1. Tag the commit: `git tag v0.1.0 && git push origin v0.1.0` (the version published will be
+   `0.1.0` — the `v` prefix is stripped).
+2. Publish a [GitHub Release](https://github.com/antnardo/odsslicer/releases) from that tag.
+3. This triggers [`publish.yml`](.github/workflows/publish.yml): the package is rebuilt (after
+   running the full test suite once more) and uploaded to PyPI automatically via
+   [trusted publishing](https://docs.pypi.org/trusted-publishers/) (OIDC) — no API token
+   stored anywhere.
+
+One manual, one-time setup step on PyPI's side is required before the very first release: on
+[pypi.org's publishing settings](https://pypi.org/manage/account/publishing/), register a
+"pending" trusted publisher for a project named `odsslicer`, pointing at this repo
+(`antnardo/odsslicer`), workflow file `publish.yml`, and environment `pypi`. Only the account
+owner can do this (it needs a PyPI login).
+
+Every push/PR against `master` also runs the test suite via [`ci.yml`](.github/workflows/ci.yml)
+across Python 3.10-3.13, independently of releases.
 
 ## License
 

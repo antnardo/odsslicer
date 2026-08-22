@@ -2,6 +2,12 @@ __pycache__/
 *.pyc
 .DS_Store
 
+# packaging artifacts (setuptools/build, setuptools-scm)
+/dist/
+/build/
+*.egg-info/
+.pytest_cache/
+
 # scratch folder used during development to inspect raw ODS/XML internals,
 # duplicates ods/tests/TEST.ods
 /writing tests/

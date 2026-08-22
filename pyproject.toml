@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odsslicer"
+dynamic = ["version"]
+description = "A numpy-style reader/writer for .ods (OpenDocument Spreadsheet) files"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Anto", email = "antonin.marchand@normalesup.org" }]
+requires-python = ">=3.10"
+dependencies = [
+    "beautifulsoup4>=4.9",
+    "lxml>=4.6",
+    "numpy>=1.20",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Office Suites",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/antnardo/odsslicer"
+Repository = "https://github.com/antnardo/odsslicer"
+Issues = "https://github.com/antnardo/odsslicer/issues"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+# version is derived from git tags (e.g. tag "v0.1.0" -> package version "0.1.0")
+tag_regex = "^v(?P<version>.*)$"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

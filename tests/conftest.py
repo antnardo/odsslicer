@@ -2,11 +2,10 @@
 import sys
 from pathlib import Path
 
-# Make the `odsslicer` package importable when running `pytest` from anywhere,
-# without requiring the caller to set PYTHONPATH manually.
-# This file lives at <repo>/odsslicer/tests/conftest.py -> parents[2] is the
-# folder *containing* the `odsslicer` package folder.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# Make the `odsslicer` package importable when running `pytest` straight from a
+# checkout, without an editable install. This file lives at <repo>/tests/conftest.py
+# -> parents[1] is the repo root, and the package lives at <repo>/src/odsslicer.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pytest
 
