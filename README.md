@@ -413,13 +413,14 @@ the usual spreadsheet bijective base-26 numbering (`Z` = 25, `AA` = 26, `AZ` = 5
 
 `Cell.style` resolves a cell's actual formatting (as opposed to `odsslicer`'s own
 value/text/format detection above) — `None` if the cell has no `table:style-name` at all. It
-returns a `CellStyle` (with a `.number_format`, a `NumberFormat`, when applicable); both are
-also importable directly from the top-level package (`from odsslicer import CellStyle,
-NumberFormat`), e.g. for type hints:
+returns a `CellStyle`; `CellStyle`, its `.number_format` (a `NumberFormat`), and `Border` are
+all importable directly from the top-level package too (`from odsslicer import CellStyle,
+NumberFormat, Border`), e.g. for type hints:
 
 ```python
-sheet["A7"].style.bold                # False
-sheet["A7"].style.background_color    # None, or e.g. "#ffdbb6"
+sheet["A7"].style.bold                            # False
+sheet["A7"].style.background_color                # None, or e.g. "#ffdbb6"
+sheet["A7"].style.border_top                       # None, or a Border("0.74pt solid #808080")
 sheet["A7"].style.number_format.family            # "currency"
 sheet["A7"].style.number_format.currency_symbol   # "€"
 sheet["A7"].style.number_format.decimal_places    # 2
@@ -428,18 +429,28 @@ sheet["A7"].style.number_format.decimal_places    # 2
 ODF splits a cell's formatting across two files and two concerns: a `table:style-name`
 points to a `<style:style>` element (living in either `content.xml`'s per-document
 "automatic styles", or `styles.xml`'s reusable named styles like `"Good"`/`"Error"`), which
-carries the cell's *visual* look directly (`bold`, `italic`, `font_color`, `font_size`,
-`background_color`, `horizontal_align`, `vertical_align`) and, separately, a
-`style:data-style-name` pointing to a `<number:*-style>` element (again in either file) for
-the cell's real *display format* — `.number_format`, with `.family`
-(`"percentage"`/`"currency"`/`"date"`/`"time"`/`"number"`/`"boolean"`/`"text"`),
-`.decimal_places`, `.grouping`, `.currency_symbol`, and for date/time styles `.components`
-(the ordered layout, e.g. `[("day", "long"), ("text", "/"), ("month", "long"), ...]`). A
-style can inherit from another via `style:parent-style-name`; `Cell.style` walks that chain
+carries the cell's *visual* look directly, and, separately, a `style:data-style-name`
+pointing to a `<number:*-style>` element (again in either file) for the cell's real
+*display format*.
+
+`CellStyle`'s visual properties: font `.bold`/`.italic`/`.underline`/`.strikethrough`
+(booleans), `.font_family`, `.font_size`, `.font_color`; `.background_color`;
+`.border_top`/`.border_bottom`/`.border_left`/`.border_right` (each a `Border` with
+`.width`/`.style`/`.color`, resolved from ODF's `fo:border` shorthand or a specific side,
+whichever the nearest style in the chain defines); `.horizontal_align`/`.vertical_align`;
+`.rotation` (text rotation angle in degrees, or `None`).
+
+`.number_format` has `.family` (`"percentage"`/`"currency"`/`"date"`/`"time"`/`"number"`/
+`"boolean"`/`"text"`), `.decimal_places`, `.grouping`, `.currency_symbol`, and for date/time
+styles `.components` (the ordered layout, e.g. `[("day", "long"), ("text", "/"),
+("month", "long"), ...]`).
+
+A style can inherit from another via `style:parent-style-name`; `Cell.style` walks that chain
 so an inherited property still resolves (the nearest style in the chain wins for any
-property more than one defines). `.cell_properties`/`.text_properties` expose the raw,
-flattened attribute dicts as an escape hatch for anything not surfaced as a named attribute
-above.
+property more than one defines — borders are resolved as a whole unit from the nearest style
+that defines any border info at all, rather than mixing individual sides across levels).
+`.cell_properties`/`.text_properties` expose the raw, flattened attribute dicts as an escape
+hatch for anything not surfaced as a named property above.
 
 Not yet supported: writing/changing styles (this is read-only for now), and `odsslicer`'s
 own value/text heuristics (see [Writing formulas](#writing-formulas) and

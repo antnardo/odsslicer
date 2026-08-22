@@ -1557,3 +1557,100 @@ def test_cell_style_nearest_ancestor_wins_on_conflicting_property():
 
     style = CellStyle(StubReader(), "Child")
     assert style.background_color == "#222222"
+
+
+def test_cell_style_font_underline_strikethrough_and_rotation():
+    # real attribute names/values taken from tests/TEST.ods's styles.xml
+    # (style:font-name="Liberation Sans") and the ODF spec for the rest,
+    # since none of our fixture files happen to apply these to a real cell.
+    from bs4 import BeautifulSoup
+
+    from odsslicer.classes import CellStyle
+
+    xml = (
+        '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
+        'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
+        '<style:style style:name="ce1" style:family="table-cell">'
+        '<style:table-cell-properties style:rotation-angle="90"/>'
+        '<style:text-properties style:font-name="Liberation Sans" '
+        'style:text-underline-style="solid" style:text-line-through-style="solid"/>'
+        "</style:style></root>"
+    )
+    soup = BeautifulSoup(xml, "xml")
+
+    class StubReader:
+        def _find_style(self, name):
+            return soup.find("style:style", attrs={"style:name": name}) if name else None
+
+        def _find_number_style(self, name):
+            return None
+
+    style = CellStyle(StubReader(), "ce1")
+    assert style.font_family == "Liberation Sans"
+    assert style.underline is True
+    assert style.strikethrough is True
+    assert style.rotation == 90
+
+
+def test_cell_style_border_shorthand_applies_to_every_side():
+    # real value taken from tests/TEST.ods's styles.xml (the unused "Note"
+    # built-in style: fo:border="0.74pt solid #808080")
+    from bs4 import BeautifulSoup
+
+    from odsslicer.classes import CellStyle
+
+    xml = (
+        '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
+        'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
+        '<style:style style:name="ce1" style:family="table-cell">'
+        '<style:table-cell-properties fo:border="0.74pt solid #808080"/>'
+        "</style:style></root>"
+    )
+    soup = BeautifulSoup(xml, "xml")
+
+    class StubReader:
+        def _find_style(self, name):
+            return soup.find("style:style", attrs={"style:name": name}) if name else None
+
+        def _find_number_style(self, name):
+            return None
+
+    style = CellStyle(StubReader(), "ce1")
+    for border in (style.border_top, style.border_bottom, style.border_left, style.border_right):
+        assert border.width == "0.74pt"
+        assert border.style == "solid"
+        assert border.color == "#808080"
+
+
+def test_cell_style_border_specific_side_overrides_shorthand():
+    from bs4 import BeautifulSoup
+
+    from odsslicer.classes import Border, CellStyle
+
+    xml = (
+        '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
+        'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
+        '<style:style style:name="ce1" style:family="table-cell">'
+        '<style:table-cell-properties fo:border="0.74pt solid #808080" '
+        'fo:border-top="2.49pt solid #000000"/>'
+        "</style:style></root>"
+    )
+    soup = BeautifulSoup(xml, "xml")
+
+    class StubReader:
+        def _find_style(self, name):
+            return soup.find("style:style", attrs={"style:name": name}) if name else None
+
+        def _find_number_style(self, name):
+            return None
+
+    style = CellStyle(StubReader(), "ce1")
+    assert style.border_top == Border("2.49pt solid #000000")
+    assert style.border_bottom == Border("0.74pt solid #808080")
+
+
+def test_cell_style_no_border_at_all_is_none(reader):
+    s = reader.sheet("Sheet1")
+    style = s["A7"].style  # ce2: has a data-style but no border/font properties
+    assert style.border_top is None
+    assert style.font_family is None

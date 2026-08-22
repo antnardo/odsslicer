@@ -1408,12 +1408,36 @@ class NumberFormat:
         return f"NumberFormat(name={self.name!r}, family={self.family!r})"
 
 
+def _make_border(raw):
+    return Border(raw) if raw else None
+
+
+class Border:
+    """One side of a cell's border, parsed from ODF's `"<width> <style>
+    <color>"` shorthand (e.g. `"0.74pt solid #808080"`)."""
+
+    def __init__(self, raw: str):
+        self.raw = raw
+        parts = raw.split()
+        self.width = parts[0] if len(parts) > 0 else None
+        self.style = parts[1] if len(parts) > 1 else None
+        self.color = parts[2] if len(parts) > 2 else None
+
+    def __repr__(self):
+        return f"Border({self.raw!r})"
+
+    def __eq__(self, other):
+        return isinstance(other, Border) and self.raw == other.raw
+
+
 class CellStyle:
     """Resolved visual formatting and number format behind a cell's
     `table:style-name` - read-only. Walks the `style:parent-style-name`
     inheritance chain (the nearest style to the cell wins for whichever
     property it sets directly; a property no style in the chain sets is
     `None`). Look up a cell's style via `Cell.style`, not directly."""
+
+    _BORDER_ATTRS = ("fo:border", "fo:border-top", "fo:border-bottom", "fo:border-left", "fo:border-right")
 
     def __init__(self, reader: "ODSReader", name: str):
         self.name = name
@@ -1435,11 +1459,37 @@ class CellStyle:
 
         self.bold = prop("style:text-properties", "fo:font-weight") == "bold"
         self.italic = prop("style:text-properties", "fo:font-style") == "italic"
+        self.underline = prop("style:text-properties", "style:text-underline-style") not in (None, "none")
+        self.strikethrough = prop("style:text-properties", "style:text-line-through-style") not in (
+            None,
+            "none",
+        )
+        self.font_family = prop("style:text-properties", "style:font-name")
         self.font_color = prop("style:text-properties", "fo:color")
         self.font_size = prop("style:text-properties", "fo:font-size")
         self.background_color = prop("style:table-cell-properties", "fo:background-color")
         self.vertical_align = prop("style:table-cell-properties", "style:vertical-align")
         self.horizontal_align = prop("style:paragraph-properties", "fo:text-align")
+        rotation = prop("style:table-cell-properties", "style:rotation-angle")
+        self.rotation = int(rotation) if rotation is not None else None
+
+        # Borders are resolved as a unit from the nearest style that defines
+        # *any* border info (rather than merging per-side across inheritance
+        # levels): within that one style, a specific side (fo:border-top...)
+        # overrides the fo:border shorthand for that side, exactly as ODF
+        # itself resolves it within a single style declaration.
+        self.border_top = self.border_bottom = self.border_left = self.border_right = None
+        for style in chain:
+            cell_props = style.find("style:table-cell-properties")
+            if cell_props is None or not any(a in cell_props.attrs for a in self._BORDER_ATTRS):
+                continue
+            attrs = cell_props.attrs
+            shorthand = attrs.get("fo:border")
+            self.border_top = _make_border(attrs.get("fo:border-top", shorthand))
+            self.border_bottom = _make_border(attrs.get("fo:border-bottom", shorthand))
+            self.border_left = _make_border(attrs.get("fo:border-left", shorthand))
+            self.border_right = _make_border(attrs.get("fo:border-right", shorthand))
+            break
 
         # raw, flattened property dicts as an escape hatch for anything not
         # surfaced above - base style first, so a nearer style overrides it
