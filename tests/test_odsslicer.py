@@ -18,7 +18,7 @@ import math
 import pytest
 
 from odsslicer import ODSReader
-from odsslicer.classes import ArrayValues, Cell, Sheet
+from odsslicer.classes import ArrayValues, Cell, CellStyle, Sheet
 
 
 # ---------------------------------------------------------------------------
@@ -1516,7 +1516,7 @@ def test_cell_style_walks_parent_inheritance_chain():
     soup = BeautifulSoup(xml, "xml")
 
     class StubReader:
-        def _find_style(self, name):
+        def _find_style(self, name, family=None):
             return soup.find("style:style", attrs={"style:name": name}) if name else None
 
         def _find_number_style(self, name):
@@ -1549,7 +1549,7 @@ def test_cell_style_nearest_ancestor_wins_on_conflicting_property():
     soup = BeautifulSoup(xml, "xml")
 
     class StubReader:
-        def _find_style(self, name):
+        def _find_style(self, name, family=None):
             return soup.find("style:style", attrs={"style:name": name}) if name else None
 
         def _find_number_style(self, name):
@@ -1579,7 +1579,7 @@ def test_cell_style_font_underline_strikethrough_and_rotation():
     soup = BeautifulSoup(xml, "xml")
 
     class StubReader:
-        def _find_style(self, name):
+        def _find_style(self, name, family=None):
             return soup.find("style:style", attrs={"style:name": name}) if name else None
 
         def _find_number_style(self, name):
@@ -1609,7 +1609,7 @@ def test_cell_style_border_shorthand_applies_to_every_side():
     soup = BeautifulSoup(xml, "xml")
 
     class StubReader:
-        def _find_style(self, name):
+        def _find_style(self, name, family=None):
             return soup.find("style:style", attrs={"style:name": name}) if name else None
 
         def _find_number_style(self, name):
@@ -1638,7 +1638,7 @@ def test_cell_style_border_specific_side_overrides_shorthand():
     soup = BeautifulSoup(xml, "xml")
 
     class StubReader:
-        def _find_style(self, name):
+        def _find_style(self, name, family=None):
             return soup.find("style:style", attrs={"style:name": name}) if name else None
 
         def _find_number_style(self, name):
@@ -1654,3 +1654,156 @@ def test_cell_style_no_border_at_all_is_none(reader):
     style = s["A7"].style  # ce2: has a data-style but no border/font properties
     assert style.border_top is None
     assert style.font_family is None
+
+
+def test_cell_style_diagonal_none_is_not_a_border(reader):
+    # regression: the literal string "none" (ODF's way of explicitly
+    # cancelling a border/diagonal) must resolve to None, not Border("none")
+    # - real value taken from tests/TEST.ods's unused "Note" built-in style
+    style = CellStyle(reader, "Note")
+    assert style.diagonal_bl_tr is None
+    assert style.diagonal_tl_br is None
+    assert style.background_color == "#ffffcc"
+
+
+def test_cell_style_wrap_shrink_protection_and_text_position():
+    from bs4 import BeautifulSoup
+
+    xml = (
+        '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
+        'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
+        '<style:style style:name="ce1" style:family="table-cell">'
+        '<style:table-cell-properties fo:wrap-option="wrap" style:shrink-to-fit="true" '
+        'style:cell-protect="protected" style:writing-mode="rl-tb"/>'
+        '<style:text-properties style:text-position="super 58%"/>'
+        "</style:style></root>"
+    )
+    soup = BeautifulSoup(xml, "xml")
+
+    class StubReader:
+        def _find_style(self, name, family=None):
+            return soup.find("style:style", attrs={"style:name": name}) if name else None
+
+        def _find_number_style(self, name):
+            return None
+
+    style = CellStyle(StubReader(), "ce1")
+    assert style.wrap_text is True
+    assert style.shrink_to_fit is True
+    assert style.protection == "protected"
+    assert style.writing_mode == "rl-tb"
+    assert style.text_position == "super 58%"
+    assert style.superscript is True
+    assert style.subscript is False
+
+
+def test_cell_style_diagonal_border_parses_like_a_regular_border():
+    from bs4 import BeautifulSoup
+
+    xml = (
+        '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
+        'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
+        '<style:style style:name="ce1" style:family="table-cell">'
+        '<style:table-cell-properties style:diagonal-tl-br="1pt solid #ff0000"/>'
+        "</style:style></root>"
+    )
+    soup = BeautifulSoup(xml, "xml")
+
+    class StubReader:
+        def _find_style(self, name, family=None):
+            return soup.find("style:style", attrs={"style:name": name}) if name else None
+
+        def _find_number_style(self, name):
+            return None
+
+    style = CellStyle(StubReader(), "ce1")
+    assert style.diagonal_tl_br.color == "#ff0000"
+    assert style.diagonal_bl_tr is None
+
+
+# ---------------------------------------------------------------------------
+# Styles (lecture) : formats de nombre conditionnels (NumberFormat.resolve)
+# ---------------------------------------------------------------------------
+
+def test_number_format_resolves_conditional_currency_by_value(reader):
+    # regression-shaped, real data: N108 (A7's currency format) is negative-
+    # only (red text) with a style:map switching to N108P0 (no color) for
+    # value()>=0 - A7's own value is 2.0 (positive).
+    s = reader.sheet("Sheet1")
+    assert s["A7"].value == 2.0
+    resolved = s["A7"].style.number_format
+    assert resolved.name == "N108P0"
+    assert resolved.font_color is None
+
+
+def test_number_format_condition_and_manual_resolve(reader):
+    number_tag = reader._find_number_style("N108")
+    from odsslicer.classes import NumberFormat
+
+    base = NumberFormat(number_tag, reader=reader)
+    assert base.font_color == "#ff0000"
+    assert [c for c, _ in base.conditions] == ["value()>=0"]
+
+    assert base.resolve(2.0).name == "N108P0"
+    assert base.resolve(2.0).font_color is None
+    assert base.resolve(-5.0).name == "N108"
+    assert base.resolve(-5.0).font_color == "#ff0000"
+    # an unresolvable/no-condition-matching case falls back to self
+    assert base.resolve("not a number").name == "N108"
+
+
+# ---------------------------------------------------------------------------
+# Styles (lecture) : ligne/colonne/feuille (RowStyle, ColumnStyle, TableStyle)
+# ---------------------------------------------------------------------------
+
+def test_row_style_resolves_height(reader):
+    s = reader.sheet("Sheet1")
+    style = s.row_style(0)
+    assert style.name == "ro1"
+    assert style.height == "0.452cm"
+    assert style.visible is True
+
+
+def test_column_style_resolves_width(reader):
+    s = reader.sheet("Sheet1")
+    assert s.column_style(0).width == "2.258cm"
+    assert s.column_style(1).width == "4.251cm"
+
+
+def test_column_style_handles_a_repeated_column_definition(reader):
+    # Sheet2Repeat's single co1 column tag covers columns 0-5 via
+    # table:number-columns-repeated="6"
+    s = reader.sheet("Sheet2Repeat")
+    assert s.column_style(3).name == "co1"
+    assert s.column_style(5).name == "co1"
+
+
+def test_sheet_style_resolves_table_properties(reader):
+    s = reader.sheet("Sheet1")
+    style = s.style
+    assert style.name == "ta1"
+    assert style.visible is True  # no table:tab-color set on this fixture, but resolves cleanly
+
+
+def test_row_column_sheet_style_out_of_range_is_none(reader):
+    s = reader.sheet("Sheet1")
+    assert s.row_style(999) is None
+    assert s.column_style(999) is None
+
+
+def test_row_style_no_reader_is_none():
+    # a Sheet built without an owning ODSReader (e.g. constructed directly
+    # in a test, as elsewhere in this suite) can't resolve styles at all
+    from bs4 import BeautifulSoup
+
+    xml = (
+        '<root xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0">'
+        '<table:table table:name="T">'
+        '<table:table-column/><table:table-row table:style-name="ro1">'
+        "<table:table-cell/></table:table-row></table:table></root>"
+    )
+    table = BeautifulSoup(xml, "xml").find("table:table")
+    sheet = Sheet(table)
+    assert sheet.row_style(0) is None
+    assert sheet.column_style(0) is None
+    assert sheet.style is None

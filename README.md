@@ -413,9 +413,9 @@ the usual spreadsheet bijective base-26 numbering (`Z` = 25, `AA` = 26, `AZ` = 5
 
 `Cell.style` resolves a cell's actual formatting (as opposed to `odsslicer`'s own
 value/text/format detection above) — `None` if the cell has no `table:style-name` at all. It
-returns a `CellStyle`; `CellStyle`, its `.number_format` (a `NumberFormat`), and `Border` are
-all importable directly from the top-level package too (`from odsslicer import CellStyle,
-NumberFormat, Border`), e.g. for type hints:
+returns a `CellStyle`. All the classes below are also importable directly from the top-level
+package (`from odsslicer import CellStyle, NumberFormat, Border, RowStyle, ColumnStyle,
+TableStyle`), e.g. for type hints:
 
 ```python
 sheet["A7"].style.bold                            # False
@@ -434,23 +434,64 @@ pointing to a `<number:*-style>` element (again in either file) for the cell's r
 *display format*.
 
 `CellStyle`'s visual properties: font `.bold`/`.italic`/`.underline`/`.strikethrough`
-(booleans), `.font_family`, `.font_size`, `.font_color`; `.background_color`;
-`.border_top`/`.border_bottom`/`.border_left`/`.border_right` (each a `Border` with
-`.width`/`.style`/`.color`, resolved from ODF's `fo:border` shorthand or a specific side,
-whichever the nearest style in the chain defines); `.horizontal_align`/`.vertical_align`;
-`.rotation` (text rotation angle in degrees, or `None`).
+(booleans), `.font_family`, `.font_size`, `.font_color`, `.superscript`/`.subscript`
+(booleans derived from `.text_position`, e.g. `"super 58%"`); `.background_color`;
+`.border_top`/`.border_bottom`/`.border_left`/`.border_right` and `.diagonal_bl_tr`/
+`.diagonal_tl_br` (each a `Border` with `.width`/`.style`/`.color`, resolved from ODF's
+`fo:border`/diagonal shorthand or a specific side, whichever the nearest style in the chain
+defines — ODF's literal `"none"` correctly resolves to `None`, not a `Border("none")`);
+`.horizontal_align`/`.vertical_align`; `.rotation` (degrees, or `None`); `.wrap_text`,
+`.shrink_to_fit` (booleans); `.writing_mode` (e.g. `"lr-tb"`/`"rl-tb"`); `.protection` (raw
+`style:cell-protect` value, e.g. `"protected"`, or `None`).
 
 `.number_format` has `.family` (`"percentage"`/`"currency"`/`"date"`/`"time"`/`"number"`/
-`"boolean"`/`"text"`), `.decimal_places`, `.grouping`, `.currency_symbol`, and for date/time
-styles `.components` (the ordered layout, e.g. `[("day", "long"), ("text", "/"),
-("month", "long"), ...]`).
+`"boolean"`/`"text"`), `.decimal_places`, `.grouping`, `.currency_symbol`, `.font_color`
+(a number format can carry its own text color, e.g. red for negative currency — distinct
+from `CellStyle.font_color`), and for date/time styles `.components` (the ordered layout,
+e.g. `[("day", "long"), ("text", "/"), ("month", "long"), ...]`).
+
+A number format can be **conditional** — e.g. a currency format showing negative amounts in
+red via a different sub-format for positive ones:
+
+```python
+sheet["A7"].value                              # 2.0
+sheet["A7"].style.number_format.name           # "N108P0" - already resolved for this value
+sheet["A7"].style.number_format.font_color     # None (only the negative variant is red)
+```
+
+`Cell.style.number_format` is automatically resolved against the cell's own value. To inspect
+the underlying conditions or resolve against a different hypothetical value, use
+`.conditions` (a list of `(condition, NumberFormat)` pairs in document order) and
+`.resolve(value)` on the base `NumberFormat` (`ODSReader._find_number_style(name)` plus
+`NumberFormat(tag, reader=reader)` gets it directly). Only the common comparison subset of
+ODF's condition language is understood (`"value()>=0"`, `"value()<100"`...); an unsupported
+condition (a cell-content-is-text() check, a between-range...) is simply never matched, so
+`.resolve()` falls back to the base format rather than guessing.
 
 A style can inherit from another via `style:parent-style-name`; `Cell.style` walks that chain
 so an inherited property still resolves (the nearest style in the chain wins for any
-property more than one defines — borders are resolved as a whole unit from the nearest style
-that defines any border info at all, rather than mixing individual sides across levels).
-`.cell_properties`/`.text_properties` expose the raw, flattened attribute dicts as an escape
-hatch for anything not surfaced as a named property above.
+property more than one defines — borders/diagonals are each resolved as a whole unit from the
+nearest style that defines any border info at all, rather than mixing individual sides across
+levels). `.cell_properties`/`.text_properties` expose the raw, flattened attribute dicts as
+an escape hatch for anything not surfaced as a named property above.
+
+### Row, column and sheet styles
+
+`Sheet.row_style(row)` / `Sheet.column_style(col)` / `Sheet.style` resolve the same way, for
+whichever little formatting ODF attaches at those levels — row/column styles don't chain via
+`style:parent-style-name` in practice, so these don't walk an inheritance chain:
+
+```python
+sheet.row_style(0).height        # e.g. "0.452cm", or None
+sheet.column_style(0).width      # e.g. "2.258cm", or None
+sheet.style.tab_color            # the sheet tab's color, or None
+```
+
+`RowStyle`: `.height`, `.optimal_height` (bool), `.visible`. `ColumnStyle`: `.width`,
+`.visible`. `TableStyle`: `.tab_color`, `.visible`. Any of the three is `None` if the
+row/column/sheet has no `table:style-name`, is out of range (rows/columns), or the `Sheet`
+has no owning `ODSReader` (e.g. one built directly from a bare tag rather than via
+`ODSReader.sheet()`/`.add_sheet()`).
 
 Not yet supported: writing/changing styles (this is read-only for now), and `odsslicer`'s
 own value/text heuristics (see [Writing formulas](#writing-formulas) and

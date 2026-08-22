@@ -861,11 +861,16 @@ class Cell:
     def style(self):
         """This cell's resolved `CellStyle` (visual formatting + real number
         format), or `None` if it has no `table:style-name` at all. Read-only
-        for now - see `CellStyle`/`NumberFormat`."""
+        for now - see `CellStyle`/`NumberFormat`.
+
+        `.number_format` is already resolved against this cell's own value
+        when the format is conditional (e.g. currency shown in red only when
+        negative) - see `NumberFormat.resolve`.
+        """
         name = self.attrs.get("table:style-name")
         if not name or self.sheet is None or self.sheet.reader is None:
             return None
-        return CellStyle(self.sheet.reader, name)
+        return CellStyle(self.sheet.reader, name, value=self._value)
 
 
 class Sheet:
@@ -1187,6 +1192,55 @@ class Sheet:
     def __repr__(self):
         return f"Sheet(name='{self.name}', size[rows, cols]={self.size})"
 
+    @property
+    def style(self):
+        """This sheet's resolved `TableStyle` (e.g. `.tab_color`), or `None`
+        if it has no `table:style-name` or no owning `ODSReader`."""
+        name = self.table.attrs.get("table:style-name")
+        if not name or self.reader is None:
+            return None
+        tag = self.reader._find_style(name, family="table")
+        return TableStyle(tag) if tag is not None else None
+
+    def row_style(self, row):
+        """The resolved `RowStyle` for logical row `row`, or `None` if that
+        row has no `table:style-name`, is out of range, or there's no
+        owning `ODSReader`."""
+        if self.reader is None or row >= self.n_rows:
+            return None
+        row_tag = self.rows[row][0].cell.parent
+        name = row_tag.attrs.get("table:style-name")
+        if not name:
+            return None
+        tag = self.reader._find_style(name, family="table-row")
+        return RowStyle(tag) if tag is not None else None
+
+    def _find_column_tag(self, col):
+        """The `<table:table-column>` covering logical column `col`
+        (accounting for `table:number-columns-repeated`), or `None`."""
+        seen = 0
+        for col_tag in self.table.find_all("table:table-column", recursive=False):
+            n = int(col_tag.attrs.get("table:number-columns-repeated", "1"))
+            if seen <= col < seen + n:
+                return col_tag
+            seen += n
+        return None
+
+    def column_style(self, col):
+        """The resolved `ColumnStyle` for logical column `col`, or `None` if
+        that column has no `table:style-name`, no `<table:table-column>`
+        covers it, or there's no owning `ODSReader`."""
+        if self.reader is None:
+            return None
+        col_tag = self._find_column_tag(col)
+        if col_tag is None:
+            return None
+        name = col_tag.attrs.get("table:style-name")
+        if not name:
+            return None
+        tag = self.reader._find_style(name, family="table-column")
+        return ColumnStyle(tag) if tag is not None else None
+
     def empty_row(self, i=None, n_cols=None, start=0, slice=None):
         step = 1
         if slice is not None:
@@ -1373,13 +1427,48 @@ _DATE_TIME_COMPONENT_NAMES = (
 )
 
 
+_CONDITION_RE = re.compile(r"^value\(\)\s*(<=|>=|!=|<|>|=)\s*(-?\d+(?:\.\d+)?)$")
+
+
+def _evaluate_number_format_condition(condition, value):
+    """Evaluate an ODF `style:condition` (the subset used by `style:map` on
+    number styles: a comparison of `value()` against a number, e.g.
+    `"value()>=0"`). Returns False for a condition outside that subset (a
+    cell-content-is-text() condition, a between-range, ...) rather than
+    guessing, and False if `value` isn't itself numeric."""
+    if not condition:
+        return False
+    m = _CONDITION_RE.match(condition.strip())
+    if not m:
+        return False
+    op, operand = m.group(1), float(m.group(2))
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return False
+    return {
+        "<": value < operand,
+        "<=": value <= operand,
+        ">": value > operand,
+        ">=": value >= operand,
+        "=": value == operand,
+        "!=": value != operand,
+    }[op]
+
+
 class NumberFormat:
     """The `<number:*-style>` behind a cell's `style:data-style-name` - the
     document's own real display format (decimal places, currency symbol,
     date/time layout), as opposed to `odsslicer`'s own learn-by-example
-    heuristic used when *writing* a value (see `Cell._infer_*_display`)."""
+    heuristic used when *writing* a value (see `Cell._infer_*_display`).
 
-    def __init__(self, tag):
+    A number style can be conditional (`<style:map style:condition="..."
+    style:apply-style-name="...">`, e.g. currency amounts shown in red when
+    negative): `.conditions` holds `(condition, NumberFormat)` pairs in
+    document order, and `.resolve(value)` follows them to the `NumberFormat`
+    that actually applies to a given value (itself, if none match)."""
+
+    def __init__(self, tag, reader: "ODSReader" = None, _seen=None):
         self.name = tag.get("style:name")
         self.family = tag.name[: -len("-style")] if tag.name.endswith("-style") else tag.name
         number_tag = tag.find("number:number") or tag.find("number:boolean")
@@ -1391,6 +1480,8 @@ class NumberFormat:
             self.grouping = number_tag.attrs.get("number:grouping") == "true"
         symbol = tag.find("number:currency-symbol")
         self.currency_symbol = symbol.get_text() if symbol is not None else None
+        text_props = tag.find("style:text-properties")
+        self.font_color = text_props.attrs.get("fo:color") if text_props is not None else None
         # for date/time styles: the ordered sequence of components/literal
         # text making up the layout, e.g. [("day", "long"), ("text", "/"), ...]
         self.components = None
@@ -1404,12 +1495,36 @@ class NumberFormat:
                 if child.name in _DATE_TIME_COMPONENT_NAMES
             ]
 
+        _seen = _seen or set()
+        _seen.add(self.name)
+        self.conditions = []
+        for style_map in tag.find_all("style:map", recursive=False):
+            condition = style_map.attrs.get("style:condition")
+            apply_name = style_map.attrs.get("style:apply-style-name")
+            target = None
+            if reader is not None and apply_name and apply_name not in _seen:
+                target_tag = reader._find_number_style(apply_name)
+                if target_tag is not None:
+                    target = NumberFormat(target_tag, reader=reader, _seen=_seen)
+            self.conditions.append((condition, target))
+
+    def resolve(self, value):
+        """The `NumberFormat` that actually applies to `value`, following
+        `.conditions` in order (first match wins) - `self` if none match, a
+        condition's target couldn't be resolved, or there are no conditions."""
+        for condition, target in self.conditions:
+            if target is not None and _evaluate_number_format_condition(condition, value):
+                return target
+        return self
+
     def __repr__(self):
         return f"NumberFormat(name={self.name!r}, family={self.family!r})"
 
 
 def _make_border(raw):
-    return Border(raw) if raw else None
+    # ODF uses the literal string "none" (not just an absent attribute) to
+    # explicitly cancel a border/diagonal - both mean "no border" here.
+    return Border(raw) if raw and raw != "none" else None
 
 
 class Border:
@@ -1439,16 +1554,16 @@ class CellStyle:
 
     _BORDER_ATTRS = ("fo:border", "fo:border-top", "fo:border-bottom", "fo:border-left", "fo:border-right")
 
-    def __init__(self, reader: "ODSReader", name: str):
+    def __init__(self, reader: "ODSReader", name: str, value=None):
         self.name = name
         chain = []
         seen = set()
-        current = reader._find_style(name)
+        current = reader._find_style(name, family="table-cell")
         while current is not None and current.get("style:name") not in seen:
             seen.add(current.get("style:name"))
             chain.append(current)
             parent = current.get("style:parent-style-name")
-            current = reader._find_style(parent) if parent else None
+            current = reader._find_style(parent, family="table-cell") if parent else None
 
         def prop(tag_name, attr):
             for style in chain:
@@ -1472,6 +1587,15 @@ class CellStyle:
         self.horizontal_align = prop("style:paragraph-properties", "fo:text-align")
         rotation = prop("style:table-cell-properties", "style:rotation-angle")
         self.rotation = int(rotation) if rotation is not None else None
+        self.writing_mode = prop("style:table-cell-properties", "style:writing-mode")
+        self.wrap_text = prop("style:table-cell-properties", "fo:wrap-option") == "wrap"
+        self.shrink_to_fit = prop("style:table-cell-properties", "style:shrink-to-fit") == "true"
+        self.protection = prop("style:table-cell-properties", "style:cell-protect")
+        self.text_position = prop("style:text-properties", "style:text-position")
+        self.superscript = (self.text_position or "").startswith("super")
+        self.subscript = (self.text_position or "").startswith("sub")
+        self.diagonal_bl_tr = _make_border(prop("style:table-cell-properties", "style:diagonal-bl-tr"))
+        self.diagonal_tl_br = _make_border(prop("style:table-cell-properties", "style:diagonal-tl-br"))
 
         # Borders are resolved as a unit from the nearest style that defines
         # *any* border info (rather than merging per-side across inheritance
@@ -1510,13 +1634,63 @@ class CellStyle:
         if data_style_name:
             number_tag = reader._find_number_style(data_style_name)
             if number_tag is not None:
-                self.number_format = NumberFormat(number_tag)
+                base_format = NumberFormat(number_tag, reader=reader)
+                self.number_format = base_format.resolve(value) if value is not None else base_format
 
     def __repr__(self):
         return (
             f"CellStyle(name={self.name!r}, bold={self.bold}, italic={self.italic}, "
             f"background_color={self.background_color!r})"
         )
+
+
+class RowStyle:
+    """Resolved `<style:style style:family="table-row">` behind a row's
+    `table:style-name` - read-only, no inheritance chain (rows don't
+    meaningfully use `style:parent-style-name` in practice). Look up via
+    `Sheet.row_style(row)`, not directly."""
+
+    def __init__(self, tag):
+        self.name = tag.get("style:name")
+        props = tag.find("style:table-row-properties")
+        self.height = props.attrs.get("style:row-height") if props is not None else None
+        self.optimal_height = (
+            props is not None and props.attrs.get("style:use-optimal-row-height") == "true"
+        )
+        self.visible = props is None or props.attrs.get("table:visibility", "visible") == "visible"
+
+    def __repr__(self):
+        return f"RowStyle(name={self.name!r}, height={self.height!r})"
+
+
+class ColumnStyle:
+    """Resolved `<style:style style:family="table-column">` behind a
+    column's `table:style-name` - read-only, no inheritance chain. Look up
+    via `Sheet.column_style(col)`, not directly."""
+
+    def __init__(self, tag):
+        self.name = tag.get("style:name")
+        props = tag.find("style:table-column-properties")
+        self.width = props.attrs.get("style:column-width") if props is not None else None
+        self.visible = props is None or props.attrs.get("table:visibility", "visible") == "visible"
+
+    def __repr__(self):
+        return f"ColumnStyle(name={self.name!r}, width={self.width!r})"
+
+
+class TableStyle:
+    """Resolved `<style:style style:family="table">` behind a sheet's
+    `table:style-name` - read-only, no inheritance chain. Look up via
+    `Sheet.style`, not directly."""
+
+    def __init__(self, tag):
+        self.name = tag.get("style:name")
+        props = tag.find("style:table-properties")
+        self.tab_color = props.attrs.get("table:tab-color") if props is not None else None
+        self.visible = props is None or props.attrs.get("table:display", "true") != "false"
+
+    def __repr__(self):
+        return f"TableStyle(name={self.name!r}, tab_color={self.tab_color!r})"
 
 
 class ODSReader:
@@ -1546,14 +1720,20 @@ class ODSReader:
     def __repr__(self):
         return f"ODSReader({self.file}, sheets={self.sheets_names})"
 
-    def _find_style(self, name):
-        """A `<style:style>` by name: automatic styles (`content.xml`) first,
-        then named/common styles (`styles.xml`) - a cell's `table:style-name`
+    def _find_style(self, name, family=None):
+        """A `<style:style>` by name (optionally constrained to a
+        `style:family`, e.g. `"table-cell"`/`"table-row"`/`"table-column"`/
+        `"table"` - names are conventionally unique per family in real
+        files, but nothing enforces that): automatic styles (`content.xml`)
+        first, then named/common styles (`styles.xml`) - a `table:style-name`
         can point at either."""
         if not name:
             return None
-        return self.data.find("style:style", attrs={"style:name": name}) or self.styles_data.find(
-            "style:style", attrs={"style:name": name}
+        attrs = {"style:name": name}
+        if family is not None:
+            attrs["style:family"] = family
+        return self.data.find("style:style", attrs=attrs) or self.styles_data.find(
+            "style:style", attrs=attrs
         )
 
     def _find_number_style(self, name):
