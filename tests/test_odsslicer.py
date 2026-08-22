@@ -831,3 +831,93 @@ def test_number_inference_bails_out_safely_on_a_style_it_cannot_reproduce(writab
     cell.__init__(cell.cell, row=cell.row, col=cell.col, sheet=cell.sheet)  # refresh the cache
     cell.value = 0.75
     assert cell.text == "0.75"
+
+
+# ---------------------------------------------------------------------------
+# Écriture : nouvelles feuilles (ODSReader.add_sheet)
+# ---------------------------------------------------------------------------
+
+def test_add_sheet_creates_an_empty_sheet(writable_reader):
+    before = list(writable_reader.sheets_names)
+    s = writable_reader.add_sheet("NewSheet")
+    assert writable_reader.sheets_names == before + ["NewSheet"]
+    assert s.size == (0, 0)
+    assert writable_reader.sheet("NewSheet") is s  # cached, same object
+
+
+def test_add_sheet_rejects_empty_name(writable_reader):
+    with pytest.raises(ValueError):
+        writable_reader.add_sheet("")
+
+
+def test_add_sheet_rejects_duplicate_name(writable_reader):
+    writable_reader.add_sheet("Dup")
+    with pytest.raises(ValueError):
+        writable_reader.add_sheet("Dup")
+
+
+def test_add_sheet_is_writable_and_grows(writable_reader):
+    s = writable_reader.add_sheet("NewSheet")
+    s["A1"].value = "hello"
+    s["C3"].value = 42
+    assert s.size == (3, 3)
+    assert s["A1"].value == "hello"
+    assert s["C3"].value == 42
+    assert s["B2"].value is None
+
+
+def test_add_sheet_does_not_affect_existing_sheets(writable_reader):
+    writable_reader.add_sheet("NewSheet")
+    s1 = writable_reader.sheet("Sheet1")
+    assert s1["A1"].value == "texte simple"
+    assert s1.size == (9, 2)
+
+
+def test_save_round_trip_after_add_sheet(writable_reader, tmp_path):
+    # regression: a brand new sheet's lone blank row (needed for it to be a
+    # structurally valid ODF sheet) was physically left in the XML after
+    # load() discards it from the logical view; growing the sheet then
+    # appended new rows *after* that still-present phantom row without
+    # removing it, so a save/reload round trip surfaced it as an extra,
+    # wrongly-shaped row - see also test_save_round_trip_growing_from_empty.
+    s = writable_reader.add_sheet("NewSheet")
+    s["A1"].value = "hello"
+    s["C3"].value = 42
+
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    reread = ODSReader(out)
+    assert reread.sheets_names[-1] == "NewSheet"
+    s2 = reread.sheet("NewSheet")
+    assert s2.size == (3, 3)
+    assert s2["A1"].value == "hello"
+    assert s2["C3"].value == 42
+    assert s2["B2"].value is None
+    # existing sheets are untouched, and the new table sits after them in the XML
+    assert reread.sheet("Sheet1")["A1"].value == "texte simple"
+
+    import zipfile
+
+    with zipfile.ZipFile(out) as z:
+        content = z.read("content.xml").decode("utf-8")
+    idx_fusion = content.index('table:name="SheetFusion"')
+    idx_new = content.index('table:name="NewSheet"')
+    idx_named_expr = content.index("table:named-expressions")
+    assert idx_fusion < idx_new < idx_named_expr
+
+
+def test_save_round_trip_growing_from_empty(writable_reader, tmp_path):
+    # same phantom-row regression as above, but on a pre-existing empty sheet
+    # rather than one freshly created by add_sheet.
+    s = writable_reader.sheet("SheetEmpty")
+    assert s.size == (0, 0)
+    s["B3"].value = "from scratch"
+
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    reread = ODSReader(out).sheet("SheetEmpty")
+    assert reread.size == (3, 2)
+    assert reread["B3"].value == "from scratch"
+    assert reread["A1"].value is None

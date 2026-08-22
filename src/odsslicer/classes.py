@@ -47,6 +47,31 @@ FORMATS = {
 }
 
 
+def _blank_template(root, tag_name):
+    """A detached, blank copy of an existing `tag_name` tag reachable from `root`.
+
+    Building a new tag from scratch (e.g. `BeautifulSoup("<table:table-row/>")`)
+    loses the "table:"/"text:" namespace prefix, since there is no `xmlns:table`
+    declaration in that isolated fragment for lxml/bs4 to resolve it against.
+    Copying an existing tag from the live document sidesteps the issue.
+    """
+    template = (
+        root.find(tag_name)
+        or getattr(root, "find_previous", lambda *a: None)(tag_name)
+        or getattr(root, "find_next", lambda *a: None)(tag_name)
+    )
+    if template is None:
+        raise NotImplementedError(
+            f"cannot create a new {tag_name} element: no existing tag of that name "
+            "was found anywhere in this document to use as a namespace template"
+        )
+    new_tag = copy.deepcopy(template)
+    new_tag.attrs.clear()
+    for child in list(new_tag.children):
+        child.extract()
+    return new_tag
+
+
 class ArrayValues:
     def __init__(self, array):
         self.array = array
@@ -425,7 +450,7 @@ class Sheet:
         self.table: BeautifulSoup = table
         self.attrs: Dict[str, str] = self.table.attrs
         self.name = self.table["table:name"]
-        self.stylename = self.table["table:style-name"]
+        self.stylename = self.table.attrs.get("table:style-name")
         self.rows = self.load(table)
         if len(self.rows) > 0:
             rows_len = [len(row) for row in self.rows]
@@ -668,41 +693,12 @@ class Sheet:
                 covered.__init__(covered.cell, row=r, col=c, sheet=self)
 
     def _empty_cell_template(self):
-        """A detached, blank `<table:table-cell/>` tag with the document's own
-        "table:" namespace prefix (building one from scratch loses the prefix,
-        same issue as `Cell._set_text` for `text:p`)."""
-        template = (
-            self.table.find("table:table-cell")
-            or self.table.find_previous("table:table-cell")
-            or self.table.find_next("table:table-cell")
-        )
-        if template is None:
-            raise NotImplementedError(
-                "cannot create a new cell: no existing table:table-cell was found "
-                "anywhere in this document to use as a namespace template"
-            )
-        cell = copy.deepcopy(template)
-        cell.attrs.clear()
-        for child in list(cell.children):
-            child.extract()
-        return cell
+        """A detached, blank `<table:table-cell/>` tag."""
+        return _blank_template(self.table, "table:table-cell")
 
     def _empty_row_template(self, n_cols):
         """A detached `<table:table-row>` tag with `n_cols` blank cells."""
-        template = (
-            self.table.find("table:table-row")
-            or self.table.find_previous("table:table-row")
-            or self.table.find_next("table:table-row")
-        )
-        if template is None:
-            raise NotImplementedError(
-                "cannot create a new row: no existing table:table-row was found "
-                "anywhere in this document to use as a namespace template"
-            )
-        row = copy.deepcopy(template)
-        row.attrs.clear()
-        for child in list(row.children):
-            child.extract()
+        row = _blank_template(self.table, "table:table-row")
         for _ in range(n_cols):
             row.append(self._empty_cell_template())
         return row
@@ -727,6 +723,9 @@ class Sheet:
                     cells_row.append(Cell(new_cell_tag, row=r, col=len(cells_row), sheet=self))
             self.n_cols = target_cols
 
+        if row >= self.n_rows:
+            self._discard_stray_rows()
+
         while row >= self.n_rows:
             new_row_tag = self._empty_row_template(self.n_cols)
             self.table.append(new_row_tag)
@@ -738,6 +737,23 @@ class Sheet:
             self.n_rows += 1
 
         self.size = (self.n_rows, self.n_cols)
+
+    def _discard_stray_rows(self):
+        """Remove any `<table:table-row>` physically present in the XML beyond
+        what `self.rows` accounts for.
+
+        `load()`'s cleanup (a lone blank row, a trimmed trailing empty row, a
+        huge discarded repeated block...) only affects the in-memory `self.rows`
+        view - it never touches the underlying XML. Appending new rows without
+        first clearing these out would silently leave them in place, ready to
+        resurface as extra "phantom" rows the next time the file is parsed.
+        """
+        anchor = self.rows[-1][0].cell.parent if self.n_rows > 0 else None
+        stray = anchor.find_next_sibling("table:table-row") if anchor else self.table.find("table:table-row")
+        while stray is not None:
+            following = stray.find_next_sibling("table:table-row")
+            stray.decompose()
+            stray = following
 
     def __repr__(self):
         return f"Sheet(name='{self.name}', size[rows, cols]={self.size})"
@@ -979,4 +995,31 @@ class ODSReader:
             self._sheets[name] = Sheet(
                 self.tables[self.sheets_names.index(name)], verbose=self.verbose
             )
+        return self._sheets[name]
+
+    def add_sheet(self, name: str) -> Sheet:
+        """Create a new, empty sheet named `name` and append it after the last
+        existing sheet (`table:table` elements must stay grouped together and
+        come before things like `table:named-expressions` in the document).
+
+        The new sheet's XML mirrors the minimal shape of a genuinely empty ODF
+        sheet (one column definition, one row with one empty cell) and carries
+        no particular style, same as newly grown rows/cells.
+        """
+        if not name:
+            raise ValueError("a sheet name is required")
+        if name in self.sheets_names:
+            raise ValueError(f"a sheet named {name!r} already exists")
+
+        table = _blank_template(self.data, "table:table")
+        table.attrs["table:name"] = name
+        table.append(_blank_template(self.data, "table:table-column"))
+        row = _blank_template(self.data, "table:table-row")
+        row.append(_blank_template(self.data, "table:table-cell"))
+        table.append(row)
+
+        self.tables[-1].insert_after(table)
+        self.tables.append(table)
+        self.sheets_names.append(name)
+        self._sheets[name] = Sheet(table, verbose=self.verbose)
         return self._sheets[name]

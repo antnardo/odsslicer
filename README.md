@@ -179,6 +179,20 @@ sheet.size            # (12, 5): rows 10-12 added, columns C-E added, everything
 write (`.value = ...`) triggers growth. New rows/cells don't inherit any particular style
 (default formatting).
 
+### Creating new sheets
+
+`ODSReader.add_sheet(name)` creates a new, empty sheet and appends it after the last existing
+one:
+
+```python
+sheet = table.add_sheet("Summary")
+sheet.size            # (0, 0)
+sheet["A1"].value = "Total"     # grows it like any other sheet, see above
+```
+
+Raises a `ValueError` for an empty name or one that's already used by another sheet in the
+document. Like grown rows/cells, the new sheet carries no particular style.
+
 ### Displayed text: learned from an example rather than a raw conversion
 
 ODF doesn't just store a cell's value (`office:value`): it also stores the text as displayed
@@ -208,7 +222,7 @@ count, which would truncate the new value's precision.
 
 ### What is **not** supported
 
-- No formula writing, no creating new sheets.
+- No formula writing.
 - No real ODF formatting engine (resolving `styles.xml`, the document's locale, the actual
   currency): the inference above is a learn-by-example heuristic, not a read of the cell's
   style — it can silently fail (falling back to a plain conversion) for a format no other
@@ -295,10 +309,11 @@ Chosen name: **`odsslicer`** (available on PyPI as of 2026-07-29), to reflect th
 real differentiator — numpy-style indexing/slicing by cell address — rather than a generic
 "ods reader".
 
-## History of fixes made before publication
+## Notable bug fixes
 
-While rereading the module for this publication, the following bugs (present in the internal
-version) were fixed in `src/odsslicer/classes.py`:
+The following bugs were found and fixed in `src/odsslicer/classes.py` while developing this
+module (most of them while rereading the original internal version ahead of its first
+release):
 
 1. **`Sheet.string_address`** produced a wrong address for most multi-letter columns (e.g.
    column 27 → `"BB1"` instead of `"AB1"`, column 51 → `"ZZ1"` instead of `"AZ1"`) due to a
@@ -332,5 +347,12 @@ version) were fixed in `src/odsslicer/classes.py`:
    the old code did `str(p.string)`, turning that `None` into the string `"None"`. Fixed by
    using `p.get_text()`, which correctly concatenates all descendant text (and returns `""`
    for a genuinely empty cell).
+9. **Growing an empty sheet (or one whose XML has a trailing empty row) could corrupt it on
+   the next save/reload.** `load()` discards some rows from its in-memory view (a lone blank
+   row on an "empty" sheet, a trailing empty row) but never removes the corresponding
+   `<table:table-row>` from the underlying XML. `Sheet.grow_to` appended new rows after
+   whatever was physically there without accounting for this, so those still-present rows
+   would resurface as an extra, wrongly-shaped row once the file was saved and re-parsed.
+   Fixed: any such stray row is now discarded first.
 
 All of these cases are covered by regression tests in `tests/test_odsslicer.py`.
