@@ -262,9 +262,17 @@ A placeholder can hold a small arithmetic expression (`+`, `-`, `*`, `//`) over 
 runs; a pattern with no `{...}` is unaffected (so a single fixed formula broadcasts as-is,
 same as the range example above). `{c}` is always a plain **column number** (1-indexed), not
 a letter — write the column letter literally if it's fixed (as in the example above), or use
-`{r}`/`{c}` only for the parts that actually vary from cell to cell. Note this collides with
-formula syntax that itself uses literal `{`/`}` (e.g. array-constant literals like
-`{1,2,3}`), which isn't supported here.
+`{r}`/`{c}` only for the parts that actually vary from cell to cell.
+
+Formula syntax that itself uses literal `{`/`}` — e.g. an array-constant literal like
+`{1,2,3}` — would otherwise be read as a (invalid) placeholder. Escape it by doubling the
+braces, exactly like `str.format`: the doubled braces become literal ones, and their content
+is passed through completely untouched (no placeholder evaluation, no `,`-to-`;` translation
+— write it in whichever syntax the target application expects):
+
+```python
+sheet["A1"].formula = "SUM({{1,2,3}})"   # -> "of:=SUM({1,2,3})"
+```
 
 ### Displayed text: learned from an example rather than a raw conversion
 

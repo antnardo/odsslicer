@@ -161,6 +161,13 @@ def _eval_template_expr(expr, context):
     return eval(code, {"__builtins__": {}}, context)  # noqa: S307 - restricted to arithmetic on r/c
 
 
+_ESCAPED_BRACES_RE = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
+# NUL-delimited stash markers: guaranteed not to look like a cell reference or
+# contain a comma, so they pass unscathed through the friendly-formula
+# translation that runs after templating.
+_ESCAPE_PLACEHOLDER = "\x00{}\x00"
+
+
 def _expand_formula_template(pattern, row, col):
     """Expand `{...}` placeholders in a formula pattern using the target
     cell's own 1-indexed row (`r`) and column (`c`) — e.g. writing the pattern
@@ -168,13 +175,34 @@ def _expand_formula_template(pattern, row, col):
     A pattern with no `{...}` is returned unchanged. Only `+`, `-`, `*`, `//`
     and the names `r`/`c` are allowed inside a placeholder.
 
-    Note this collides with formula syntax that itself uses literal `{`/`}`
-    (e.g. Excel/ODF array-constant literals like `{1,2,3}`) - not supported.
+    `{{...}}` (doubled braces, as in `str.format`) is an escape hatch for a
+    literal `{`/`}` — e.g. an ODF/Excel array-constant literal such as
+    `{1,2,3}` would otherwise be read as a (invalid) placeholder expression.
+    Returns `(expanded_pattern, restore)`: `restore` must be called on the
+    final formula string (after `_normalize_odf_formula`) to put the escaped
+    content back, verbatim and untranslated - the caller must apply it last,
+    since the escaped content should skip the `,` -> `;` translation too.
     """
-    if "{" not in pattern:
-        return pattern
-    context = {"r": row + 1, "c": col + 1}
-    return _TEMPLATE_TOKEN_RE.sub(lambda m: str(_eval_template_expr(m.group(1), context)), pattern)
+    escaped = []
+
+    def stash(m):
+        escaped.append(m.group(1))
+        return _ESCAPE_PLACEHOLDER.format(len(escaped) - 1)
+
+    pattern = _ESCAPED_BRACES_RE.sub(stash, pattern)
+
+    if "{" in pattern:
+        context = {"r": row + 1, "c": col + 1}
+        pattern = _TEMPLATE_TOKEN_RE.sub(
+            lambda m: str(_eval_template_expr(m.group(1), context)), pattern
+        )
+
+    def restore(formula):
+        for i, content in enumerate(escaped):
+            formula = formula.replace(_ESCAPE_PLACEHOLDER.format(i), "{" + content + "}")
+        return formula
+
+    return pattern, restore
 
 
 def _normalize_odf_formula(formula):
@@ -430,8 +458,8 @@ class Cell:
             tag.attrs.pop("table:formula", None)
             self._formula = None
         else:
-            expanded = _expand_formula_template(new_formula, self.row, self.col)
-            self._formula = _normalize_odf_formula(expanded)
+            expanded, restore_escapes = _expand_formula_template(new_formula, self.row, self.col)
+            self._formula = restore_escapes(_normalize_odf_formula(expanded))
             tag.attrs["table:formula"] = self._formula
 
         self.is_formula = self._formula is not None

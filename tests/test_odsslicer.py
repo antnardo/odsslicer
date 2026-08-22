@@ -1038,6 +1038,37 @@ def test_formula_template_rejects_unknown_names(writable_reader):
         s["A1"].formula = "{z+1}"
 
 
+def test_formula_template_double_braces_escape_a_literal_array_constant(writable_reader):
+    # {{...}} (as in str.format) is the escape hatch for a literal {...} -
+    # e.g. an ODF/Excel array-constant like {1,2,3}, which is not a {r}/{c}
+    # placeholder. The escaped content is passed through completely
+    # untouched, including its own commas (not turned into ";").
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].formula = "SUM({{1,2,3}})"
+    assert s["A1"].formula == "of:=SUM({1,2,3})"
+
+
+def test_formula_template_escape_content_keeps_its_own_separators(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].formula = "IF({{1;2;3}},A1,A2)"
+    # the escaped array literal is untouched; the *outer* comma (a real
+    # argument separator) and the A1/A2 references are still translated
+    assert s["A1"].formula == "of:=IF({1;2;3};[.A1];[.A2])"
+
+
+def test_formula_template_escape_combines_with_rc_placeholders(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A2"].formula = "$A{r-1}+{{1,2}}"
+    assert s["A2"].formula == "of:=[.$A1]+{1,2}"
+
+
+def test_formula_template_doubled_braces_around_plain_text_stay_literal(writable_reader):
+    # mirrors str.format(): "{{r}}" is a literal "{r}", not the evaluated r
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].formula = "{{r}}"
+    assert s["A1"].formula == "of:={r}"
+
+
 # ---------------------------------------------------------------------------
 # Écriture sur des sélections multi-cellules (ArrayValues.value / .formula)
 # ---------------------------------------------------------------------------
