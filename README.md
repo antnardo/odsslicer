@@ -274,6 +274,18 @@ is passed through completely untouched (no placeholder evaluation, no `,`-to-`;`
 sheet["A1"].formula = "SUM({{1,2,3}})"   # -> "of:=SUM({1,2,3})"
 ```
 
+The two features compose: a `{r}`/`{c}` placeholder and a `{{...}}`-escaped literal can appear
+in the same pattern (the escaped part is set aside before templating runs, and restored
+untouched afterwards) —
+
+```python
+sheet["A2"].formula = "$A{r-1}+{{1,2}}"   # A2 -> "of:=[.$A1]+{1,2}"
+```
+
+(a contrived example purely to demonstrate that the two mechanisms don't interfere with each
+other — adding a cell to a 2-element array constant isn't a formula anyone would write for
+real).
+
 ### Displayed text: learned from an example rather than a raw conversion
 
 ODF doesn't just store a cell's value (`office:value`): it also stores the text as displayed
