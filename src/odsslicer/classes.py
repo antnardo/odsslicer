@@ -130,6 +130,99 @@ def _translate_friendly_formula(body):
     return "".join(parts)
 
 
+_ODF_BRACKET_RE = re.compile(r"\[([^\[\]]*)\]")
+
+
+def _odf_ref_to_friendly(inner):
+    """`.A1` -> `A1`, `.$A$1` -> `$A$1`, `Sheet2.A1` -> `Sheet2.A1` (already
+    friendly) - the reverse of the single-reference half of
+    `_translate_friendly_formula`."""
+    return inner[1:] if inner.startswith(".") else inner
+
+
+def _translate_odf_formula_to_friendly(body):
+    """Reverse of `_translate_friendly_formula`: turn ODF bracket references
+    (`[.A1]`, `[.A1:.B3]`, `[Sheet2.A1]`) back into ordinary `A1`-style
+    syntax, and `;` argument separators back into `,` (outside quoted string
+    literals). Best-effort - a bracket whose content isn't a plain reference
+    or range (a named range, an unusual construct) is passed through as-is.
+    """
+
+    def translate_refs(segment):
+        def replace(m):
+            inner = m.group(1)
+            if ":" in inner:
+                start, end = inner.split(":", 1)
+                return f"{_odf_ref_to_friendly(start)}:{_odf_ref_to_friendly(end)}"
+            return _odf_ref_to_friendly(inner)
+
+        return _ODF_BRACKET_RE.sub(replace, segment)
+
+    parts = _STRING_LITERAL_RE.split(body)
+    for i in range(0, len(parts), 2):
+        parts[i] = translate_refs(parts[i]).replace(";", ",")
+    return "".join(parts)
+
+
+_ODF_CELL_ADDRESS_RE = re.compile(r"^(\$?)([A-Za-z]+)(\$?)([0-9]+)$")
+_SHEET_QUALIFIED_RE = re.compile(rf"^(?:(?P<sheet>{_SHEET_NAME})\.)?(?P<addr>.+)$")
+
+
+def _shift_cell_address(addr, drow, dcol):
+    """Shift a single ODF cell address (e.g. `.A1`, `.$A$1`, or `A1`/`$A$1`
+    without the leading dot) by `(drow, dcol)`, honoring `$` locks on each
+    axis independently - the way a spreadsheet's fill handle adjusts
+    relative references when a formula is copied. Anything that isn't a
+    plain cell address (e.g. a named range) is returned untouched. Raises
+    `ValueError` if the shifted position would fall off the sheet.
+    """
+    dotted = addr.startswith(".")
+    body = addr[1:] if dotted else addr
+    m = _ODF_CELL_ADDRESS_RE.match(body)
+    if m is None:
+        return addr
+    col_abs, col_letters, row_abs, row_digits = m.groups()
+    col = Sheet.string_to_col(col_letters)
+    row = int(row_digits) - 1
+    if not col_abs:
+        col += dcol
+    if not row_abs:
+        row += drow
+    if row < 0 or col < 0:
+        raise ValueError(
+            f"shifting {addr!r} by (row={drow}, col={dcol}) would move it off the sheet"
+        )
+    new_letters = Sheet.string_address(0, col)[:-1]
+    shifted = f"{col_abs}{new_letters}{row_abs}{row + 1}"
+    return f".{shifted}" if dotted else shifted
+
+
+def _shift_odf_reference(inner, drow, dcol):
+    """Shift the address part(s) of one bracket's content (`.A1`, `.A1:.B3`,
+    `Sheet2.A1`, `Sheet2.A1:.B3`), leaving any sheet-name prefix untouched."""
+
+    def shift_one(part):
+        m = _SHEET_QUALIFIED_RE.match(part)
+        sheet, addr = m.group("sheet"), m.group("addr")
+        shifted_addr = _shift_cell_address(addr, drow, dcol)
+        return f"{sheet}.{shifted_addr}" if sheet else shifted_addr
+
+    if ":" in inner:
+        start, end = inner.split(":", 1)
+        return f"{shift_one(start)}:{shift_one(end)}"
+    return shift_one(inner)
+
+
+def _shift_odf_formula(formula, drow, dcol):
+    """Shift every reference in an already ODF-syntax formula (as stored by
+    `Cell.formula`) by `(drow, dcol)`. Used by `Cell.fill_formula` to
+    replicate a formula across a range the way a spreadsheet's fill handle
+    does."""
+    return _ODF_BRACKET_RE.sub(
+        lambda m: f"[{_shift_odf_reference(m.group(1), drow, dcol)}]", formula
+    )
+
+
 _TEMPLATE_TOKEN_RE = re.compile(r"\{([^{}]*)\}")
 _TEMPLATE_ALLOWED_NODES = (
     ast.Expression,
@@ -231,6 +324,17 @@ def _normalize_odf_formula(formula):
     return f"of:={body}"
 
 
+def _friendly_formula(formula):
+    """The reverse of `_normalize_odf_formula`, for display: strip the
+    `<language>:=` prefix and translate ODF references/separators back into
+    ordinary `A1`-style syntax, e.g. `"of:=[.A2]+[.A3]"` -> `"=A2+A3"`."""
+    if formula is None:
+        return None
+    m = _FORMULA_LANGUAGE_PREFIX.match(formula)
+    body = formula[m.end() :] if m else formula
+    return f"={_translate_odf_formula_to_friendly(body)}"
+
+
 def _is_broadcastable_scalar(value):
     """True for a value that should be written as-is to every cell of a
     multi-cell selection, rather than unpacked element-wise (a `str` is
@@ -258,6 +362,15 @@ class ArrayValues:
             return cls._get_dimension(array[0]) + 1
         except (TypeError, IndexError):
             return 0
+
+    def _iter_cells(self):
+        """Yield every underlying `Cell`, regardless of this selection's
+        dimension (a single cell, a row/column, or a 2D block)."""
+        if self.dimension == 0:
+            yield self.array
+        else:
+            for item in self.array:
+                yield from ArrayValues(item)._iter_cells()
 
     def __repr__(self):
         return f"ArrayValue({self.array})"
@@ -295,6 +408,10 @@ class ArrayValues:
     @property
     def formula(self):
         return self.cell.formula
+
+    @property
+    def formula_friendly(self):
+        return self.cell.formula_friendly
 
     @formula.setter
     def formula(self, new_formula):
@@ -443,6 +560,17 @@ class Cell:
     def formula(self):
         return self._formula
 
+    @property
+    def formula_friendly(self):
+        """`.formula` translated back into ordinary `A1`-style syntax for
+        readability, e.g. `"of:=[.A2]+[.A3]"` reads as `"=A2+A3"` — the
+        reverse of what `.formula = "A2+A3"` accepts on write. `None` if the
+        cell has no formula. Best-effort: a construct the write-side
+        translation doesn't cover either (a named range, an unusual
+        reference shape) is passed through untranslated rather than guessed
+        at."""
+        return _friendly_formula(self._formula)
+
     @formula.setter
     def formula(self, new_formula):
         self._prepare_for_write()
@@ -467,6 +595,35 @@ class Cell:
         self.raw_value = None
         self._value = None
         self.is_empty = self._compute_is_empty()
+
+    def fill_formula(self, target):
+        """Copy this cell's formula into every cell of `target`, shifting
+        relative references the way a spreadsheet's fill handle does when a
+        formula is dragged across a range: if this cell's formula is
+        `"=A1+1"`, filling it one row down produces `"=A2+1"`; a
+        `"$A$1"`-style absolute reference stays put regardless of direction.
+
+        `target` is a sheet address string (resolved on this cell's own
+        sheet) or a selection (e.g. `sheet["A3:A10"]`) - any shape, not just
+        "downward": filling right or across a 2D block works the same way.
+        Raises `ValueError` if a shifted reference would fall off the sheet.
+        """
+        if self._formula is None:
+            raise ValueError(f"cell {self.address} has no formula to fill from")
+        if isinstance(target, str):
+            if self.sheet is None:
+                raise RuntimeError(
+                    f"cell {self.address} has no owning sheet to resolve {target!r} on"
+                )
+            target = self.sheet[target]
+        if isinstance(target, Cell):  # a single-cell address resolves to a bare Cell
+            target = ArrayValues(target)
+        if not isinstance(target, ArrayValues):
+            raise TypeError(f"fill_formula target must be a sheet address or selection, got {type(target)!r}")
+
+        for cell in target._iter_cells():
+            drow, dcol = cell.row - self.row, cell.col - self.col
+            cell.formula = _shift_odf_formula(self._formula, drow, dcol)
 
     def _compute_is_empty(self):
         return (

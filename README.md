@@ -233,6 +233,48 @@ There's no formula evaluator: the cell's `.value` reads back as `None` until a r
 spreadsheet application (LibreOffice, etc.) opens the file and recalculates it — this
 matches how ODF itself represents a formula with no cached result.
 
+#### Reading a formula back in ordinary syntax
+
+`.formula` always returns the raw ODF form, `[.A1]`/`;` and all — including for formulas
+already present in a file you didn't write yourself, which can get gnarly fast (a real
+example, straight from a spreadsheet used for grading):
+
+```python
+cell.formula
+# 'of:=IF(OFFSET([$Notes.$C$3];[.I$1];[.$A3]+[.$A$1])=0;"";OFFSET([$Notes.$C$3];[.I$1];[.$A3]+[.$A$1]))'
+```
+
+`.formula_friendly` translates that back into ordinary syntax for readability — the exact
+reverse of what `.formula = "..."` accepts on write:
+
+```python
+cell.formula_friendly
+# '=IF(OFFSET($Notes.$C$3,I$1,$A3+$A$1)=0,"",OFFSET($Notes.$C$3,I$1,$A3+$A$1))'
+```
+
+`None` if the cell has no formula. This is read-only and best-effort: a construct the
+write-side translation doesn't cover either (a named range, an unusual reference shape) is
+passed through untranslated rather than guessed at.
+
+#### Filling a formula across a range
+
+`Cell.fill_formula(target)` copies a cell's formula into every cell of `target`, shifting
+relative references the way a spreadsheet's fill handle does when you drag a formula across
+cells — a `$`-anchored (absolute) reference stays put on whichever axis it locks, regardless
+of direction:
+
+```python
+sheet["B2"].formula = "$A1+1"
+sheet["B2"].fill_formula("B3:B10")
+# B3 -> "=$A2+1", B4 -> "=$A3+1", ..., B10 -> "=$A9+1"
+```
+
+`target` can be a sheet address string (resolved on the source cell's own sheet) or a
+selection (`sheet["B3:B10"]`), and works in any direction — down, right, or across a 2D
+block — since the shift for each target cell is just the difference between its own
+position and the source cell's. Raises `ValueError` if the source cell has no formula, or if
+a shifted reference would fall off the sheet (e.g. filling upward past row 1).
+
 #### Writing the same pattern across several cells
 
 `sheet[...]` (a slice, not a single cell) is also writable, for both `.value` and `.formula`:

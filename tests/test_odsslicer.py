@@ -1197,3 +1197,142 @@ def test_save_round_trip_after_writing_a_formula(writable_reader, tmp_path):
     assert reread["C1"].formula == "of:=[.A2]+[.A3]"
     assert reread["C1"].is_formula
     assert reread["C1"].attrs == {"table:formula": "of:=[.A2]+[.A3]"}
+
+
+# ---------------------------------------------------------------------------
+# Écriture : lecture amicale d'une formule (Cell.formula_friendly)
+# ---------------------------------------------------------------------------
+
+def test_formula_friendly_translates_odf_syntax_back_to_a1(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "A2+A3"
+    assert s["C1"].formula == "of:=[.A2]+[.A3]"
+    assert s["C1"].formula_friendly == "=A2+A3"
+
+
+def test_formula_friendly_preserves_absolute_markers_and_ranges(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "$A$2+$A$3"
+    assert s["C1"].formula_friendly == "=$A$2+$A$3"
+
+    s["C2"].formula = "SUM(A1:A3)"
+    assert s["C2"].formula_friendly == "=SUM(A1:A3)"
+
+
+def test_formula_friendly_translates_semicolons_back_to_commas(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "IF(A1>0,1,-1)"
+    assert s["C1"].formula_friendly == "=IF(A1>0,1,-1)"
+
+
+def test_formula_friendly_preserves_commas_inside_string_literals(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = 'IF(A1="x,y",1,2)'
+    assert s["C1"].formula_friendly == '=IF(A1="x,y",1,2)'
+
+
+def test_formula_friendly_translates_cross_sheet_references(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "Sheet2.A1+1"
+    assert s["C1"].formula_friendly == "=Sheet2.A1+1"
+
+
+def test_formula_friendly_is_none_without_a_formula(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    assert s["A1"].formula is None
+    assert s["A1"].formula_friendly is None
+
+
+def test_formula_friendly_on_a_real_complex_formula():
+    # a real formula from bareme/examples/root_init/DS1/Notes.ods (MPX4!I3):
+    # of:=IF(OFFSET([$Notes.$C$3];[.I$1];[.$A3]+[.$A$1])=0;"";
+    #        OFFSET([$Notes.$C$3];[.I$1];[.$A3]+[.$A$1]))
+    from bs4 import BeautifulSoup
+
+    xml = (
+        '<root xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
+        'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+        'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">'
+        '<table:table-cell table:formula=\'of:=IF(OFFSET([$Notes.$C$3];[.I$1];'
+        '[.$A3]+[.$A$1])=0;"";OFFSET([$Notes.$C$3];[.I$1];[.$A3]+[.$A$1]))\'>'
+        "<text:p/></table:table-cell></root>"
+    )
+    tag = BeautifulSoup(xml, "xml").find("table:table-cell")
+    cell = Cell(tag)
+    assert cell.formula_friendly == (
+        '=IF(OFFSET($Notes.$C$3,I$1,$A3+$A$1)=0,"",OFFSET($Notes.$C$3,I$1,$A3+$A$1))'
+    )
+
+
+def test_formula_friendly_round_trips_through_a_write(writable_reader):
+    # writing back what .formula_friendly reports should reproduce the same
+    # ODF formula (minus the leading "=", which .formula = ... also accepts)
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "SUM(A1:A3)+$B$1"
+    friendly = s["C1"].formula_friendly
+    s["C2"].formula = friendly
+    assert s["C2"].formula == s["C1"].formula
+
+
+# ---------------------------------------------------------------------------
+# Écriture : recopie d'une formule (Cell.fill_formula)
+# ---------------------------------------------------------------------------
+
+def test_fill_formula_down_a_column_shifts_relative_rows(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["B2"].formula = "$A1+1"
+    s["B2"].fill_formula("B3:B10")
+    for row in range(1, 10):  # 0-indexed rows 1..9 == B2..B10
+        assert s.get_cell(row, 1).formula_friendly == f"=$A{row}+1"
+
+
+def test_fill_formula_right_shifts_relative_columns(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].formula = "B{r}*2"  # A1 (row=1) -> "=B1*2"
+    assert s["A1"].formula_friendly == "=B1*2"
+    s["A1"].fill_formula("B1:D1")
+    assert s["B1"].formula_friendly == "=C1*2"
+    assert s["C1"].formula_friendly == "=D1*2"
+    assert s["D1"].formula_friendly == "=E1*2"
+
+
+def test_fill_formula_keeps_absolute_references_fixed(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A2"].formula = "$A$1*10"
+    s["A2"].fill_formula(s["B2:D3"])  # 2D block target, not just a string
+    for row in (1, 2):
+        for col in range(1, 4):
+            assert s.get_cell(row, col).formula_friendly == "=$A$1*10"
+
+
+def test_fill_formula_accepts_a_single_cell_address(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "$A1+1"
+    s["C1"].fill_formula("C1")  # no-op shift, single cell (not a range)
+    assert s["C1"].formula_friendly == "=$A1+1"
+
+
+def test_fill_formula_out_of_range_raises(writable_reader):
+    s = writable_reader.sheet("Sheet2Repeat")
+    s["B5"].formula = "$A1"
+    with pytest.raises(ValueError):
+        s["B5"].fill_formula(s.get_cell(3, 1))  # one row up would need row 0 -> invalid
+
+
+def test_fill_formula_without_a_formula_raises(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(ValueError):
+        s["A1"].fill_formula("A2")
+
+
+def test_save_round_trip_after_fill_formula(writable_reader, tmp_path):
+    s = writable_reader.sheet("Sheet1")
+    s["B2"].formula = "$A1+1"
+    s["B2"].fill_formula("B3:B5")
+
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    reread = ODSReader(out).sheet("Sheet1")
+    for row, ref_row in zip(range(1, 4), (1, 2, 3)):
+        assert reread.get_cell(row, 1).formula_friendly == f"=$A{ref_row}+1"
