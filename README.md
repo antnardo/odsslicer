@@ -412,7 +412,10 @@ the usual spreadsheet bijective base-26 numbering (`Z` = 25, `AA` = 26, `AZ` = 5
 ## Styles (read-only)
 
 `Cell.style` resolves a cell's actual formatting (as opposed to `odsslicer`'s own
-value/text/format detection above) — `None` if the cell has no `table:style-name` at all:
+value/text/format detection above) — `None` if the cell has no `table:style-name` at all. It
+returns a `CellStyle` (with a `.number_format`, a `NumberFormat`, when applicable); both are
+also importable directly from the top-level package (`from odsslicer import CellStyle,
+NumberFormat`), e.g. for type hints:
 
 ```python
 sheet["A7"].style.bold                # False
