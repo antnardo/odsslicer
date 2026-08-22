@@ -193,6 +193,31 @@ sheet["A1"].value = "Total"     # grows it like any other sheet, see above
 Raises a `ValueError` for an empty name or one that's already used by another sheet in the
 document. Like grown rows/cells, the new sheet carries no particular style.
 
+### Writing formulas
+
+`Cell.formula` is writable, just like `Cell.value`:
+
+```python
+sheet["C1"].formula = "=[.A2]+[.A3]"
+sheet["C1"].is_formula   # True
+sheet["C1"].formula      # "of:=[.A2]+[.A3]"
+sheet["C1"].value        # None: no calculation engine, nothing computes a cached result
+```
+
+**ODF formulas do not use Excel-style syntax.** A cell reference is `[.A1]` (not `A1`),
+`;` separates function arguments (not `,`), and the whole expression is prefixed with the
+formula language it's written in — `of:=...` for the default "OpenFormula" language. Setting
+`.formula` only normalizes that prefix for convenience (a leading `=` or none, `of:=`
+supplied automatically if no language prefix is present); it does **not** translate
+`A1`-style formulas into ODF's own reference syntax — write the formula in ODF syntax
+directly. Assigning `None` clears the formula. Like `.value`, writing a formula
+auto-materializes repeated/merged cells and auto-grows the sheet if needed, and writing
+either one clears the other (a formula has no literal value, and vice versa).
+
+There's no formula evaluator: the cell's `.value` reads back as `None` until a real
+spreadsheet application (LibreOffice, etc.) opens the file and recalculates it — this
+matches how ODF itself represents a formula with no cached result.
+
 ### Displayed text: learned from an example rather than a raw conversion
 
 ODF doesn't just store a cell's value (`office:value`): it also stores the text as displayed
@@ -222,7 +247,8 @@ count, which would truncate the new value's precision.
 
 ### What is **not** supported
 
-- No formula writing.
+- No formula evaluation (see above), and no translation of Excel-style (`A1`, `,`) formulas
+  into ODF's own syntax (`[.A1]`, `;`).
 - No real ODF formatting engine (resolving `styles.xml`, the document's locale, the actual
   currency): the inference above is a learn-by-example heuristic, not a read of the cell's
   style — it can silently fail (falling back to a plain conversion) for a format no other

@@ -921,3 +921,83 @@ def test_save_round_trip_growing_from_empty(writable_reader, tmp_path):
     assert reread.size == (3, 2)
     assert reread["B3"].value == "from scratch"
     assert reread["A1"].value is None
+
+
+# ---------------------------------------------------------------------------
+# Écriture : formules (Cell.formula)
+# ---------------------------------------------------------------------------
+
+def test_write_formula_normalizes_the_of_prefix(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "=[.A2]+[.A3]"
+    assert s["C1"].formula == "of:=[.A2]+[.A3]"
+    assert s["C1"].is_formula
+
+    s["C2"].formula = "[.A2]*2"  # no leading '='
+    assert s["C2"].formula == "of:=[.A2]*2"
+
+    s["C3"].formula = "of:=[.A2]-1"  # already fully prefixed
+    assert s["C3"].formula == "of:=[.A2]-1"
+
+
+def test_write_formula_clears_stale_value_and_text(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    assert s["A2"].value == 3.4
+    s["A2"].formula = "=[.A3]*2"
+    assert s["A2"].value is None
+    assert s["A2"].text is None
+    assert s["A2"].format is None
+    assert s["A2"].is_formula
+
+
+def test_write_value_clears_an_existing_formula(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A2"].formula = "=[.A3]*2"
+    assert s["A2"].is_formula
+    s["A2"].value = 99
+    assert s["A2"].value == 99
+    assert s["A2"].formula is None
+    assert not s["A2"].is_formula
+
+
+def test_clearing_a_formula_with_none(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A2"].formula = "=[.A3]*2"
+    s["A2"].formula = None
+    assert s["A2"].formula is None
+    assert not s["A2"].is_formula
+    assert "table:formula" not in s["A2"].attrs
+
+
+def test_write_empty_formula_raises(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(ValueError):
+        s["A2"].formula = ""
+
+
+def test_write_formula_on_a_repeated_cell_materializes_it(writable_reader):
+    s = writable_reader.sheet("Sheet2Repeat")
+    s["B1"].formula = "=[.A1]+1"
+    assert s["B1"].is_formula
+    assert s["A1"].value == 1.0  # sibling in the former repeat block untouched
+
+
+def test_write_formula_beyond_the_current_extent_grows_the_sheet(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    assert s.size == (9, 2)
+    s["E5"].formula = "=[.A1]"
+    assert s.size == (9, 5)
+    assert s["E5"].is_formula
+
+
+def test_save_round_trip_after_writing_a_formula(writable_reader, tmp_path):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "=[.A2]+[.A3]"
+
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    reread = ODSReader(out).sheet("Sheet1")
+    assert reread["C1"].formula == "of:=[.A2]+[.A3]"
+    assert reread["C1"].is_formula
+    assert reread["C1"].attrs == {"table:formula": "of:=[.A2]+[.A3]"}

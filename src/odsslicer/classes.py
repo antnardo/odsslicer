@@ -72,6 +72,26 @@ def _blank_template(root, tag_name):
     return new_tag
 
 
+_FORMULA_LANGUAGE_PREFIX = re.compile(r"^[A-Za-z][\w.-]*:=")
+
+
+def _normalize_odf_formula(formula):
+    """Turn a user-supplied formula string into ODF's `table:formula` syntax.
+
+    ODF formulas are stored as `<language-prefix>:=<expression>`, e.g.
+    `of:=[.A1]+[.A2]` — note the bracketed `[.A1]` cell references and `;`
+    argument separators, which are NOT the same as Excel-style `A1`/`,`. This
+    only adds the default `of:=` prefix (accepting a leading `=` or none); it
+    does **not** translate `A1`-style formulas into ODF's own reference syntax.
+    """
+    if not formula:
+        raise ValueError("a formula string is required (pass None to clear the formula)")
+    if _FORMULA_LANGUAGE_PREFIX.match(formula):
+        return formula
+    body = formula[1:] if formula.startswith("=") else formula
+    return f"of:={body}"
+
+
 class ArrayValues:
     def __init__(self, array):
         self.array = array
@@ -168,9 +188,9 @@ class Cell:
             self._value = self.text
         else:
             self._value = FORMATS[self.format](self.raw_value)
-        self.formula = self.attrs.get("table:formula", None)
+        self._formula = self.attrs.get("table:formula", None)
 
-        self.is_formula = self.formula is not None
+        self.is_formula = self._formula is not None
         self.is_empty = (
             self.raw_value is None
             and self._value is None
@@ -236,10 +256,37 @@ class Cell:
             or tag.attrs.get("office:time-value")
             or tag.attrs.get("office:boolean-value")
         )
-        self.formula = None
+        self._formula = None
         self.is_formula = False
         self._value = new_value
         self.is_empty = new_value is None and text is None
+
+    @property
+    def formula(self):
+        return self._formula
+
+    @formula.setter
+    def formula(self, new_formula):
+        self._prepare_for_write()
+        tag = self.cell
+
+        for attr in self._VALUE_ATTRS:
+            tag.attrs.pop(attr, None)
+        tag.attrs.pop("office:value-type", None)
+        tag.attrs.pop("calcext:value-type", None)
+        self._set_text(None)  # any previously cached/displayed value would now be stale
+
+        if new_formula is None:
+            tag.attrs.pop("table:formula", None)
+            self._formula = None
+        else:
+            self._formula = _normalize_odf_formula(new_formula)
+            tag.attrs["table:formula"] = self._formula
+
+        self.is_formula = self._formula is not None
+        self.format = None
+        self.raw_value = None
+        self._value = None
 
     def _prepare_for_write(self):
         """Make sure this cell is safe to mutate on its own.
