@@ -409,6 +409,41 @@ A malformed address (`"1A"`, `"A:2"`, `"2:A"`, `"B:A"`...) raises a `ValueError`
 the usual spreadsheet bijective base-26 numbering (`Z` = 25, `AA` = 26, `AZ` = 51, `BA` =
 52...).
 
+## Styles (read-only)
+
+`Cell.style` resolves a cell's actual formatting (as opposed to `odsslicer`'s own
+value/text/format detection above) — `None` if the cell has no `table:style-name` at all:
+
+```python
+sheet["A7"].style.bold                # False
+sheet["A7"].style.background_color    # None, or e.g. "#ffdbb6"
+sheet["A7"].style.number_format.family            # "currency"
+sheet["A7"].style.number_format.currency_symbol   # "€"
+sheet["A7"].style.number_format.decimal_places    # 2
+```
+
+ODF splits a cell's formatting across two files and two concerns: a `table:style-name`
+points to a `<style:style>` element (living in either `content.xml`'s per-document
+"automatic styles", or `styles.xml`'s reusable named styles like `"Good"`/`"Error"`), which
+carries the cell's *visual* look directly (`bold`, `italic`, `font_color`, `font_size`,
+`background_color`, `horizontal_align`, `vertical_align`) and, separately, a
+`style:data-style-name` pointing to a `<number:*-style>` element (again in either file) for
+the cell's real *display format* — `.number_format`, with `.family`
+(`"percentage"`/`"currency"`/`"date"`/`"time"`/`"number"`/`"boolean"`/`"text"`),
+`.decimal_places`, `.grouping`, `.currency_symbol`, and for date/time styles `.components`
+(the ordered layout, e.g. `[("day", "long"), ("text", "/"), ("month", "long"), ...]`). A
+style can inherit from another via `style:parent-style-name`; `Cell.style` walks that chain
+so an inherited property still resolves (the nearest style in the chain wins for any
+property more than one defines). `.cell_properties`/`.text_properties` expose the raw,
+flattened attribute dicts as an escape hatch for anything not surfaced as a named attribute
+above.
+
+Not yet supported: writing/changing styles (this is read-only for now), and `odsslicer`'s
+own value/text heuristics (see [Writing formulas](#writing-formulas) and
+[Displayed text](#displayed-text-learned-from-an-example-rather-than-a-raw-conversion) above)
+don't consult `.number_format` either — they still learn from another cell's example rather
+than reading the real format.
+
 ## Known limitations
 
 - **Writing**: see the detailed limitations in [Writing (experimental)](#writing-experimental)

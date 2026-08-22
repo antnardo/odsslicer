@@ -857,10 +857,21 @@ class Cell:
     def address(self):
         return Sheet.string_address(self.row, self.col)
 
+    @property
+    def style(self):
+        """This cell's resolved `CellStyle` (visual formatting + real number
+        format), or `None` if it has no `table:style-name` at all. Read-only
+        for now - see `CellStyle`/`NumberFormat`."""
+        name = self.attrs.get("table:style-name")
+        if not name or self.sheet is None or self.sheet.reader is None:
+            return None
+        return CellStyle(self.sheet.reader, name)
+
 
 class Sheet:
-    def __init__(self, table: BeautifulSoup, verbose: bool = False):
+    def __init__(self, table: BeautifulSoup, verbose: bool = False, reader: "ODSReader" = None):
         self.verbose = verbose
+        self.reader = reader
         self.table: BeautifulSoup = table
         self.attrs: Dict[str, str] = self.table.attrs
         self.name = self.table["table:name"]
@@ -1347,6 +1358,117 @@ class Sheet:
         return self[:].to_numpy()
 
 
+_NUMBER_STYLE_TAGS = [
+    "number:number-style",
+    "number:percentage-style",
+    "number:currency-style",
+    "number:date-style",
+    "number:time-style",
+    "number:boolean-style",
+    "number:text-style",
+]
+_DATE_TIME_COMPONENT_NAMES = (
+    "day", "month", "year", "day-of-week", "week-of-year", "quarter", "era",
+    "hours", "minutes", "seconds", "am-pm", "text",
+)
+
+
+class NumberFormat:
+    """The `<number:*-style>` behind a cell's `style:data-style-name` - the
+    document's own real display format (decimal places, currency symbol,
+    date/time layout), as opposed to `odsslicer`'s own learn-by-example
+    heuristic used when *writing* a value (see `Cell._infer_*_display`)."""
+
+    def __init__(self, tag):
+        self.name = tag.get("style:name")
+        self.family = tag.name[: -len("-style")] if tag.name.endswith("-style") else tag.name
+        number_tag = tag.find("number:number") or tag.find("number:boolean")
+        self.decimal_places = None
+        self.grouping = None
+        if number_tag is not None:
+            places = number_tag.attrs.get("number:decimal-places")
+            self.decimal_places = int(places) if places is not None else None
+            self.grouping = number_tag.attrs.get("number:grouping") == "true"
+        symbol = tag.find("number:currency-symbol")
+        self.currency_symbol = symbol.get_text() if symbol is not None else None
+        # for date/time styles: the ordered sequence of components/literal
+        # text making up the layout, e.g. [("day", "long"), ("text", "/"), ...]
+        self.components = None
+        if self.family in ("date", "time"):
+            self.components = [
+                (
+                    child.name,
+                    child.get_text() if child.name == "text" else child.attrs.get("number:style", "short"),
+                )
+                for child in tag.find_all(True, recursive=False)
+                if child.name in _DATE_TIME_COMPONENT_NAMES
+            ]
+
+    def __repr__(self):
+        return f"NumberFormat(name={self.name!r}, family={self.family!r})"
+
+
+class CellStyle:
+    """Resolved visual formatting and number format behind a cell's
+    `table:style-name` - read-only. Walks the `style:parent-style-name`
+    inheritance chain (the nearest style to the cell wins for whichever
+    property it sets directly; a property no style in the chain sets is
+    `None`). Look up a cell's style via `Cell.style`, not directly."""
+
+    def __init__(self, reader: "ODSReader", name: str):
+        self.name = name
+        chain = []
+        seen = set()
+        current = reader._find_style(name)
+        while current is not None and current.get("style:name") not in seen:
+            seen.add(current.get("style:name"))
+            chain.append(current)
+            parent = current.get("style:parent-style-name")
+            current = reader._find_style(parent) if parent else None
+
+        def prop(tag_name, attr):
+            for style in chain:
+                child = style.find(tag_name)
+                if child is not None and attr in child.attrs:
+                    return child.attrs[attr]
+            return None
+
+        self.bold = prop("style:text-properties", "fo:font-weight") == "bold"
+        self.italic = prop("style:text-properties", "fo:font-style") == "italic"
+        self.font_color = prop("style:text-properties", "fo:color")
+        self.font_size = prop("style:text-properties", "fo:font-size")
+        self.background_color = prop("style:table-cell-properties", "fo:background-color")
+        self.vertical_align = prop("style:table-cell-properties", "style:vertical-align")
+        self.horizontal_align = prop("style:paragraph-properties", "fo:text-align")
+
+        # raw, flattened property dicts as an escape hatch for anything not
+        # surfaced above - base style first, so a nearer style overrides it
+        self.cell_properties: Dict[str, str] = {}
+        self.text_properties: Dict[str, str] = {}
+        for style in reversed(chain):
+            cell_props = style.find("style:table-cell-properties")
+            if cell_props is not None:
+                self.cell_properties.update(cell_props.attrs)
+            text_props = style.find("style:text-properties")
+            if text_props is not None:
+                self.text_properties.update(text_props.attrs)
+
+        data_style_name = next(
+            (s.get("style:data-style-name") for s in chain if s.get("style:data-style-name")), None
+        )
+        self.number_format = None
+        if data_style_name:
+            number_tag = reader._find_number_style(data_style_name)
+            if number_tag is not None:
+                self.number_format = NumberFormat(number_tag)
+
+    def __repr__(self):
+        return (
+            f"CellStyle(name={self.name!r}, bold={self.bold}, italic={self.italic}, "
+            f"background_color={self.background_color!r})"
+        )
+
+
 class ODSReader:
     def __init__(self, file: Union[Path, str], verbose: bool = False):
         self.file = file
@@ -1364,6 +1486,7 @@ class ODSReader:
             # Application-specific settings, such as the window size or printer information.
             self.settings = zip.read("settings.xml")
         self.data = BeautifulSoup(self.content, "xml")
+        self.styles_data = BeautifulSoup(self.styles, "xml")
         self.tables = self.data.find_all("table:table")
         self.sheets_names = [table["table:name"] for table in self.tables]
         self._sheets: dict[str, Sheet | None] = {name: None for name in self.sheets_names}
@@ -1372,6 +1495,25 @@ class ODSReader:
 
     def __repr__(self):
         return f"ODSReader({self.file}, sheets={self.sheets_names})"
+
+    def _find_style(self, name):
+        """A `<style:style>` by name: automatic styles (`content.xml`) first,
+        then named/common styles (`styles.xml`) - a cell's `table:style-name`
+        can point at either."""
+        if not name:
+            return None
+        return self.data.find("style:style", attrs={"style:name": name}) or self.styles_data.find(
+            "style:style", attrs={"style:name": name}
+        )
+
+    def _find_number_style(self, name):
+        """A `<number:*-style>` by name, wherever it lives - like cell
+        styles, a number format can be defined in either file."""
+        if not name:
+            return None
+        return self.data.find(_NUMBER_STYLE_TAGS, attrs={"style:name": name}) or self.styles_data.find(
+            _NUMBER_STYLE_TAGS, attrs={"style:name": name}
+        )
 
     _TEMPLATE_PATH = Path(__file__).parent / "_template.ods"
 
@@ -1440,7 +1582,7 @@ class ODSReader:
             raise IndexError(f"No sheet named {name}")
         if self._sheets[name] is None:
             self._sheets[name] = Sheet(
-                self.tables[self.sheets_names.index(name)], verbose=self.verbose
+                self.tables[self.sheets_names.index(name)], verbose=self.verbose, reader=self
             )
         return self._sheets[name]
 
@@ -1468,5 +1610,5 @@ class ODSReader:
         self.tables[-1].insert_after(table)
         self.tables.append(table)
         self.sheets_names.append(name)
-        self._sheets[name] = Sheet(table, verbose=self.verbose)
+        self._sheets[name] = Sheet(table, verbose=self.verbose, reader=self)
         return self._sheets[name]

@@ -1441,3 +1441,119 @@ def test_new_document_regular_reader_still_defaults_save_to_its_own_file(writabl
     r.sheet("Sheet1")["A1"].value = "still works"
     r.save()  # no path given -> overwrites r.file (== copy_path), must NOT raise
     assert ODSReader(copy_path).sheet("Sheet1")["A1"].value == "still works"
+
+
+# ---------------------------------------------------------------------------
+# Styles (lecture) : Cell.style, CellStyle, NumberFormat
+# ---------------------------------------------------------------------------
+
+def test_cell_with_no_style_name_has_no_style(reader):
+    s = reader.sheet("Sheet1")
+    assert s["A1"].attrs.get("table:style-name") is None
+    assert s["A1"].style is None
+
+
+def test_style_resolves_percentage_number_format(reader):
+    s = reader.sheet("Sheet1")
+    style = s["A6"].style
+    assert style is not None
+    nf = style.number_format
+    assert nf.family == "percentage"
+    assert nf.decimal_places == 2
+
+
+def test_style_resolves_currency_number_format_defined_in_styles_xml(reader):
+    # regression-shaped: N108 (the currency format for A7) is defined in
+    # styles.xml even though the cell style (ce2) that references it lives
+    # in content.xml's automatic-styles - resolution must check both files.
+    s = reader.sheet("Sheet1")
+    nf = s["A7"].style.number_format
+    assert nf.family == "currency"
+    assert nf.decimal_places == 2
+    assert nf.grouping is True
+    assert nf.currency_symbol == "€"
+
+
+def test_style_resolves_date_format_components(reader):
+    s = reader.sheet("Sheet1")
+    nf = s["A8"].style.number_format
+    assert nf.family == "date"
+    assert nf.components == [
+        ("day", "long"), ("text", "/"), ("month", "long"), ("text", "/"), ("year", "short"),
+    ]
+
+
+def test_style_resolves_alignment_and_raw_properties(reader):
+    s = reader.sheet("SheetFusion")
+    style = s["A1"].style
+    assert style.vertical_align == "middle"
+    assert style.horizontal_align == "center"
+    assert style.cell_properties["style:vertical-align"] == "middle"
+    assert style.text_properties == {}
+
+
+def test_cell_style_walks_parent_inheritance_chain():
+    from bs4 import BeautifulSoup
+
+    from odsslicer.classes import CellStyle
+
+    xml = (
+        '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
+        'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
+        '<style:style style:name="Default" style:family="table-cell">'
+        '<style:text-properties fo:font-size="10pt"/>'
+        "</style:style>"
+        '<style:style style:name="Status" style:family="table-cell" '
+        'style:parent-style-name="Default">'
+        '<style:table-cell-properties fo:background-color="#cccccc"/>'
+        "</style:style>"
+        '<style:style style:name="Error" style:family="table-cell" '
+        'style:parent-style-name="Status">'
+        '<style:text-properties fo:font-weight="bold" fo:color="#ffffff"/>'
+        "</style:style>"
+        "</root>"
+    )
+    soup = BeautifulSoup(xml, "xml")
+
+    class StubReader:
+        def _find_style(self, name):
+            return soup.find("style:style", attrs={"style:name": name}) if name else None
+
+        def _find_number_style(self, name):
+            return None
+
+    style = CellStyle(StubReader(), "Error")
+    assert style.bold is True  # set directly on Error
+    assert style.font_color == "#ffffff"  # set directly on Error
+    assert style.background_color == "#cccccc"  # inherited from Status (1 hop)
+    assert style.font_size == "10pt"  # inherited from Default (2 hops)
+
+
+def test_cell_style_nearest_ancestor_wins_on_conflicting_property():
+    from bs4 import BeautifulSoup
+
+    from odsslicer.classes import CellStyle
+
+    xml = (
+        '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
+        'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
+        '<style:style style:name="Base" style:family="table-cell">'
+        '<style:table-cell-properties fo:background-color="#111111"/>'
+        "</style:style>"
+        '<style:style style:name="Child" style:family="table-cell" '
+        'style:parent-style-name="Base">'
+        '<style:table-cell-properties fo:background-color="#222222"/>'
+        "</style:style>"
+        "</root>"
+    )
+    soup = BeautifulSoup(xml, "xml")
+
+    class StubReader:
+        def _find_style(self, name):
+            return soup.find("style:style", attrs={"style:name": name}) if name else None
+
+        def _find_number_style(self, name):
+            return None
+
+    style = CellStyle(StubReader(), "Child")
+    assert style.background_color == "#222222"
