@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from zipfile import ZipFile, ZIP_DEFLATED, ZIP_STORED
 from pathlib import Path
 from typing import Union, Dict, Tuple
+import ast
 import copy
 import datetime as dt
 import numpy as np
@@ -74,22 +75,139 @@ def _blank_template(root, tag_name):
 
 _FORMULA_LANGUAGE_PREFIX = re.compile(r"^[A-Za-z][\w.-]*:=")
 
+# A1-style cell reference, optionally with $ absolute markers on either part
+# (A2, $A2, A$2, $A$2). Column letters capped at 3 (XFD-style) is generous
+# enough and helps the "not a function name" heuristic below.
+_CELL_REF = r"\$?[A-Za-z]{1,3}\$?[0-9]+"
+# an optional leading sheet qualifier: SheetName. or 'Sheet Name'. (the quoted
+# form allows spaces/special characters, doubled '' for a literal quote)
+_SHEET_NAME = r"(?:'(?:[^']|'')*'|[A-Za-z_]\w*)"
+_FRIENDLY_REF_RE = re.compile(
+    rf"(?<![A-Za-z0-9_$'.])"
+    rf"(?:(?P<sheet>{_SHEET_NAME})\.)?"
+    rf"(?P<start>{_CELL_REF})"
+    rf"(?::(?P<end>{_CELL_REF}))?"
+)
+# split on quoted string literals ("..." with "" as an escaped quote), so
+# translation never touches text that happens to look like a cell reference
+_STRING_LITERAL_RE = re.compile(r'("(?:[^"]|"")*")')
+
+
+def _translate_friendly_formula(body):
+    """Translate Excel/Calc-style formula text into ODF's own syntax: bare
+    references (`A2`, `$A$2`) and ranges (`A1:B3`) become `[.A2]`/`[.$A$2]`/
+    `[.A1:.B3]`, sheet-qualified references (`Sheet2.A1`, `'My Sheet'.A1:B3`)
+    become `[Sheet2.A1]`/`['My Sheet'.A1:.B3]`, and `,` argument separators
+    become `;` — outside of quoted string literals, which are left untouched.
+
+    A token immediately followed by `(` is assumed to be a function call
+    (e.g. `LOG10(`), not a cell reference, and is left alone. Checked as a
+    plain lookup on the character *after* the match rather than baked into
+    the regex as a lookahead: a lookahead there would only make the engine
+    backtrack into a shorter (but still `(`-free) match instead of rejecting
+    the token outright - e.g. "LOG10(" would wrongly become "[.LOG1]0(".
+    """
+
+    def translate_refs(segment):
+        out = []
+        pos = 0
+        for m in _FRIENDLY_REF_RE.finditer(segment):
+            if m.start() < pos:
+                continue  # overlaps a token already emitted, e.g. within a range
+            if m.end() < len(segment) and segment[m.end()] == "(":
+                continue  # function call, e.g. LOG10( - leave it untouched
+            out.append(segment[pos : m.start()])
+            sheet, start, end = m.group("sheet"), m.group("start"), m.group("end")
+            prefix = f"{sheet}." if sheet else "."
+            out.append(f"[{prefix}{start}:.{end}]" if end else f"[{prefix}{start}]")
+            pos = m.end()
+        out.append(segment[pos:])
+        return "".join(out)
+
+    parts = _STRING_LITERAL_RE.split(body)
+    for i in range(0, len(parts), 2):  # even indices: outside string literals
+        parts[i] = translate_refs(parts[i]).replace(",", ";")
+    return "".join(parts)
+
+
+_TEMPLATE_TOKEN_RE = re.compile(r"\{([^{}]*)\}")
+_TEMPLATE_ALLOWED_NODES = (
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Constant,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.FloorDiv,
+    ast.USub,
+    ast.UAdd,
+    ast.Name,
+    ast.Load,
+)
+
+
+def _eval_template_expr(expr, context):
+    tree = ast.parse(expr, mode="eval")
+    for node in ast.walk(tree):
+        if not isinstance(node, _TEMPLATE_ALLOWED_NODES):
+            raise ValueError(f"unsupported expression in formula template: {expr!r}")
+        if isinstance(node, ast.Name) and node.id not in context:
+            raise ValueError(
+                f"unknown name {node.id!r} in formula template {expr!r} "
+                f"(only {', '.join(context)} are available)"
+            )
+    code = compile(tree, "<formula-template>", "eval")
+    return eval(code, {"__builtins__": {}}, context)  # noqa: S307 - restricted to arithmetic on r/c
+
+
+def _expand_formula_template(pattern, row, col):
+    """Expand `{...}` placeholders in a formula pattern using the target
+    cell's own 1-indexed row (`r`) and column (`c`) — e.g. writing the pattern
+    `"$A{r-1}+1"` across A2:A10 makes A2 reference A1, A3 reference A2, etc.
+    A pattern with no `{...}` is returned unchanged. Only `+`, `-`, `*`, `//`
+    and the names `r`/`c` are allowed inside a placeholder.
+
+    Note this collides with formula syntax that itself uses literal `{`/`}`
+    (e.g. Excel/ODF array-constant literals like `{1,2,3}`) - not supported.
+    """
+    if "{" not in pattern:
+        return pattern
+    context = {"r": row + 1, "c": col + 1}
+    return _TEMPLATE_TOKEN_RE.sub(lambda m: str(_eval_template_expr(m.group(1), context)), pattern)
+
 
 def _normalize_odf_formula(formula):
     """Turn a user-supplied formula string into ODF's `table:formula` syntax.
 
     ODF formulas are stored as `<language-prefix>:=<expression>`, e.g.
     `of:=[.A1]+[.A2]` — note the bracketed `[.A1]` cell references and `;`
-    argument separators, which are NOT the same as Excel-style `A1`/`,`. This
-    only adds the default `of:=` prefix (accepting a leading `=` or none); it
-    does **not** translate `A1`-style formulas into ODF's own reference syntax.
+    argument separators, which are NOT the same as Excel-style `A1`/`,`.
+
+    Accepts either syntax: a formula written with plain `A1`-style references
+    (optionally `$`-anchored) and `,` separators, e.g. `"A2+A3"` or
+    `"SUM(A1,A2)"`, is translated into ODF's own reference/separator syntax.
+    A formula that already contains a `[` is assumed to already be in ODF
+    syntax and is left untouched (besides the language prefix below) - this
+    is the escape hatch for anything the translation doesn't cover (other
+    sheets, named ranges...). Either way, a leading `=` is optional, and the
+    default `of:=` language prefix is added unless one is already present.
     """
     if not formula:
         raise ValueError("a formula string is required (pass None to clear the formula)")
     if _FORMULA_LANGUAGE_PREFIX.match(formula):
         return formula
     body = formula[1:] if formula.startswith("=") else formula
+    if "[" not in body:
+        body = _translate_friendly_formula(body)
     return f"of:={body}"
+
+
+def _is_broadcastable_scalar(value):
+    """True for a value that should be written as-is to every cell of a
+    multi-cell selection, rather than unpacked element-wise (a `str` is
+    iterable but clearly meant as one value, not one cell per character)."""
+    return value is None or isinstance(value, (str, bool, int, float, dt.date, dt.time))
 
 
 class ArrayValues:
@@ -128,6 +246,43 @@ class ArrayValues:
     @property
     def value(self):
         return self.cell.value
+
+    @value.setter
+    def value(self, new_value):
+        if self.dimension == 0:
+            self.cell.value = new_value
+            return
+        if _is_broadcastable_scalar(new_value):
+            for item in self.array:
+                ArrayValues(item).value = new_value
+            return
+        values = list(new_value)
+        if len(values) != len(self.array):
+            raise ValueError(
+                f"shape mismatch: {len(self.array)} cell(s) but {len(values)} value(s) given"
+            )
+        for item, v in zip(self.array, values):
+            ArrayValues(item).value = v
+
+    @property
+    def formula(self):
+        return self.cell.formula
+
+    @formula.setter
+    def formula(self, new_formula):
+        """Write a formula to every cell in this selection.
+
+        For a multi-cell selection, the same pattern is applied to each cell -
+        if it contains `{r}`/`{c}` placeholders (see `Cell.formula`), each
+        cell expands them using its own row/column, so e.g. writing the
+        pattern `"$A{r-1}+1"` across `sheet["A2:A10"]` makes A2 reference A1,
+        A3 reference A2, and so on.
+        """
+        if self.dimension == 0:
+            self.cell.formula = new_formula
+            return
+        for item in self.array:
+            ArrayValues(item).formula = new_formula
 
     @property
     def cell(self) -> "Cell":
@@ -191,12 +346,7 @@ class Cell:
         self._formula = self.attrs.get("table:formula", None)
 
         self.is_formula = self._formula is not None
-        self.is_empty = (
-            self.raw_value is None
-            and self._value is None
-            and self.format is None
-            and self.text is None
-        )
+        self.is_empty = self._compute_is_empty()
 
     @property
     def value(self):
@@ -259,7 +409,7 @@ class Cell:
         self._formula = None
         self.is_formula = False
         self._value = new_value
-        self.is_empty = new_value is None and text is None
+        self.is_empty = self._compute_is_empty()
 
     @property
     def formula(self):
@@ -280,13 +430,24 @@ class Cell:
             tag.attrs.pop("table:formula", None)
             self._formula = None
         else:
-            self._formula = _normalize_odf_formula(new_formula)
+            expanded = _expand_formula_template(new_formula, self.row, self.col)
+            self._formula = _normalize_odf_formula(expanded)
             tag.attrs["table:formula"] = self._formula
 
         self.is_formula = self._formula is not None
         self.format = None
         self.raw_value = None
         self._value = None
+        self.is_empty = self._compute_is_empty()
+
+    def _compute_is_empty(self):
+        return (
+            self.raw_value is None
+            and self._value is None
+            and self.format is None
+            and self.text is None
+            and self._formula is None
+        )
 
     def _prepare_for_write(self):
         """Make sure this cell is safe to mutate on its own.

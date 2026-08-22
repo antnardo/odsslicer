@@ -940,6 +940,171 @@ def test_write_formula_normalizes_the_of_prefix(writable_reader):
     assert s["C3"].formula == "of:=[.A2]-1"
 
 
+def test_write_formula_translates_friendly_a1_syntax(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "A2+A3"
+    assert s["C1"].formula == "of:=[.A2]+[.A3]"
+
+    s["C2"].formula = "=A2+A3"  # leading '=' optional either way
+    assert s["C2"].formula == "of:=[.A2]+[.A3]"
+
+
+def test_write_formula_translates_absolute_references(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "$A$2+$A$3"
+    assert s["C1"].formula == "of:=[.$A$2]+[.$A$3]"
+
+
+def test_write_formula_translates_ranges(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "SUM(A1:A3)"
+    assert s["C1"].formula == "of:=SUM([.A1:.A3])"
+
+
+def test_write_formula_translates_comma_separators_to_semicolons(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "SUM(A1,A2,A3)"
+    assert s["C1"].formula == "of:=SUM([.A1];[.A2];[.A3])"
+
+
+def test_write_formula_preserves_commas_inside_string_literals(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = 'IF(A1="x,y",1,2)'
+    assert s["C1"].formula == 'of:=IF([.A1]="x,y";1;2)'
+
+
+def test_write_formula_does_not_mistake_a_function_name_for_a_cell_reference(writable_reader):
+    # regression: a naive lookahead-based regex backtracks into a shorter
+    # match instead of rejecting the token outright, e.g. turning "LOG10("
+    # into "[.LOG1]0(" - LOG10 must be left completely untouched.
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "LOG10(A1)"
+    assert s["C1"].formula == "of:=LOG10([.A1])"
+
+
+def test_write_formula_bracket_syntax_is_an_escape_hatch(writable_reader):
+    # a formula that already contains "[" is assumed to be hand-written in
+    # ODF's own syntax and is left untouched beyond the language prefix
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "[Sheet2.A1]+1"
+    assert s["C1"].formula == "of:=[Sheet2.A1]+1"
+
+
+def test_write_formula_translates_sheet_qualified_references(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "Sheet2.A1+1"
+    assert s["C1"].formula == "of:=[Sheet2.A1]+1"
+
+    s["C2"].formula = "'My Sheet'.A1+1"
+    assert s["C2"].formula == "of:=['My Sheet'.A1]+1"
+
+    s["C3"].formula = "SUM(Sheet2.A1:A3)"
+    assert s["C3"].formula == "of:=SUM([Sheet2.A1:.A3])"
+
+
+# ---------------------------------------------------------------------------
+# Écriture : formules paramétrées par cellule ({r}/{c}) via Cell.formula
+# ---------------------------------------------------------------------------
+
+def test_formula_template_expands_row_and_column(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].formula = "{r}+{c}"  # A1 -> row=1, col=1 (1-indexed)
+    assert s["A1"].formula == "of:=1+1"
+    s["B2"].formula = "{r}+{c}"  # B2 -> row=2, col=2
+    assert s["B2"].formula == "of:=2+2"
+
+
+def test_formula_template_supports_arithmetic(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A2"].formula = "$A{r-1}+1"  # A2 (row 2) -> references row 1
+    assert s["A2"].formula == "of:=[.$A1]+1"
+
+
+def test_formula_template_with_no_placeholders_is_unchanged(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].formula = "SUM(B1:B10)"
+    assert s["A1"].formula == "of:=SUM([.B1:.B10])"
+
+
+def test_formula_template_rejects_unsafe_expressions(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(ValueError):
+        s["A1"].formula = '{__import__("os")}'
+
+
+def test_formula_template_rejects_unknown_names(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(ValueError):
+        s["A1"].formula = "{z+1}"
+
+
+# ---------------------------------------------------------------------------
+# Écriture sur des sélections multi-cellules (ArrayValues.value / .formula)
+# ---------------------------------------------------------------------------
+
+def test_slice_value_broadcasts_a_scalar(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A30:C30"].value = 5
+    assert s["A30:C30"].to_list() == [5, 5, 5]
+
+
+def test_slice_value_broadcasts_a_string_without_splitting_it(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A30:C30"].value = "hi"
+    assert s["A30:C30"].to_list() == ["hi", "hi", "hi"]
+
+
+def test_slice_value_assigns_element_wise_for_a_1d_row(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A30:C30"].value = [7, 8, 9]
+    assert s["A30:C30"].to_list() == [7, 8, 9]
+
+
+def test_slice_value_assigns_element_wise_for_a_2d_block(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A40:B41"].value = [[1, 2], [3, 4]]
+    assert s["A40:B41"].to_list() == [[1, 2], [3, 4]]
+
+
+def test_slice_value_element_wise_shape_mismatch_raises(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(ValueError):
+        s["A30:C30"].value = [1, 2]
+
+
+def test_slice_formula_broadcasts_the_same_pattern(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A30:C30"].formula = "SUM(B1:B10)"
+    for addr in ("A30", "B30", "C30"):
+        assert s[addr].formula == "of:=SUM([.B1:.B10])"
+
+
+def test_slice_formula_expands_placeholders_per_cell(writable_reader):
+    # the user's own motivating example: A2 references A1, A3 references A2, etc.
+    s = writable_reader.sheet("Sheet1")
+    s["A2:A6"].formula = "$A{r-1}+1"
+    for row in range(1, 6):  # 0-indexed rows 1..5 == A2..A6
+        assert s.get_cell(row, 0).formula == f"of:=[.$A{row}]+1"
+
+
+def test_save_round_trip_after_slice_writes(writable_reader, tmp_path):
+    # regression: a formula-only cell (no cached value/text) was wrongly
+    # treated as "empty" by Cell.is_empty, so if it ended up as the sheet's
+    # last row, load()'s "trim a trailing empty row" cleanup silently
+    # dropped it on the next save/reload.
+    s = writable_reader.sheet("Sheet1")
+    s["A20:A25"].formula = "$A{r-1}+1"
+    s["C1:C3"].value = [[1], [2], [3]]
+
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    reread = ODSReader(out).sheet("Sheet1")
+    for row in range(19, 25):
+        assert reread.get_cell(row, 0).formula == f"of:=[.$A{row}]+1"
+    assert reread["C1:C3"].to_list() == [[1], [2], [3]]
+
+
 def test_write_formula_clears_stale_value_and_text(writable_reader):
     s = writable_reader.sheet("Sheet1")
     assert s["A2"].value == 3.4

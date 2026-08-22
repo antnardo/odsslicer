@@ -101,6 +101,10 @@ arr.to_vector()     # for a (n, 1) shape: returns a 1D ArrayValues of size (n,)
 Equality (`==`) between two `ArrayValues` compares the values (`to_list()`), not the identity
 of the `Cell` objects.
 
+`.value` and `.formula` are also writable on a multi-cell selection — see
+[Writing the same pattern across several cells](#writing-the-same-pattern-across-several-cells)
+below.
+
 ### Iteration
 
 ```python
@@ -195,28 +199,72 @@ document. Like grown rows/cells, the new sheet carries no particular style.
 
 ### Writing formulas
 
-`Cell.formula` is writable, just like `Cell.value`:
+`Cell.formula` is writable, just like `Cell.value`, and accepts ordinary spreadsheet syntax —
+`A1`-style references, `$` for absolute rows/columns, ranges, `,`-separated function
+arguments:
 
 ```python
-sheet["C1"].formula = "=[.A2]+[.A3]"
+sheet["C1"].formula = "A2+A3"           # or "=A2+A3" - leading '=' is optional
 sheet["C1"].is_formula   # True
-sheet["C1"].formula      # "of:=[.A2]+[.A3]"
+sheet["C1"].formula      # "of:=[.A2]+[.A3]" - normalized to ODF's own syntax
 sheet["C1"].value        # None: no calculation engine, nothing computes a cached result
+
+sheet["C2"].formula = "$A$2+$A$3"        # absolute references
+sheet["C3"].formula = "SUM(A1:A3)"       # ranges
+sheet["C4"].formula = "IF(A1>0,1,-1)"    # comma-separated arguments
 ```
 
-**ODF formulas do not use Excel-style syntax.** A cell reference is `[.A1]` (not `A1`),
-`;` separates function arguments (not `,`), and the whole expression is prefixed with the
-formula language it's written in — `of:=...` for the default "OpenFormula" language. Setting
-`.formula` only normalizes that prefix for convenience (a leading `=` or none, `of:=`
-supplied automatically if no language prefix is present); it does **not** translate
-`A1`-style formulas into ODF's own reference syntax — write the formula in ODF syntax
-directly. Assigning `None` clears the formula. Like `.value`, writing a formula
-auto-materializes repeated/merged cells and auto-grows the sheet if needed, and writing
-either one clears the other (a formula has no literal value, and vice versa).
+Internally, ODF formulas don't use this syntax at all: a cell reference is `[.A1]` (not
+`A1`), `;` separates function arguments (not `,`), and the whole expression is prefixed with
+the formula language it's written in — `of:=...` for the default "OpenFormula" language.
+Setting `.formula` translates ordinary syntax into that internal form: bare and `$`-anchored
+references and ranges become `[.A1]`/`[.$A$2]`/`[.A1:.B3]`, and `,` argument separators
+become `;` (commas inside quoted string literals, e.g. `"a,b"`, are left alone). Cross-sheet
+references also work — `Sheet2.A1` or `'My Sheet'.A1:A3` become `[Sheet2.A1]`/
+`['My Sheet'.A1:.A3]`. If the formula already contains a `[` it's assumed to already be
+hand-written in ODF's own syntax (an escape hatch for anything the translation doesn't
+cover) and is passed through unchanged, still with the `of:=` prefix added.
+
+Assigning `None` clears the formula. Like `.value`, writing a formula auto-materializes
+repeated/merged cells and auto-grows the sheet if needed, and writing either one clears the
+other (a formula has no literal value, and vice versa).
 
 There's no formula evaluator: the cell's `.value` reads back as `None` until a real
 spreadsheet application (LibreOffice, etc.) opens the file and recalculates it — this
 matches how ODF itself represents a formula with no cached result.
+
+#### Writing the same pattern across several cells
+
+`sheet[...]` (a slice, not a single cell) is also writable, for both `.value` and `.formula`:
+
+```python
+sheet["A1:A3"].value = 0                # broadcasts 0 to every cell in the range
+sheet["A1:C1"].value = [1, 2, 3]        # element-wise, must match the selection's shape
+
+sheet["A1:C1"].formula = "SUM(B1:B10)"  # broadcasts the exact same formula to every cell
+```
+
+`.formula` on a range can also use `{r}`/`{c}` placeholders, expanded **per cell** using that
+cell's own 1-indexed row/column — so the same pattern produces a different (correctly
+shifted) formula in each cell, the way dragging a formula's fill handle down a column does in
+a real spreadsheet:
+
+```python
+sheet["A2:A10"].formula = "$A{r-1}+1"
+# A2  -> "of:=[.$A1]+1"
+# A3  -> "of:=[.$A2]+1"
+# ...
+# A10 -> "of:=[.$A9]+1"
+```
+
+A placeholder can hold a small arithmetic expression (`+`, `-`, `*`, `//`) over `r`/`c` —
+`{r-1}`, `{c+2}`, `{r*10}`... — evaluated per cell before the usual ODF-syntax translation
+runs; a pattern with no `{...}` is unaffected (so a single fixed formula broadcasts as-is,
+same as the range example above). `{c}` is always a plain **column number** (1-indexed), not
+a letter — write the column letter literally if it's fixed (as in the example above), or use
+`{r}`/`{c}` only for the parts that actually vary from cell to cell. Note this collides with
+formula syntax that itself uses literal `{`/`}` (e.g. array-constant literals like
+`{1,2,3}`), which isn't supported here.
 
 ### Displayed text: learned from an example rather than a raw conversion
 
@@ -247,8 +295,9 @@ count, which would truncate the new value's precision.
 
 ### What is **not** supported
 
-- No formula evaluation (see above), and no translation of Excel-style (`A1`, `,`) formulas
-  into ODF's own syntax (`[.A1]`, `;`).
+- No formula evaluation (see above). Named ranges and 3D references (a range spanning several
+  sheets) aren't translated by the friendly formula syntax either — write them in ODF's own
+  bracket syntax directly (the `[` escape hatch, see above).
 - No real ODF formatting engine (resolving `styles.xml`, the document's locale, the actual
   currency): the inference above is a learn-by-example heuristic, not a read of the cell's
   style — it can silently fail (falling back to a plain conversion) for a format no other
@@ -380,5 +429,10 @@ release):
    whatever was physically there without accounting for this, so those still-present rows
    would resurface as an extra, wrongly-shaped row once the file was saved and re-parsed.
    Fixed: any such stray row is now discarded first.
+10. **A cell holding only a formula (no cached value/text) was wrongly treated as
+    `is_empty`.** `Cell.is_empty` never accounted for `.formula`, only for value/text/format.
+    If such a cell ended up as a sheet's last row, `load()`'s "trim a trailing empty row"
+    cleanup silently dropped it — a formula written near the edge of a sheet could vanish on
+    the next save/reload. Fixed: `is_empty` now also checks the formula.
 
 All of these cases are covered by regression tests in `tests/test_odsslicer.py`.
