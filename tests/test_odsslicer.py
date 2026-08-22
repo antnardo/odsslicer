@@ -557,6 +557,38 @@ def test_write_growth_coexists_with_repeated_and_merged_cells(writable_reader):
     assert s["A9"].value == 1.0 and s["B9"].value == 1.0 and s["D9"].value == 1.0
 
 
+def test_growing_the_only_sheet_of_a_document_with_nothing_to_copy_from():
+    # regression: growing a fully empty sheet that is the *only* sheet in the
+    # whole document (nothing elsewhere to fall back on as a namespace
+    # template) used to fail two different ways:
+    # 1. Sheet.grow_to discarded the sheet's own lone "phantom" blank row
+    #    *before* using it as a row/cell template, leaving nothing to copy.
+    # 2. Writing a string value needs a text:p template, and a sheet this
+    #    minimal (a single bare <table:table-cell/>, no text:p anywhere at
+    #    all) has none anywhere in the document either.
+    # Both now fall back to building a correctly-namespaced tag from scratch
+    # (_new_qualified_tag) instead of raising NotImplementedError.
+    from bs4 import BeautifulSoup
+
+    xml = (
+        '<root xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
+        'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+        'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">'
+        '<table:table table:name="Sheet1">'
+        '<table:table-column/><table:table-row><table:table-cell/></table:table-row>'
+        "</table:table></root>"
+    )
+    table = BeautifulSoup(xml, "xml").find("table:table")
+    sheet = Sheet(table)
+    assert sheet.size == (0, 0)
+
+    sheet["A1"].value = "hello"
+    sheet["C3"].value = 42
+    assert sheet.size == (3, 3)
+    assert sheet["A1"].value == "hello"
+    assert sheet["C3"].value == 42
+
+
 def test_save_round_trip_after_growth(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet1")
     s["C1"].value = "nouvelle colonne"
@@ -1336,3 +1368,76 @@ def test_save_round_trip_after_fill_formula(writable_reader, tmp_path):
     reread = ODSReader(out).sheet("Sheet1")
     for row, ref_row in zip(range(1, 4), (1, 2, 3)):
         assert reread.get_cell(row, 1).formula_friendly == f"=$A{ref_row}+1"
+
+
+# ---------------------------------------------------------------------------
+# Nouveaux fichiers (ODSReader.new())
+# ---------------------------------------------------------------------------
+
+def test_new_creates_a_single_empty_sheet():
+    doc = ODSReader.new()
+    assert doc.sheets_names == ["Sheet1"]
+    assert doc.sheet("Sheet1").size == (0, 0)
+
+
+def test_new_accepts_a_custom_initial_sheet_name():
+    doc = ODSReader.new(sheet_name="Budget")
+    assert doc.sheets_names == ["Budget"]
+    assert doc.sheet("Budget").size == (0, 0)
+
+
+def test_new_documents_are_independent_of_each_other():
+    doc1 = ODSReader.new()
+    doc2 = ODSReader.new()
+    doc1.sheet("Sheet1")["A1"].value = "from doc1"
+    assert doc2.sheet("Sheet1")["A1"].value is None
+
+
+def test_new_document_supports_writing_growing_formulas_and_add_sheet():
+    doc = ODSReader.new()
+    s = doc.sheet("Sheet1")
+    s["A1"].value = "Total"
+    s["B1"].formula = "SUM(A2:A10)"
+    assert s.size == (1, 2)
+    assert s["B1"].formula_friendly == "=SUM(A2:A10)"
+
+    s2 = doc.add_sheet("Data")
+    s2["A1:A3"].value = [10, 20, 30]
+    assert s2["A1:A3"].to_list() == [[10], [20], [30]]
+
+
+def test_new_document_save_without_a_path_raises(tmp_path):
+    doc = ODSReader.new()
+    doc.sheet("Sheet1")["A1"].value = "x"
+    with pytest.raises(ValueError):
+        doc.save()
+
+
+def test_new_document_save_round_trip(tmp_path):
+    doc = ODSReader.new()
+    s = doc.sheet("Sheet1")
+    s["A1"].value = "Total"
+    s["B1"].formula = "SUM(A2:A10)"
+    doc.add_sheet("Data")["A1:A3"].value = [10, 20, 30]
+
+    out = tmp_path / "brand_new.ods"
+    doc.save(out)
+
+    reread = ODSReader(out)
+    assert reread.sheets_names == ["Sheet1", "Data"]
+    assert reread.sheet("Sheet1")["A1"].value == "Total"
+    assert reread.sheet("Sheet1")["B1"].formula_friendly == "=SUM(A2:A10)"
+    assert reread.sheet("Data")["A1:A3"].to_list() == [[10], [20], [30]]
+
+
+def test_new_document_regular_reader_still_defaults_save_to_its_own_file(writable_reader, tmp_path):
+    # regression guard: the save()-without-path guard must only trigger for
+    # documents created via ODSReader.new(), not regular file-backed ones
+    import shutil
+
+    copy_path = tmp_path / "inplace.ods"
+    shutil.copy(writable_reader.file, copy_path)
+    r = ODSReader(copy_path)
+    r.sheet("Sheet1")["A1"].value = "still works"
+    r.save()  # no path given -> overwrites r.file (== copy_path), must NOT raise
+    assert ODSReader(copy_path).sheet("Sheet1")["A1"].value == "still works"

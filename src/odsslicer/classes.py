@@ -48,13 +48,38 @@ FORMATS = {
 }
 
 
+# Standard OASIS namespace URIs, used as a last-resort fallback to build a
+# namespace-qualified tag from scratch when the document has no existing tag
+# of that name to copy (e.g. a brand new sheet with no cells at all yet).
+_ODF_NAMESPACES = {
+    "office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0",
+    "table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
+    "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0",
+}
+
+
+def _new_qualified_tag(tag_name):
+    """Build a detached `<tag_name/>` from scratch, with its own `xmlns:`
+    declaration so the "table:"/"text:" prefix resolves correctly - safe to
+    insert anywhere in an ODF document even though the declaration is then
+    redundant with the one at the document root (harmless, plain valid XML).
+    """
+    prefix = tag_name.split(":", 1)[0]
+    uri = _ODF_NAMESPACES[prefix]
+    fragment = BeautifulSoup(f'<{tag_name} xmlns:{prefix}="{uri}"/>', "xml")
+    return fragment.find(tag_name)
+
+
 def _blank_template(root, tag_name):
-    """A detached, blank copy of an existing `tag_name` tag reachable from `root`.
+    """A detached, blank copy of an existing `tag_name` tag reachable from
+    `root`, or a freshly built one (see `_new_qualified_tag`) if the document
+    has none to copy from.
 
     Building a new tag from scratch (e.g. `BeautifulSoup("<table:table-row/>")`)
-    loses the "table:"/"text:" namespace prefix, since there is no `xmlns:table`
-    declaration in that isolated fragment for lxml/bs4 to resolve it against.
-    Copying an existing tag from the live document sidesteps the issue.
+    without its own `xmlns:` declaration loses the "table:"/"text:" namespace
+    prefix, since there is nothing in that isolated fragment for lxml/bs4 to
+    resolve it against - copying an existing tag from the live document (when
+    there is one) sidesteps having to hardcode the namespace URI at all.
     """
     template = (
         root.find(tag_name)
@@ -62,10 +87,7 @@ def _blank_template(root, tag_name):
         or getattr(root, "find_next", lambda *a: None)(tag_name)
     )
     if template is None:
-        raise NotImplementedError(
-            f"cannot create a new {tag_name} element: no existing tag of that name "
-            "was found anywhere in this document to use as a namespace template"
-        )
+        return _new_qualified_tag(tag_name)
     new_tag = copy.deepcopy(template)
     new_tag.attrs.clear()
     for child in list(new_tag.children):
@@ -763,17 +785,16 @@ class Cell:
             self.text = None
             return
         if p is None:
-            # Building a bare `<text:p>` fragment loses its namespace (bs4/lxml can only
-            # resolve the "text:" prefix within a document that actually declares it), so
-            # an existing text:p elsewhere in the same document is copied as a template.
+            # An existing text:p elsewhere in the document is preferred as a
+            # template (keeps whatever incidental formatting bs4/lxml would
+            # otherwise not know how to reproduce), falling back to building
+            # one from scratch (see `_new_qualified_tag`) if there is none.
             template = self.cell.find_previous("text:p") or self.cell.find_next("text:p")
             if template is None:
-                raise NotImplementedError(
-                    "cannot create a new text:p element: no existing text:p tag was "
-                    "found anywhere in this document to use as a namespace template"
-                )
-            p = copy.copy(template)
-            p.string = ""
+                p = _new_qualified_tag("text:p")
+            else:
+                p = copy.copy(template)
+                p.string = ""
             self.cell.append(p)
         p.string = text
         self.text = text
@@ -1117,17 +1138,21 @@ class Sheet:
             self.n_cols = target_cols
 
         if row >= self.n_rows:
+            # Captured *before* discarding whatever stray row currently sits in
+            # the XML: on a sheet that's the only one in the whole document
+            # (nothing else to fall back on), that stray row may be the only
+            # namespace-template source available at all.
+            row_template = self._empty_row_template(self.n_cols)
             self._discard_stray_rows()
-
-        while row >= self.n_rows:
-            new_row_tag = self._empty_row_template(self.n_cols)
-            self.table.append(new_row_tag)
-            new_cells = [
-                Cell(cell_tag, row=self.n_rows, col=c, sheet=self)
-                for c, cell_tag in enumerate(new_row_tag.find_all(TAG_CELL))
-            ]
-            self.rows.append(new_cells)
-            self.n_rows += 1
+            while row >= self.n_rows:
+                new_row_tag = copy.deepcopy(row_template)
+                self.table.append(new_row_tag)
+                new_cells = [
+                    Cell(cell_tag, row=self.n_rows, col=c, sheet=self)
+                    for c, cell_tag in enumerate(new_row_tag.find_all(TAG_CELL))
+                ]
+                self.rows.append(new_cells)
+                self.n_rows += 1
 
         self.size = (self.n_rows, self.n_cols)
 
@@ -1348,14 +1373,43 @@ class ODSReader:
     def __repr__(self):
         return f"ODSReader({self.file}, sheets={self.sheets_names})"
 
+    _TEMPLATE_PATH = Path(__file__).parent / "_template.ods"
+
+    @classmethod
+    def new(cls, sheet_name: str = "Sheet1", verbose: bool = False) -> "ODSReader":
+        """Create a brand new, empty spreadsheet - not backed by any file on
+        disk yet - with a single sheet named `sheet_name`.
+
+        Bootstrapped from a minimal template bundled with the package (a
+        valid, empty ODF document needs several non-trivial pieces - a
+        `mimetype`, `META-INF/manifest.xml`, `styles.xml`... - that only a
+        real spreadsheet application can produce correctly, so this reuses
+        one rather than hand-assembling them). `save(path)` requires an
+        explicit path (there is no source file to default to).
+        """
+        reader = cls(cls._TEMPLATE_PATH, verbose=verbose)
+        reader._from_template = True
+        if sheet_name != "Sheet1":
+            reader.tables[0]["table:name"] = sheet_name
+            reader.sheets_names[0] = sheet_name
+            reader._sheets = {sheet_name: reader._sheets.pop("Sheet1")}
+        return reader
+
     def save(self, path: Union[Path, str, None] = None):
         """Write the in-memory content back out as a .ods file.
 
         Only cell values changed via `cell.value = ...` are reflected; styles,
         metadata, settings and all other zip members are copied through
-        unchanged from the source file. Defaults to overwriting `self.file`.
+        unchanged from the source file. Defaults to overwriting `self.file` -
+        except for a document created with `ODSReader.new()`, which has no
+        source file of its own and requires an explicit `path`.
         """
         if path is None:
+            if getattr(self, "_from_template", False):
+                raise ValueError(
+                    "this document was created with ODSReader.new() and has no "
+                    "source file of its own - pass an explicit path to save(...)"
+                )
             path = self.file
         new_content = self.data.encode("utf-8")
         with ZipFile(self.file) as src:

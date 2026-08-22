@@ -39,6 +39,10 @@ test = ["pytest"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# the minimal blank-document template used by ODSReader.new()
+odsslicer = ["_template.ods"]
+
 [tool.setuptools_scm]
 # version is derived from git tags (e.g. tag "v0.1.0" -> package version "0.1.0")
 tag_regex = "^v(?P<version>.*)$"

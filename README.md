@@ -197,6 +197,30 @@ sheet["A1"].value = "Total"     # grows it like any other sheet, see above
 Raises a `ValueError` for an empty name or one that's already used by another sheet in the
 document. Like grown rows/cells, the new sheet carries no particular style.
 
+### Creating a new file from scratch
+
+`ODSReader.new(sheet_name="Sheet1")` creates a brand new, empty spreadsheet — not backed by
+any file on disk yet — with a single sheet:
+
+```python
+from odsslicer import ODSReader
+
+table = ODSReader.new()                 # or ODSReader.new(sheet_name="Budget")
+sheet = table.sheet("Sheet1")
+sheet["A1"].value = "Total"
+sheet["B1"].formula = "SUM(A2:A10)"
+table.add_sheet("Data")
+
+table.save("new_workbook.ods")          # a path is required: there's no source file to default to
+```
+
+A valid, empty ODF document needs several non-trivial pieces beyond `content.xml` — a
+`mimetype`, `META-INF/manifest.xml`, `styles.xml`, `meta.xml`, `settings.xml` — that only a
+real spreadsheet application can produce correctly, so `.new()` is bootstrapped from a
+minimal template bundled with the package rather than hand-assembled. Everything else
+(writing, growing, formulas, adding sheets) works exactly the same as on a document opened
+from an existing file.
+
 ### Writing formulas
 
 `Cell.formula` is writable, just like `Cell.value`, and accepts ordinary spreadsheet syntax —
@@ -496,5 +520,13 @@ release):
     If such a cell ended up as a sheet's last row, `load()`'s "trim a trailing empty row"
     cleanup silently dropped it — a formula written near the edge of a sheet could vanish on
     the next save/reload. Fixed: `is_empty` now also checks the formula.
+11. **Writing to a sheet that is the only one in the whole document, with nothing anywhere
+    else to copy a namespace template from, failed outright.** Building `ODSReader.new()`'s
+    bundled template surfaced two related bugs in the "copy an existing tag" approach used to
+    create new XML elements: `Sheet.grow_to` discarded a sheet's own lone "phantom" blank row
+    (see #9) *before* it could be used as a row/cell template, and `Cell._set_text` had
+    nothing at all to copy a `text:p` from on such a minimal sheet. Both now fall back to
+    building a correctly namespace-qualified element from scratch (using the standard OASIS
+    namespace URIs directly) instead of raising `NotImplementedError`.
 
 All of these cases are covered by regression tests in `tests/test_odsslicer.py`.
