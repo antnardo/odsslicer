@@ -260,6 +260,41 @@ sheets, `ArrayValues`, writing (`Cell.value = ...`, `ODSReader.save()` and its s
 well as regression tests for the fixed bugs (see below). It runs on every push/PR via
 [GitHub Actions](.github/workflows/ci.yml) across Python 3.10 to 3.13.
 
+## Are there already equivalent PyPI modules?
+
+| Package | Read/Write | Latest release | Status |
+|---|---|---|---|
+| `odfpy` | Low-level R/W | Jan. 2020 | Nearly abandoned (82 open issues), but still the brick pandas uses internally |
+| `pyexcel-ods(3)` | R/W | > 1 year | Inactive |
+| `ezodf` | R/W | Dec. 2015 | Abandoned for 10 years |
+| `pandas` (`engine="odf"`) | Read (delegates to odfpy) | follows pandas | Convenient but loses formulas/fine-grained formats |
+| `python-calamine` | Read-only (Rust), fast | active | The most actively maintained option for pure reading |
+| `odfdo` (modern fork of odfpy) | Full R/W | recent, regular | Actively maintained, DOM-like API |
+| `pandas-ods-reader` | Read-only -> DataFrame | May 2025 | Maintained, limited scope |
+
+None of these packages offer a numpy-style API (`sheet["A1"]`, slicing by cell address) or the
+same granularity on cell formats (currency/percentage/date/time) and merged/repeated cells —
+that's the main argument for publishing this module rather than simply recommending `odfdo`
+or `python-calamine`.
+
+## Versions
+
+Version numbers are derived automatically from git tags (nothing to bump by hand in the
+source) and follow [Semantic Versioning](https://semver.org/) — while the major version stays
+`0`, the API can still change between minor versions. See the
+[Releases](https://github.com/antnardo/odsslicer/releases) page for the changelog of each
+version.
+
+## License
+
+[MIT](LICENSE) — reuse with essentially no restriction, just keep the copyright notice.
+
+## Project name
+
+Chosen name: **`odsslicer`** (available on PyPI as of 2026-07-29), to reflect the module's
+real differentiator — numpy-style indexing/slicing by cell address — rather than a generic
+"ods reader".
+
 ## History of fixes made before publication
 
 While rereading the module for this publication, the following bugs (present in the internal
@@ -299,56 +334,3 @@ version) were fixed in `src/odsslicer/classes.py`:
    for a genuinely empty cell).
 
 All of these cases are covered by regression tests in `tests/test_odsslicer.py`.
-
-## Are there already equivalent PyPI modules?
-
-| Package | Read/Write | Latest release | Status |
-|---|---|---|---|
-| `odfpy` | Low-level R/W | Jan. 2020 | Nearly abandoned (82 open issues), but still the brick pandas uses internally |
-| `pyexcel-ods(3)` | R/W | > 1 year | Inactive |
-| `ezodf` | R/W | Dec. 2015 | Abandoned for 10 years |
-| `pandas` (`engine="odf"`) | Read (delegates to odfpy) | follows pandas | Convenient but loses formulas/fine-grained formats |
-| `python-calamine` | Read-only (Rust), fast | active | The most actively maintained option for pure reading |
-| `odfdo` (modern fork of odfpy) | Full R/W | recent, regular | Actively maintained, DOM-like API |
-| `pandas-ods-reader` | Read-only -> DataFrame | May 2025 | Maintained, limited scope |
-
-None of these packages offer a numpy-style API (`sheet["A1"]`, slicing by cell address) or the
-same granularity on cell formats (currency/percentage/date/time) and merged/repeated cells —
-that's the main argument for publishing this module rather than simply recommending `odfdo`
-or `python-calamine`.
-
-## Releasing
-
-The package layout is a standard `src/` layout (`src/odsslicer/`, with `tests/`, `example/`
-and `rsc/` at the repo root, dev-only). Versioning is fully automatic via
-[`setuptools-scm`](https://github.com/pypa/setuptools-scm): the version is derived from git
-tags, there's no version number to bump by hand anywhere in the source.
-
-To cut a release:
-
-1. Tag the commit: `git tag v0.1.0 && git push origin v0.1.0` (the version published will be
-   `0.1.0` — the `v` prefix is stripped).
-2. Publish a [GitHub Release](https://github.com/antnardo/odsslicer/releases) from that tag.
-3. This triggers [`publish.yml`](.github/workflows/publish.yml): the package is rebuilt (after
-   running the full test suite once more) and uploaded to PyPI automatically via
-   [trusted publishing](https://docs.pypi.org/trusted-publishers/) (OIDC) — no API token
-   stored anywhere.
-
-One manual, one-time setup step on PyPI's side is required before the very first release: on
-[pypi.org's publishing settings](https://pypi.org/manage/account/publishing/), register a
-"pending" trusted publisher for a project named `odsslicer`, pointing at this repo
-(`antnardo/odsslicer`), workflow file `publish.yml`, and environment `pypi`. Only the account
-owner can do this (it needs a PyPI login).
-
-Every push/PR against `master` also runs the test suite via [`ci.yml`](.github/workflows/ci.yml)
-across Python 3.10-3.13, independently of releases.
-
-## License
-
-[MIT](LICENSE) — reuse with essentially no restriction, just keep the copyright notice.
-
-## Project name
-
-Chosen name: **`odsslicer`** (available on PyPI as of 2026-07-29), to reflect the module's
-real differentiator — numpy-style indexing/slicing by cell address — rather than a generic
-"ods reader".
