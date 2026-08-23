@@ -37,6 +37,14 @@
 - Liens hypertexte dans une cellule (`Cell.hyperlink`, `<text:a xlink:href="...">`) — lien sur
   la cellule entière uniquement (pas sur une portion du texte, voir "texte enrichi partiel"
   ci-dessous). Écrire une nouvelle `.value` efface le lien, comme dans un vrai tableur.
+- Tableaux croisés dynamiques (`Sheet.create_pivot_table`, `table:data-pilot-table`) :
+  définition ODF uniquement (source, champs ligne/colonne/données, fonction d'agrégation),
+  même philosophie que les formules — on décrit, le tableur calcule. Différence vérifiée
+  empiriquement avec LibreOffice : contrairement à une formule, un TCD n'est **pas** recalculé
+  automatiquement à l'ouverture — la définition est reconnue et modifiable depuis l'interface,
+  mais la zone cible reste vide jusqu'à un `Données > Pivot > Actualiser` explicite. Pas de
+  `data-pilot-level`/tri/sous-totaux/champ "page" (filtre) : à ajouter si besoin, la structure
+  est en place.
 
 ## Formules
 
@@ -65,7 +73,6 @@
 - Graphiques et images embarquées (`office:chart`, `draw:frame`/`draw:image`) — gros morceau,
   peu probable qu'une lib de lecture/écriture de données s'y attaque.
 - Mise en page/impression (`style:master-page`, `style:page-layout`, en-têtes/pieds de page).
-- Tableaux croisés dynamiques (`table:data-pilot-tables`).
 - Vraie prise en compte de la locale du document dans le rendu du texte affiché
   (`number:language`/`number:country` sur les `NumberFormat`) — actuellement approximé avec un
   séparateur `.`/`,` fixe.

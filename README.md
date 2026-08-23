@@ -13,7 +13,7 @@ merged rows/columns.
 Write support: `cell.value = ...`, `cell.formula = ...`, `cell.style.bold = ...` (and other
 formatting properties, including creating number formats and conditional formatting from
 scratch), `cell.comment = ...`, `cell.hyperlink = ...`, `sheet.merge(...)`/`.unmerge(...)`, `sheet.copy(...)`,
-`sheet.sort(...)`, `sheet.delete_row(...)`/`.delete_column(...)`/`table.delete_sheet(...)`,
+`sheet.sort(...)`, `sheet.create_pivot_table(...)`, `sheet.delete_row(...)`/`.delete_column(...)`/`table.delete_sheet(...)`,
 `table.rename_sheet(...)`/`.move_sheet(...)`, `table.properties` (title, author, custom
 document properties), new sheets, even brand new files from scratch — then `reader.save(...)`.
 Repeated or merged cells are automatically unrolled/unmerged in the
@@ -472,6 +472,37 @@ sheet["A2"].formula = "$A{r-1}+{{1,2}}"   # A2 -> "of:=[.$A1]+{1,2}"
 (a contrived example purely to demonstrate that the two mechanisms don't interfere with each
 other — adding a cell to a 2-element array constant isn't a formula anyone would write for
 real).
+
+### Pivot tables
+
+`Sheet.create_pivot_table(source, target, rows=..., columns=..., values=..., name=...)` writes
+a pivot table's ODF definition ("data pilot table" in ODF terms) — same philosophy as formulas:
+`odsslicer` describes what to compute, a real spreadsheet application computes it:
+
+```python
+# source data with a header row: Category | Region | Amount
+sheet.create_pivot_table(
+    "A1:C100",                     # source range (first row = field headers)
+    "E1",                          # top-left of where the result will go
+    rows=["Category"],             # row categories
+    columns=["Region"],            # column categories
+    values={"Amount": "sum"},      # aggregated field -> function
+)
+```
+
+`source` may be sheet-qualified (`"Data.A1:C100"`) to pull from another sheet. Valid
+aggregation functions: `"sum"`, `"average"`, `"count"`, `"countnums"` (count of numeric values
+only), `"max"`, `"min"`, `"product"`, `"stdev"`, `"stdevp"`, `"var"`, `"varp"`. `name`
+defaults to `"DataPilotTable{n}"`. Raises `ValueError` for a field name not found in the
+source's header row, an unknown function, or a name already in use.
+
+**Unlike a formula, a pivot table is not recomputed automatically on open.** Every conformant
+reader recalculates formulas when it loads a file; a pivot table, by contrast, needs an
+explicit refresh (Data > Pivot Table > Refresh in LibreOffice) before its result appears at
+`target` — confirmed against a real LibreOffice: a file holding only the definition opens fine,
+the definition is fully recognized and editable from the pivot UI, but the target area stays
+empty until refreshed. `odsslicer` writes only the definition, never a computed grid (no
+calculation engine), so expect that one refresh after opening.
 
 ### Displayed text: learned from an example rather than a raw conversion
 

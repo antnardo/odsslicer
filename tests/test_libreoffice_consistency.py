@@ -347,3 +347,29 @@ def test_libreoffice_reads_back_a_hyperlink(writable_reader, tmp_path, libreoffi
 
     xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
     assert re.search(r'<text:a xlink:href="https://anthropic\.com/?"[^>]*>Anthropic</text:a>', xml)
+
+
+@requires_soffice
+def test_libreoffice_reads_back_a_pivot_table_definition(writable_reader, tmp_path, libreoffice_export):
+    s = writable_reader.sheet("SheetEmpty")
+    rows = [("Category", "Region", "Amount"), ("A", "North", 10), ("B", "South", 20)]
+    for i, (cat, reg, amt) in enumerate(rows):
+        s[i, 0].value = cat
+        s[i, 1].value = reg
+        s[i, 2].value = amt
+    s.create_pivot_table(
+        "A1:C3", "E1", rows=["Category"], columns=["Region"], values={"Amount": "sum"}, name="MyPivot"
+    )
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    # LibreOffice itself parsed, accepted, and re-serialized the definition
+    # (it expands the single-cell target to a range and adds its own
+    # application-data/buttons/data-pilot-level, all harmless)
+    pivot = re.search(r'<table:data-pilot-table table:name="MyPivot".*?</table:data-pilot-table>', xml, re.DOTALL)
+    assert pivot is not None
+    pivot_xml = pivot.group(0)
+    assert 'table:source-field-name="Category" table:orientation="row"' in pivot_xml
+    assert 'table:source-field-name="Region" table:orientation="column"' in pivot_xml
+    assert 'table:source-field-name="Amount" table:orientation="data" table:function="sum"' in pivot_xml

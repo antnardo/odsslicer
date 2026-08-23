@@ -390,6 +390,14 @@ def _rename_odf_formula_sheet(formula, old_name, new_name):
     )
 
 
+# valid table:function values for a data pilot field with orientation="data"
+# (ODF 1.2 §19.643.1/19.643.3) - "auto" is deliberately excluded here, since
+# it's only meaningful for row/column-orientation fields, not aggregations
+_PIVOT_DATA_FUNCTIONS = frozenset(
+    {"sum", "average", "count", "countnums", "max", "min", "product", "stdev", "stdevp", "var", "varp"}
+)
+
+
 _TEMPLATE_TOKEN_RE = re.compile(r"\{([^{}]*)\}")
 _TEMPLATE_ALLOWED_NODES = (
     ast.Expression,
@@ -1796,6 +1804,91 @@ class Sheet:
                 else:
                     target.value = value
                 target.style = style_name
+
+    def create_pivot_table(self, source, target, rows=None, columns=None, values=None, name=None):
+        """Define a pivot table ("data pilot table" in ODF terms) sourced
+        from `source` (a range address whose first row is field/column
+        headers, e.g. `"A1:C100"` - optionally sheet-qualified,
+        `"Data.A1:C100"`, if the source lives on another sheet) and
+        targeting `target` (the top-left cell where the computed output
+        will be placed once refreshed) on this sheet.
+
+        `rows`/`columns` are lists of field names (matching header row
+        values) to use as row/column categories; `values` maps a field
+        name to an aggregation function - `"sum"`, `"average"`,
+        `"count"`, `"countnums"` (count of numeric values only),
+        `"max"`, `"min"`, `"product"`, `"stdev"`, `"stdevp"`, `"var"`,
+        `"varp"`. `name` defaults to `f"DataPilotTable{n}"`.
+
+        odsslicer writes only the pivot's ODF definition - there's no
+        calculation engine, same as for formulas. Unlike a formula
+        (which every conformant reader recomputes on open), a pivot
+        table needs an *explicit* refresh (Data > Pivot Table > Refresh
+        in LibreOffice) before its result appears - confirmed against a
+        real LibreOffice, opening a file with only the definition shows
+        nothing at `target` until refreshed. Raises `ValueError` for a
+        field name not found in `source`'s header row, an unknown
+        aggregation function, or a pivot table name already in use.
+        """
+        m = _SHEET_QUALIFIED_RE.match(source)
+        source_sheet_name = _unquote_odf_sheet_name(m.group("sheet")) if m.group("sheet") else self.name
+        source_sheet = self if source_sheet_name == self.name else self.reader.sheet(source_sheet_name)
+        row0, row1, col0, col1 = source_sheet._resolve_range(m.group("addr"))
+
+        headers = [source_sheet.get_cell(row0, c).value for c in range(col0, col1 + 1)]
+        rows = list(rows or ())
+        columns = list(columns or ())
+        values = dict(values or {})
+        for field in rows + columns + list(values):
+            if field not in headers:
+                raise ValueError(f"field {field!r} not found in source header row {headers!r}")
+        for field, func in values.items():
+            if func not in _PIVOT_DATA_FUNCTIONS:
+                raise ValueError(
+                    f"unknown aggregation function {func!r} for field {field!r} - "
+                    f"expected one of {sorted(_PIVOT_DATA_FUNCTIONS)}"
+                )
+
+        spreadsheet = self.reader.data.find("office:spreadsheet")
+        tables = spreadsheet.find("table:data-pilot-tables")
+        if tables is None:
+            tables = _blank_template(self.reader.data, "table:data-pilot-tables")
+            spreadsheet.append(tables)
+
+        existing = tables.find_all("table:data-pilot-table", recursive=False)
+        pivot_name = name or f"DataPilotTable{len(existing) + 1}"
+        if any(t.get("table:name") == pivot_name for t in existing):
+            raise ValueError(f"a pivot table named {pivot_name!r} already exists")
+
+        pivot = _blank_template(self.reader.data, "table:data-pilot-table")
+        pivot.attrs["table:name"] = pivot_name
+        target_row0, _, target_col0, _ = self._resolve_range(target)
+        pivot.attrs["table:target-range-address"] = (
+            f"{_quote_odf_sheet_name(self.name)}.{Sheet.string_address(target_row0, target_col0)}"
+        )
+
+        source_range_tag = _blank_template(self.reader.data, "table:source-cell-range")
+        source_range_tag.attrs["table:cell-range-address"] = (
+            f"{_quote_odf_sheet_name(source_sheet_name)}."
+            f"{Sheet.string_address(row0, col0)}:{Sheet.string_address(row1, col1)}"
+        )
+        pivot.append(source_range_tag)
+
+        for field in rows:
+            self._append_pivot_field(pivot, field, "row", "auto")
+        for field in columns:
+            self._append_pivot_field(pivot, field, "column", "auto")
+        for field, func in values.items():
+            self._append_pivot_field(pivot, field, "data", func)
+
+        tables.append(pivot)
+
+    def _append_pivot_field(self, pivot, field, orientation, function):
+        field_tag = _blank_template(self.reader.data, "table:data-pilot-field")
+        field_tag.attrs["table:source-field-name"] = field
+        field_tag.attrs["table:orientation"] = orientation
+        field_tag.attrs["table:function"] = function
+        pivot.append(field_tag)
 
     def _empty_cell_template(self):
         """A detached, blank `<table:table-cell/>` tag."""
