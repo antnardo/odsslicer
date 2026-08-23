@@ -3,10 +3,6 @@
 Created 2021
 
 @author: elessar
-
-TODO
-récupérer la couleur, les formats ?
-writer ?
 """
 from bs4 import BeautifulSoup
 from zipfile import ZipFile, ZIP_DEFLATED, ZIP_STORED
@@ -577,6 +573,94 @@ class ArrayValues:
         return array.to_list() == self.to_list()
 
 
+class Comment:
+    """A cell's note (`<office:annotation>`) - `.text` (the note body,
+    `\\n`-joined across ODF's own multiple `<text:p>` paragraphs),
+    `.author` (`dc:creator`), `.date` (`dc:date`, a `datetime.datetime`),
+    `.visible` (`office:display` - shown pinned open vs. only on hover).
+    Look up via `Cell.comment`, not directly - writable: set any property
+    to update it in place, once the comment itself exists (see
+    `Cell.comment`'s setter to create one)."""
+
+    def __init__(self, tag):
+        self._tag = tag
+
+    def _insert_before_text(self, child):
+        # keeps dc:creator/dc:date ahead of the text:p paragraphs, matching
+        # real ODF layout, regardless of which property gets set first
+        first_p = self._tag.find("text:p")
+        if first_p is not None:
+            first_p.insert_before(child)
+        else:
+            self._tag.append(child)
+
+    @property
+    def text(self):
+        paragraphs = [p.get_text() for p in self._tag.find_all("text:p")]
+        return "\n".join(paragraphs) if paragraphs else None
+
+    @text.setter
+    def text(self, value):
+        for p in self._tag.find_all("text:p"):
+            p.decompose()
+        for line in (value or "").split("\n"):
+            p = _blank_template(self._tag, "text:p")
+            p.string = line
+            self._tag.append(p)
+
+    @property
+    def author(self):
+        tag = self._tag.find("dc:creator")
+        return tag.get_text() if tag is not None else None
+
+    @author.setter
+    def author(self, value):
+        tag = self._tag.find("dc:creator")
+        if value is None:
+            if tag is not None:
+                tag.decompose()
+            return
+        if tag is None:
+            tag = _blank_template(self._tag, "dc:creator")
+            self._insert_before_text(tag)
+        tag.string = value
+
+    @property
+    def date(self):
+        tag = self._tag.find("dc:date")
+        if tag is None:
+            return None
+        try:
+            return dt.datetime.fromisoformat(tag.get_text())
+        except ValueError:
+            return None
+
+    @date.setter
+    def date(self, value):
+        tag = self._tag.find("dc:date")
+        if value is None:
+            if tag is not None:
+                tag.decompose()
+            return
+        if not isinstance(value, dt.datetime):
+            raise TypeError(f"Comment.date must be a datetime.datetime or None, got {type(value)!r}")
+        if tag is None:
+            tag = _blank_template(self._tag, "dc:date")
+            self._insert_before_text(tag)
+        tag.string = value.isoformat()
+
+    @property
+    def visible(self):
+        return self._tag.get("office:display") == "true"
+
+    @visible.setter
+    def visible(self, value):
+        self._tag.attrs["office:display"] = "true" if value else "false"
+
+    def __repr__(self):
+        return f"Comment(author={self.author!r}, text={self.text!r})"
+
+
 class Cell:
     #: attributes touched when a value is written to a cell
     _VALUE_ATTRS = (
@@ -601,7 +685,10 @@ class Cell:
             self.raw_value = self.attrs.get("office:boolean-value")
         else:
             self.raw_value = self.attrs.get("office:value", None)
-        p = getattr(self.cell, "text:p", None)
+        # recursive=False: a cell's own value text:p is always a direct child -
+        # an unscoped find() would instead match one nested inside an
+        # office:annotation (a cell comment, see Cell.comment) if there is one
+        p = self.cell.find("text:p", recursive=False)
         if p is not None:
             # `p.string` is only ever a plain str when text:p has EXACTLY one text
             # child; it's None both for a genuinely empty <text:p/> (e.g. a formula
@@ -833,7 +920,7 @@ class Cell:
             match = finder(matches)
             if match is None:
                 continue
-            p = match.find("text:p")
+            p = match.find("text:p", recursive=False)
             if p is not None and p.string is not None:
                 candidates.append((match.attrs.get(raw_attr), str(p.string)))
         return candidates
@@ -932,7 +1019,7 @@ class Cell:
         return None
 
     def _set_text(self, text):
-        p = self.cell.find("text:p")
+        p = self.cell.find("text:p", recursive=False)  # see __init__'s note on scoping
         if text is None:
             if p is not None:
                 p.decompose()
@@ -1150,6 +1237,32 @@ class Cell:
             return start
         end = Sheet.string_address(master.row + n_rows - 1, master.col + n_cols - 1)
         return f"{start}:{end}"
+
+    @property
+    def comment(self):
+        """This cell's `Comment` (note/`office:annotation`) - `None` if it
+        has none. Writable: `cell.comment = "some text"` creates one (or
+        updates an existing one's `.text`); `cell.comment = None` removes
+        it entirely. Once a comment exists, set its other properties
+        directly - `cell.comment.author = "Jane"`, `.date = datetime.now()`,
+        `.visible = True`."""
+        tag = self.cell.find("office:annotation", recursive=False)
+        return Comment(tag) if tag is not None else None
+
+    @comment.setter
+    def comment(self, value):
+        self._prepare_for_write()
+        tag = self.cell.find("office:annotation", recursive=False)
+        if value is None:
+            if tag is not None:
+                tag.decompose()
+            return
+        if not isinstance(value, str):
+            raise TypeError(f"cell.comment must be a str or None, got {type(value)!r}")
+        if tag is None:
+            tag = _blank_template(self.cell, "office:annotation")
+            self.cell.insert(0, tag)
+        Comment(tag).text = value
 
 
 class Sheet:

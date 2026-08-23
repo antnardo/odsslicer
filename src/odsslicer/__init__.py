@@ -35,4 +35,5 @@ from .classes import (
     ColumnStyle,
     TableStyle,
     DocumentProperties,
+    Comment,
 )

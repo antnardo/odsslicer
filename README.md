@@ -12,10 +12,10 @@ merged rows/columns.
 
 Write support: `cell.value = ...`, `cell.formula = ...`, `cell.style.bold = ...` (and other
 formatting properties, including creating number formats and conditional formatting from
-scratch), `sheet.merge(...)`/`.unmerge(...)`, `sheet.copy(...)`, `sheet.delete_row(...)`/
-`.delete_column(...)`/`table.delete_sheet(...)`, `table.properties` (title, author, custom
-document properties), new sheets, even brand new files from scratch — then `reader.save(...)`.
-Repeated or merged cells are automatically unrolled/unmerged in the
+scratch), `cell.comment = ...`, `sheet.merge(...)`/`.unmerge(...)`, `sheet.copy(...)`,
+`sheet.delete_row(...)`/`.delete_column(...)`/`table.delete_sheet(...)`, `table.properties`
+(title, author, custom document properties), new sheets, even brand new files from scratch —
+then `reader.save(...)`. Repeated or merged cells are automatically unrolled/unmerged in the
 background on first write access, and writing beyond a sheet's current extent grows it
 automatically (new rows/columns) — see [Writing](#writing-experimental) below for details and
 remaining limitations.
@@ -725,6 +725,28 @@ A custom property's Python type round-trips through ODF's own `meta:value-type` 
 `content.xml` and `meta.xml` are regenerated from their in-memory trees on `save()`; every
 other zip member (`styles.xml`, `settings.xml`...) is still copied through unchanged from the
 source file.
+
+## Cell comments
+
+`Cell.comment` reads a cell's note (`office:annotation`) — `None` if it has none:
+
+```python
+cell.comment              # None, or a Comment
+cell.comment = "Follow up with finance"      # creates one (or replaces an existing one's text)
+cell.comment.text          # "Follow up with finance"
+cell.comment = None         # removes it
+```
+
+Once a comment exists, set its other properties directly:
+
+```python
+cell.comment.author = "Antonin"
+cell.comment.date = datetime.now()
+cell.comment.visible = True     # pinned open, rather than only shown on hover
+```
+
+`.text` joins ODF's own multiple `text:p` paragraphs with `\n` on read, and splits on `\n`
+back into separate paragraphs on write, so a multi-line note round-trips correctly.
 
 ## Known limitations
 

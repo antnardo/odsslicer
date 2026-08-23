@@ -21,10 +21,50 @@
   plutôt qu'une conversion brute — `_render_number_from_format`/`_render_date_time_from_format`.
   Reste approximatif sur la locale exacte (séparateurs `.`/`,` fixes, pas de lecture de
   `number:language`/`number:country`).
+- Commentaires/annotations de cellule (`Cell.comment` / `Comment`, `office:annotation`) :
+  texte (multi-ligne), auteur, date, visibilité — en lecture et en écriture. Au passage,
+  correction d'un vrai bug latent : la lecture/écriture de `Cell.text`/`.value` n'était pas
+  scopée aux enfants directs de `table:table-cell`, donc un commentaire (qui contient ses
+  propres `text:p`) aurait pu être confondu avec la valeur de la cellule.
 
 ## Formules
 
 - Pas de moteur de calcul : la valeur `office:value` mise en cache est lue telle quelle, jamais
-  recalculée — écrire une formule n'actualise pas le résultat affiché.
-- Les plages nommées et les références 3D (plusieurs feuilles) ne sont pas traduites par la
-  syntaxe "friendly" — il faut passer par la syntaxe ODF brute (`[...]`).
+  recalculée — écrire une formule n'actualise pas le résultat affiché. Gros morceau, sans doute
+  hors de portée d'une lib légère — à séparer d'un futur support des plages nommées (voir
+  ci-dessous), qui lui est tractable indépendamment.
+- Les plages nommées (`table:named-range`) ne sont ni lues, ni créables, ni traduites par la
+  syntaxe "friendly" des formules — il faut les référencer via la syntaxe ODF brute (`[...]`).
+- Les références 3D (une plage sur plusieurs feuilles, `Sheet1:Sheet3.A1`) ne sont pas non plus
+  traduites.
+
+## Gaps identifiés (rien d'entamé) — probablement les plus utiles
+
+- **Trier une plage** (`Sheet.sort(range, by=col, ascending=True)` ou similaire) : opération de
+  base de tableur, absente. Nécessite de réordonner des lignes de `Cell` en préservant style/
+  formule — proche en mécanique de `Sheet.copy`.
+- **Renommer / réordonner les feuilles** : `add_sheet`/`delete_sheet` existent, mais pas
+  `rename_sheet`/de façon de changer l'ordre des onglets (position dans `self.tables`).
+- **Liens hypertexte dans une cellule** (`<text:a xlink:href="...">` autour du texte) : pas lus,
+  pas écrits — `Cell.text` les aplatit dans le texte brut.
+
+## Gaps identifiés — utiles mais plus de niche
+
+- Validation de données / listes déroulantes (`table:content-validations`).
+- Filtres automatiques / plages de base de données (`table:database-ranges`).
+- Volets figés / vue scindée (config-items dans `settings.xml`).
+- Protection au niveau de la feuille entière (`table:protected` sur `table:table` — distinct de
+  `style:cell-protect`, déjà supporté par cellule).
+- Regroupement de lignes/colonnes (plan, `table:table-row-group`).
+- Texte enrichi partiel dans une cellule (un mot en gras au milieu d'une phrase) — `Cell.text`
+  aplatit tout aujourd'hui ; écrire ce genre de mise en forme mixte serait un chantier à part.
+
+## Probablement hors de portée durablement
+
+- Graphiques et images embarquées (`office:chart`, `draw:frame`/`draw:image`) — gros morceau,
+  peu probable qu'une lib de lecture/écriture de données s'y attaque.
+- Mise en page/impression (`style:master-page`, `style:page-layout`, en-têtes/pieds de page).
+- Tableaux croisés dynamiques (`table:data-pilot-tables`).
+- Vraie prise en compte de la locale du document dans le rendu du texte affiché
+  (`number:language`/`number:country` sur les `NumberFormat`) — actuellement approximé avec un
+  séparateur `.`/`,` fixe.

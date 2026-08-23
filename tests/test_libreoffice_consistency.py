@@ -281,3 +281,20 @@ def test_libreoffice_opens_a_value_rendered_from_a_real_format_with_no_example(t
     assert 'office:value-type="currency"' in xml
     assert 'office:value="1234.5"' in xml
     assert re.search(r"<text:p>1.234[,.]50\s*\$</text:p>", xml)
+
+
+@requires_soffice
+def test_libreoffice_reads_back_a_comment_without_corrupting_the_value(
+    writable_reader, tmp_path, libreoffice_export
+):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].comment = "Une note\nSur deux lignes"
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    assert "<office:annotation" in xml
+    assert "<text:p>Une note</text:p>" in xml
+    assert "<text:p>Sur deux lignes</text:p>" in xml
+    # LibreOffice itself reads A1's actual value separately from the note
+    assert "<text:p>texte simple</text:p>" in xml
