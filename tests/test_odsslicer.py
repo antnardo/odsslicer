@@ -18,7 +18,7 @@ import math
 import pytest
 
 from odsslicer import ODSReader
-from odsslicer.classes import ArrayValues, Cell, CellStyle, Sheet
+from odsslicer.classes import ArrayValues, Border, Cell, CellStyle, Sheet
 
 
 # ---------------------------------------------------------------------------
@@ -1447,10 +1447,17 @@ def test_new_document_regular_reader_still_defaults_save_to_its_own_file(writabl
 # Styles (lecture) : Cell.style, CellStyle, NumberFormat
 # ---------------------------------------------------------------------------
 
-def test_cell_with_no_style_name_has_no_style(reader):
+def test_cell_with_no_style_name_has_a_blank_writable_style(reader):
+    # no `table:style-name` at all doesn't mean `.style` is None anymore -
+    # writing to it (see the styles-write tests below) needs a real object
+    # to fork a style onto, so every property just resolves to None/False
     s = reader.sheet("Sheet1")
     assert s["A1"].attrs.get("table:style-name") is None
-    assert s["A1"].style is None
+    style = s["A1"].style
+    assert style is not None
+    assert style.bold is False
+    assert style.font_color is None
+    assert style.number_format is None
 
 
 def test_style_resolves_percentage_number_format(reader):
@@ -1807,3 +1814,396 @@ def test_row_style_no_reader_is_none():
     assert sheet.row_style(0) is None
     assert sheet.column_style(0) is None
     assert sheet.style is None
+
+
+# ---------------------------------------------------------------------------
+# Cellules fusionnées (lecture) : is_merged / is_merge_master / is_covered /
+# merge_span / merge_master / merge_range (SheetFusion)
+# ---------------------------------------------------------------------------
+
+def test_unmerged_cell_reports_no_merge(sheet_fusion):
+    c = sheet_fusion["D1"]
+    assert c.is_merged is False
+    assert c.is_merge_master is False
+    assert c.is_covered is False
+    assert c.merge_span is None
+    assert c.merge_master is None
+    assert c.merge_range is None
+
+
+def test_horizontal_merge_master_and_covered(sheet_fusion):
+    master = sheet_fusion["A1"]
+    assert master.is_merge_master is True
+    assert master.is_covered is False
+    assert master.merge_span == (1, 3)
+    assert master.merge_range == "A1:C1"
+    assert master.merge_master is master
+
+    covered = sheet_fusion["C1"]
+    assert covered.is_covered is True
+    assert covered.is_merge_master is False
+    assert covered.is_merged is True
+    assert covered.merge_span == (1, 3)
+    assert covered.merge_range == "A1:C1"
+    assert covered.merge_master.address == "A1"
+
+
+def test_vertical_merge_span(sheet_fusion):
+    assert sheet_fusion["A3"].merge_span == (3, 1)
+    assert sheet_fusion["A5"].merge_range == "A3:A5"
+
+
+def test_rectangular_merge_span(sheet_fusion):
+    assert sheet_fusion["A6"].merge_span == (2, 4)
+    assert sheet_fusion["D7"].merge_range == "A6:D7"
+    assert sheet_fusion["D7"].merge_master.address == "A6"
+
+
+# ---------------------------------------------------------------------------
+# Cellules fusionnées (écriture) : Sheet.merge / Sheet.unmerge
+# ---------------------------------------------------------------------------
+
+def test_merge_creates_a_master_and_covered_cells(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].value = "top-left"
+    s["C2"].value = "hidden"
+    s.merge("C1:D2")
+    assert s["C1"].is_merge_master
+    assert s["C1"].merge_span == (2, 2)
+    assert s["C1"].value == "top-left"
+    assert s["D2"].is_covered
+    assert s["D2"].merge_master.address == "C1"
+    # the covered cell's own value is still there, just hidden
+    assert s["C2"].is_covered
+    assert s["C2"].value == "hidden"
+
+
+def test_merge_grows_the_sheet_if_needed(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    size_before = s.size
+    s.merge("Z10:AA11")
+    assert s.size[0] >= 11 and s.size[1] >= 27
+    assert s["Z10"].merge_range == "Z10:AA11"
+
+
+def test_merge_single_cell_raises(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(ValueError):
+        s.merge("A1")
+
+
+def test_merge_already_merged_cell_raises(writable_reader):
+    s = writable_reader.sheet("SheetFusion")
+    with pytest.raises(ValueError):
+        s.merge("A1:B2")  # A1 is already the master of A1:C1
+
+
+def test_unmerge_from_any_cell_in_the_range(writable_reader):
+    s = writable_reader.sheet("SheetFusion")
+    s.unmerge("C1")  # C1 is a covered cell of the A1:C1 merge, not the master
+    assert s["A1"].is_merged is False
+    assert s["B1"].is_merged is False and s["B1"].value == 2.0
+    assert s["C1"].is_merged is False and s["C1"].value == 3.0
+
+
+def test_unmerge_non_merged_cell_raises(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(ValueError):
+        s.unmerge("A1")
+
+
+def test_unmerge_requires_a_single_cell_address(writable_reader):
+    s = writable_reader.sheet("SheetFusion")
+    with pytest.raises(ValueError):
+        s.unmerge("A1:B1")
+
+
+def test_save_round_trip_after_merge(writable_reader, tmp_path):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].value = "master"
+    s.merge("C1:D2")
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    reread = ODSReader(out).sheet("Sheet1")
+    assert reread["C1"].merge_range == "C1:D2"
+    assert reread["D2"].is_covered
+
+
+# ---------------------------------------------------------------------------
+# Styles (écriture) : CellStyle
+# ---------------------------------------------------------------------------
+
+def test_setting_bold_forks_a_private_style(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    c = s["A1"]
+    assert c.attrs.get("table:style-name") is None
+    c.style.bold = True
+    forked_name = c.attrs.get("table:style-name")
+    assert forked_name is not None
+    assert c.style.bold is True
+
+    # a second property set on the same cell reuses the same forked style
+    c.style.italic = True
+    assert c.attrs.get("table:style-name") == forked_name
+    assert c.style.bold is True and c.style.italic is True
+
+
+def test_setting_a_style_property_does_not_affect_other_cells(writable_reader):
+    s = writable_reader.sheet("Sheet2Repeat")
+    # A1/C1/D1 originally share one compressed, repeated cell element
+    s["A1"].style.bold = True
+    assert s["A1"].style.bold is True
+    assert s["C1"].style.bold is False
+    assert s["D1"].style.bold is False
+
+
+def test_setting_bold_forks_off_an_existing_named_style_as_parent(writable_reader):
+    # ce9 (assigned in the fixture) sets vertical/horizontal alignment;
+    # forking for .bold must keep that inherited via style:parent-style-name
+    s = writable_reader.sheet("Sheet1")
+    c = s["A7"]  # ce2, data-style N108 (currency) - has a parent chain to Default
+    before_align = c.style.horizontal_align
+    c.style.bold = True
+    assert c.style.bold is True
+    assert c.style.horizontal_align == before_align
+
+
+def test_underline_and_strikethrough(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    c = s["A1"]
+    c.style.underline = True
+    assert c.style.underline is True
+    c.style.strikethrough = True
+    assert c.style.strikethrough is True
+    c.style.underline = False
+    assert c.style.underline is False
+    assert c.style.strikethrough is True  # unrelated property untouched
+
+
+def test_colors_font_and_alignment(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    c = s["A1"]
+    c.style.font_color = "#FF0000"
+    c.style.background_color = "#00FF00"
+    c.style.font_family = "Liberation Sans"
+    c.style.font_size = "14pt"
+    c.style.vertical_align = "middle"
+    c.style.horizontal_align = "center"
+    assert c.style.font_color == "#FF0000"
+    assert c.style.background_color == "#00FF00"
+    assert c.style.font_family == "Liberation Sans"
+    assert c.style.font_size == "14pt"
+    assert c.style.vertical_align == "middle"
+    assert c.style.horizontal_align == "center"
+
+
+def test_rotation_writing_mode_wrap_shrink_protection(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    c = s["A1"]
+    c.style.rotation = 90
+    c.style.writing_mode = "tb-rl"
+    c.style.wrap_text = True
+    c.style.shrink_to_fit = True
+    c.style.protection = "protected"
+    assert c.style.rotation == 90
+    assert c.style.writing_mode == "tb-rl"
+    assert c.style.wrap_text is True
+    assert c.style.shrink_to_fit is True
+    assert c.style.protection == "protected"
+
+    c.style.rotation = None
+    assert c.style.rotation is None
+
+
+def test_text_position_and_super_subscript(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    c = s["A1"]
+    c.style.superscript = True
+    assert c.style.superscript is True
+    assert c.style.subscript is False
+    c.style.subscript = True
+    assert c.style.subscript is True
+    assert c.style.superscript is False
+    c.style.text_position = None
+    assert c.style.superscript is False and c.style.subscript is False
+
+
+def test_diagonals_none_reverts_to_inherited_while_literal_none_string_cancels(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    c = s["A1"]
+    c.style.diagonal_bl_tr = "0.5pt solid #808080"
+    assert c.style.diagonal_bl_tr == Border("0.5pt solid #808080")
+    c.style.diagonal_bl_tr = None  # removes the override entirely
+    assert c.style.diagonal_bl_tr is None
+    c.style.diagonal_bl_tr = "none"  # explicit cancel (still None on read)
+    assert c.style.diagonal_bl_tr is None
+
+
+def test_setting_one_border_side_preserves_the_other_three(writable_reader):
+    # ce9 is assigned to some Sheet1 cells with no border info at all here,
+    # so start from a cell with a pre-existing 4-side border to prove the
+    # "carry the other 3 sides over" behaviour actually matters
+    s = writable_reader.sheet("Sheet1")
+    c = s["A2"]
+    c.style.border_top = "0.5pt solid #000000"
+    c.style.border_left = "1pt solid #111111"
+    c.style.border_bottom = "1.5pt solid #222222"
+    c.style.border_right = "2pt solid #333333"
+
+    # now change only the top side - the other 3 must survive untouched
+    c.style.border_top = "3pt solid #FF0000"
+    assert c.style.border_top == Border("3pt solid #FF0000")
+    assert c.style.border_left == Border("1pt solid #111111")
+    assert c.style.border_bottom == Border("1.5pt solid #222222")
+    assert c.style.border_right == Border("2pt solid #333333")
+
+
+def test_border_side_set_to_none_writes_explicit_none(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    c = s["A1"]
+    c.style.border_top = "0.5pt solid #000000"
+    c.style.border_bottom = None
+    assert c.style.border_top == Border("0.5pt solid #000000")
+    assert c.style.border_bottom is None
+
+
+def test_assign_existing_number_format(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    percentage_format = s["A6"].style.number_format
+    assert percentage_format is not None
+
+    s["A1"].value = 0.5
+    s["A1"].style.number_format = percentage_format
+    assert s["A1"].style.number_format.name == percentage_format.name
+
+    s["A2"].style.number_format = percentage_format.name  # a bare style name also works
+    assert s["A2"].style.number_format.name == percentage_format.name
+
+    s["A2"].style.number_format = None
+    assert s["A2"].style.number_format is None
+
+
+def test_assign_unknown_number_format_raises(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(ValueError):
+        s["A1"].style.number_format = "NOT_A_REAL_STYLE"
+
+
+def test_style_write_without_owning_cell_raises(reader):
+    style = CellStyle(reader, name=None, cell=None)
+    with pytest.raises(RuntimeError):
+        style.bold = True
+
+
+def test_save_round_trip_after_style_writes(writable_reader, tmp_path):
+    s = writable_reader.sheet("Sheet1")
+    c = s["A1"]
+    c.style.bold = True
+    c.style.font_color = "#FF0000"
+    c.style.border_top = "0.5pt solid #000000"
+
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    reread = ODSReader(out).sheet("Sheet1")
+    style = reread["A1"].style
+    assert style.bold is True
+    assert style.font_color == "#FF0000"
+    assert style.border_top == Border("0.5pt solid #000000")
+
+
+# ---------------------------------------------------------------------------
+# Styles (écriture) : RowStyle / ColumnStyle / TableStyle
+# ---------------------------------------------------------------------------
+
+def test_row_style_write_forks_and_reuses(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    row0_before_name = s.row_style(0).name
+    s.row_style(0).height = "2cm"
+    forked_name = s.row_style(0).name
+    assert forked_name != row0_before_name
+    assert s.row_style(0).height == "2cm"
+
+    # a second write on the same row reuses the fork instead of forking again
+    s.row_style(0).optimal_height = False
+    assert s.row_style(0).name == forked_name
+    assert s.row_style(0).height == "2cm"  # carried over from the first write
+
+
+def test_row_style_write_carries_over_existing_properties(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    assert s.row_style(0).optimal_height is True  # ro1's original value
+    s.row_style(0).visible = False
+    # .height wasn't touched, but must still reflect ro1's original value,
+    # not silently reset just because a private style was forked
+    assert s.row_style(0).height == "0.452cm"
+    assert s.row_style(0).visible is False
+
+
+def test_row_style_visible_toggle(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s.row_style(0).visible = False
+    assert s.row_style(0).visible is False
+    s.row_style(0).visible = True
+    assert s.row_style(0).visible is True
+
+
+def test_column_style_write_forks_and_reuses(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    col0_before_name = s.column_style(0).name
+    s.column_style(0).width = "5cm"
+    forked_name = s.column_style(0).name
+    assert forked_name != col0_before_name
+    assert s.column_style(0).width == "5cm"
+    assert s.column_style(1).width == "4.251cm"  # unaffected sibling column
+
+
+def test_column_style_write_on_a_repeated_column_splits_it(writable_reader):
+    s = writable_reader.sheet("Sheet2Repeat")
+    assert s.column_style(3).name == s.column_style(5).name == "co1"
+    s.column_style(3).width = "3cm"
+    assert s.column_style(3).width == "3cm"
+    # sibling columns that shared the same repeated definition are untouched
+    assert s.column_style(5).width == "2.258cm"
+    assert s.column_style(4).width == "2.258cm"
+
+
+def test_table_style_write_forks_and_reuses(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    before_name = s.style.name
+    s.style.tab_color = "#123456"
+    forked_name = s.style.name
+    assert forked_name != before_name
+    assert s.style.tab_color == "#123456"
+
+    s.style.visible = False
+    assert s.style.name == forked_name  # reused, not re-forked
+    assert s.style.tab_color == "#123456"  # carried over
+    assert s.style.visible is False
+
+
+def test_style_write_without_owner_raises_for_row_column_table():
+    from odsslicer.classes import RowStyle, ColumnStyle, TableStyle
+
+    with pytest.raises(RuntimeError):
+        RowStyle(tag=None).height = "1cm"
+    with pytest.raises(RuntimeError):
+        ColumnStyle(tag=None).width = "1cm"
+    with pytest.raises(RuntimeError):
+        TableStyle(tag=None).tab_color = "#000000"
+
+
+def test_save_round_trip_after_row_column_table_style_writes(writable_reader, tmp_path):
+    s = writable_reader.sheet("Sheet1")
+    s.row_style(0).height = "2cm"
+    s.column_style(0).width = "5cm"
+    s.style.tab_color = "#123456"
+
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    reread = ODSReader(out).sheet("Sheet1")
+    assert reread.row_style(0).height == "2cm"
+    assert reread.column_style(0).width == "5cm"
+    assert reread.style.tab_color == "#123456"

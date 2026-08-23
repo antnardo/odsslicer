@@ -55,6 +55,8 @@ _ODF_NAMESPACES = {
     "office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0",
     "table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
     "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0",
+    "style": "urn:oasis:names:tc:opendocument:xmlns:style:1.0",
+    "fo": "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0",
 }
 
 
@@ -93,6 +95,38 @@ def _blank_template(root, tag_name):
     for child in list(new_tag.children):
         child.extract()
     return new_tag
+
+
+def _ensure_style_child(style_tag, tag_name):
+    """The `tag_name` properties child of `style_tag` (e.g.
+    `<style:table-cell-properties>` under a `<style:style>`), creating a
+    blank one (see `_blank_template`) if it isn't there yet."""
+    child = style_tag.find(tag_name)
+    if child is None:
+        child = _blank_template(style_tag, tag_name)
+        style_tag.append(child)
+    return child
+
+
+def _is_forked_style_name(name, prefix):
+    """True if `name` looks like one odsslicer itself generated for a
+    single owner (a specific cell/row/column/sheet) via `prefix` - safe to
+    mutate in place rather than fork again. Real documents don't use these
+    reserved prefixes in practice."""
+    return bool(name) and re.match(rf"^{re.escape(prefix)}\d+$", name) is not None
+
+
+def _border_to_raw(value):
+    """Normalize a border value accepted on write - a `Border`, a raw ODF
+    shorthand string (`"0.5pt solid #000000"`), or `None` - down to the raw
+    string form (or `None`)."""
+    if value is None:
+        return None
+    if isinstance(value, Border):
+        return value.raw
+    if isinstance(value, str):
+        return value
+    raise TypeError(f"expected a Border, str, or None, got {type(value)!r}")
 
 
 _FORMULA_LANGUAGE_PREFIX = re.compile(r"^[A-Za-z][\w.-]*:=")
@@ -860,17 +894,107 @@ class Cell:
     @property
     def style(self):
         """This cell's resolved `CellStyle` (visual formatting + real number
-        format), or `None` if it has no `table:style-name` at all. Read-only
-        for now - see `CellStyle`/`NumberFormat`.
+        format) - writable, see `CellStyle`. `None` only if the cell has no
+        owning `ODSReader` at all (nothing to resolve or create styles
+        against); a cell with no `table:style-name` yet still gets a
+        `CellStyle` back with every property `None`/`False` - setting any
+        writable property on it (e.g. `cell.style.bold = True`) gives the
+        cell its own style on the spot.
 
         `.number_format` is already resolved against this cell's own value
         when the format is conditional (e.g. currency shown in red only when
         negative) - see `NumberFormat.resolve`.
         """
-        name = self.attrs.get("table:style-name")
-        if not name or self.sheet is None or self.sheet.reader is None:
+        if self.sheet is None or self.sheet.reader is None:
             return None
-        return CellStyle(self.sheet.reader, name, value=self._value)
+        name = self.attrs.get("table:style-name")
+        return CellStyle(self.sheet.reader, name, value=self._value, cell=self)
+
+    _OWN_STYLE_PREFIX = "ocs"
+
+    def _ensure_own_style(self):
+        """This cell's own, uniquely-owned automatic style tag - safe to
+        mutate in place without affecting any other cell.
+
+        The first call forks one off the cell's current style (if any) as
+        `style:parent-style-name`, so every already-resolved property keeps
+        applying except the ones a later write explicitly overrides;
+        further calls (e.g. setting several properties one after another)
+        reuse that same forked style instead of forking again."""
+        self._prepare_for_write()
+        reader = self.sheet.reader
+        if reader is None:
+            raise RuntimeError(f"cell {self.address} has no owning ODSReader and cannot be styled")
+        current_name = self.attrs.get("table:style-name")
+        if _is_forked_style_name(current_name, self._OWN_STYLE_PREFIX):
+            tag = reader._find_style(current_name, family="table-cell")
+            if tag is not None:
+                return tag
+        tag = reader._new_style_tag("table-cell", self._OWN_STYLE_PREFIX, parent_style_name=current_name)
+        self.attrs["table:style-name"] = tag["style:name"]
+        return tag
+
+    @property
+    def is_merge_master(self):
+        """True if this cell is the top-left cell of a merged range (it
+        carries `table:number-rows-spanned`/`table:number-columns-spanned`
+        greater than 1)."""
+        return (
+            self.attrs.get("table:number-columns-spanned", "1") != "1"
+            or self.attrs.get("table:number-rows-spanned", "1") != "1"
+        )
+
+    @property
+    def is_covered(self):
+        """True if this cell is hidden inside another cell's merged range
+        (a `table:covered-table-cell`) - its own value/formatting is still
+        there in the XML, just not shown, until `Sheet.unmerge(...)`
+        reveals it again."""
+        return self.cell.name == "covered-table-cell"
+
+    @property
+    def is_merged(self):
+        """True if this cell participates in a merged range at all -
+        either as the master or as one of the covered cells."""
+        return self.is_merge_master or self.is_covered
+
+    @property
+    def merge_master(self):
+        """The top-left `Cell` of this cell's merged range - `self` if this
+        cell already is the master, or `None` if it isn't part of any merge
+        (or has no owning sheet to look the master up on)."""
+        if self.is_merge_master:
+            return self
+        if not self.is_covered or self.sheet is None:
+            return None
+        return self.sheet._find_merge_master(self.row, self.col)
+
+    @property
+    def merge_span(self):
+        """`(n_rows, n_cols)` spanned by this cell's merged range (from its
+        master's point of view), or `None` if this cell isn't merged."""
+        master = self.merge_master
+        if master is None:
+            return None
+        return (
+            int(master.attrs.get("table:number-rows-spanned", "1")),
+            int(master.attrs.get("table:number-columns-spanned", "1")),
+        )
+
+    @property
+    def merge_range(self):
+        """This cell's merged range as an `"A1:B2"`-style address string
+        (resolvable from any cell in the range, not just the master), or
+        `None` if it isn't merged."""
+        master = self.merge_master
+        if master is None:
+            return None
+        n_rows, n_cols = self.merge_span
+        start = Sheet.string_address(master.row, master.col)
+        if n_rows == 1 and n_cols == 1:
+            return start
+        end = Sheet.string_address(master.row + n_rows - 1, master.col + n_cols - 1)
+        return f"{start}:{end}"
 
 
 class Sheet:
@@ -1122,6 +1246,87 @@ class Sheet:
                     covered.cell.name = "table-cell"
                 covered.__init__(covered.cell, row=r, col=c, sheet=self)
 
+    def _resolve_range(self, address):
+        """Turn a range address - `"A1:C2"`, `"A1"`, a slice, or anything
+        else `sheet[...]` accepts - into `(row0, row1, col0, col1)`
+        (inclusive, 0-based) bounds, without actually reading any cell."""
+        if isinstance(address, str):
+            address = self.address(address, self.n_rows)
+        if isinstance(address, int):
+            return address, address, 0, self.n_cols - 1
+        if isinstance(address, slice):
+            start, stop, _ = self._unslice(address, row=True)
+            return start, stop - 1, 0, self.n_cols - 1
+        if isinstance(address, tuple) and len(address) == 2:
+            rows_address, cols_address = address
+            if isinstance(rows_address, int):
+                row0 = row1 = rows_address
+            else:
+                row0, stop, _ = self._unslice(rows_address, row=True)
+                row1 = stop - 1
+            if isinstance(cols_address, int):
+                col0 = col1 = cols_address
+            else:
+                col0, stop, _ = self._unslice(cols_address, col=True)
+                col1 = stop - 1
+            return row0, row1, col0, col1
+        raise ValueError(f"unrecognized range address: {address!r}")
+
+    def merge(self, address):
+        """Merge the cells in `address` (e.g. `"A1:C2"`, or any rectangular
+        selection accepted by `sheet[...]`) into one cell: the top-left
+        cell becomes the merge's master, keeping its value and gaining
+        `table:number-rows-spanned`/`table:number-columns-spanned`; every
+        other cell in the range becomes a `table:covered-table-cell` - its
+        value/formatting stays in the XML, just hidden, exactly as
+        `unmerge(...)` expects to find it (nothing is erased).
+
+        Grows the sheet first if `address` extends past its current
+        extent. Raises `ValueError` if the range is a single cell, or if
+        any cell in it is already part of a merge (`unmerge(...)` it
+        first)."""
+        row0, row1, col0, col1 = self._resolve_range(address)
+        if row0 == row1 and col0 == col1:
+            raise ValueError(f"{address!r} is a single cell - nothing to merge")
+        self.grow_to(row1, col1)
+        for r in range(row0, row1 + 1):
+            for c in range(col0, col1 + 1):
+                if self.rows[r][c].is_merged:
+                    raise ValueError(
+                        f"cell {Sheet.string_address(r, c)} is already part of a "
+                        "merged range - unmerge it first"
+                    )
+        for r in range(row0, row1 + 1):
+            for c in range(col0, col1 + 1):
+                self.materialize_cell(r, c)
+
+        master = self.rows[row0][col0]
+        master.cell.attrs["table:number-rows-spanned"] = str(row1 - row0 + 1)
+        master.cell.attrs["table:number-columns-spanned"] = str(col1 - col0 + 1)
+        for r in range(row0, row1 + 1):
+            for c in range(col0, col1 + 1):
+                if r == row0 and c == col0:
+                    continue
+                covered = self.rows[r][c]
+                covered.cell.name = "covered-table-cell"
+                covered.__init__(covered.cell, row=r, col=c, sheet=self)
+        master.__init__(master.cell, row=row0, col=col0, sheet=self)
+
+    def unmerge(self, address):
+        """Undo `merge(...)` for the merged range covering `address` (any
+        single cell within it, master or covered) - every cell in the
+        range becomes independent again, regaining whatever value/
+        formatting ODF was keeping hidden underneath it.
+
+        Raises `ValueError` if `address` doesn't resolve to a single cell,
+        or if that cell isn't part of any merged range."""
+        row0, row1, col0, col1 = self._resolve_range(address)
+        if row0 != row1 or col0 != col1:
+            raise ValueError(f"{address!r} must resolve to a single cell")
+        if not self.rows[row0][col0].is_merged:
+            raise ValueError(f"cell {Sheet.string_address(row0, col0)} is not part of a merged range")
+        self._unmerge(row0, col0)
+
     def _empty_cell_template(self):
         """A detached, blank `<table:table-cell/>` tag."""
         return _blank_template(self.table, "table:table-cell")
@@ -1194,26 +1399,24 @@ class Sheet:
 
     @property
     def style(self):
-        """This sheet's resolved `TableStyle` (e.g. `.tab_color`), or `None`
-        if it has no `table:style-name` or no owning `ODSReader`."""
-        name = self.table.attrs.get("table:style-name")
-        if not name or self.reader is None:
+        """This sheet's resolved, writable `TableStyle` (e.g. `.tab_color`
+        - see `TableStyle`), or `None` if there's no owning `ODSReader`."""
+        if self.reader is None:
             return None
-        tag = self.reader._find_style(name, family="table")
-        return TableStyle(tag) if tag is not None else None
+        name = self.table.attrs.get("table:style-name")
+        tag = self.reader._find_style(name, family="table") if name else None
+        return TableStyle(tag, sheet=self)
 
     def row_style(self, row):
-        """The resolved `RowStyle` for logical row `row`, or `None` if that
-        row has no `table:style-name`, is out of range, or there's no
+        """The resolved, writable `RowStyle` for logical row `row` (see
+        `RowStyle`), or `None` if `row` is out of range or there's no
         owning `ODSReader`."""
         if self.reader is None or row >= self.n_rows:
             return None
         row_tag = self.rows[row][0].cell.parent
         name = row_tag.attrs.get("table:style-name")
-        if not name:
-            return None
-        tag = self.reader._find_style(name, family="table-row")
-        return RowStyle(tag) if tag is not None else None
+        tag = self.reader._find_style(name, family="table-row") if name else None
+        return RowStyle(tag, sheet=self, row=row)
 
     def _find_column_tag(self, col):
         """The `<table:table-column>` covering logical column `col`
@@ -1226,20 +1429,94 @@ class Sheet:
             seen += n
         return None
 
+    def _unrepeat_column_tag(self, col):
+        """Split the `table:number-columns-repeated` column-definition tag
+        covering `col` into one independent `<table:table-column>` per
+        repetition (mirrors `_unrepeat_col`, but for column *definitions*
+        rather than cell data). Returns the tag now covering `col` alone -
+        already independent if it wasn't repeated to begin with."""
+        col_tag = self._find_column_tag(col)
+        n = int(col_tag.attrs.get("table:number-columns-repeated", "1"))
+        if n <= 1:
+            return col_tag
+
+        seen = 0
+        for tag in self.table.find_all("table:table-column", recursive=False):
+            if tag is col_tag:
+                start = seen
+                break
+            seen += int(tag.attrs.get("table:number-columns-repeated", "1"))
+
+        copies = [copy.deepcopy(col_tag) for _ in range(n)]
+        for c in copies:
+            c.attrs.pop("table:number-columns-repeated", None)
+        col_tag.replace_with(copies[0])
+        prev = copies[0]
+        for nxt in copies[1:]:
+            prev.insert_after(nxt)
+            prev = nxt
+        return copies[col - start]
+
     def column_style(self, col):
-        """The resolved `ColumnStyle` for logical column `col`, or `None` if
-        that column has no `table:style-name`, no `<table:table-column>`
-        covers it, or there's no owning `ODSReader`."""
+        """The resolved, writable `ColumnStyle` for logical column `col`
+        (see `ColumnStyle`), or `None` if no `<table:table-column>` covers
+        it or there's no owning `ODSReader`."""
         if self.reader is None:
             return None
         col_tag = self._find_column_tag(col)
         if col_tag is None:
             return None
         name = col_tag.attrs.get("table:style-name")
-        if not name:
-            return None
-        tag = self.reader._find_style(name, family="table-column")
-        return ColumnStyle(tag) if tag is not None else None
+        tag = self.reader._find_style(name, family="table-column") if name else None
+        return ColumnStyle(tag, sheet=self, col=col)
+
+    def _fork_style(self, current_name, family, prefix, props_tag_name):
+        """The single, uniquely-owned automatic style (see
+        `Cell._ensure_own_style` for the cell-level equivalent) behind one
+        row/column/sheet's `table:style-name`.
+
+        Unlike cell styles, row/column/sheet styles don't meaningfully use
+        `style:parent-style-name` inheritance in practice (see `RowStyle`/
+        `ColumnStyle`/`TableStyle`), so forking instead copies the current
+        style's properties over verbatim - otherwise a later write of just
+        one property (e.g. `.height`) would silently lose whatever else
+        (e.g. `.visible`) the previously-shared style carried, since these
+        are resolved from one single style tag rather than a chain."""
+        if _is_forked_style_name(current_name, prefix):
+            tag = self.reader._find_style(current_name, family=family)
+            if tag is not None:
+                return tag
+        old_tag = self.reader._find_style(current_name, family=family) if current_name else None
+        tag = self.reader._new_style_tag(family, prefix)
+        if old_tag is not None:
+            old_props = old_tag.find(props_tag_name)
+            if old_props is not None:
+                _ensure_style_child(tag, props_tag_name).attrs.update(old_props.attrs)
+        return tag
+
+    def _ensure_row_style(self, row):
+        self._unrepeat_row(row)
+        row_tag = self.rows[row][0].cell.parent
+        tag = self._fork_style(
+            row_tag.attrs.get("table:style-name"), "table-row", "ors", "style:table-row-properties"
+        )
+        row_tag.attrs["table:style-name"] = tag["style:name"]
+        return tag
+
+    def _ensure_column_style(self, col):
+        col_tag = self._unrepeat_column_tag(col)
+        tag = self._fork_style(
+            col_tag.attrs.get("table:style-name"), "table-column", "ocos", "style:table-column-properties"
+        )
+        col_tag.attrs["table:style-name"] = tag["style:name"]
+        return tag
+
+    def _ensure_table_style(self):
+        tag = self._fork_style(
+            self.table.attrs.get("table:style-name"), "table", "ots", "style:table-properties"
+        )
+        self.table.attrs["table:style-name"] = tag["style:name"]
+        return tag
 
     def empty_row(self, i=None, n_cols=None, start=0, slice=None):
         step = 1
@@ -1547,15 +1824,43 @@ class Border:
 
 class CellStyle:
     """Resolved visual formatting and number format behind a cell's
-    `table:style-name` - read-only. Walks the `style:parent-style-name`
-    inheritance chain (the nearest style to the cell wins for whichever
+    `table:style-name`. Walks the `style:parent-style-name` inheritance
+    chain on read (the nearest style to the cell wins for whichever
     property it sets directly; a property no style in the chain sets is
-    `None`). Look up a cell's style via `Cell.style`, not directly."""
+    `None`). Look up a cell's style via `Cell.style`, not directly.
+
+    Writable: setting a property (e.g. `cell.style.bold = True`) forks the
+    cell its own private automatic style on first use (see
+    `Cell._ensure_own_style`) - the cell's *own* value going forward, on
+    top of whatever it already inherited. `border_top`/`border_bottom`/
+    `border_left`/`border_right` accept a `Border`, a raw ODF shorthand
+    string (`"0.5pt solid #000000"`), or `None` (explicitly no border on
+    that side) - setting any one side re-writes all four explicitly on the
+    forked style, carrying the other three over from what's currently
+    resolved (see `CellStyle` border resolution below), so they don't
+    silently fall back to unstyled. `diagonal_bl_tr`/`diagonal_tl_br` take
+    the same three forms, but `None` simply removes the override (falls
+    back to whatever's inherited) - pass the literal string `"none"` to
+    force no diagonal regardless of inheritance.
+
+    Not yet writable: `.conditions` (conditional formatting via
+    `style:map`) and creating a brand new number format from scratch -
+    `number_format` can only be *assigned* an existing `NumberFormat` (or
+    its style name) already present in the document."""
 
     _BORDER_ATTRS = ("fo:border", "fo:border-top", "fo:border-bottom", "fo:border-left", "fo:border-right")
+    _BORDER_SIDE_ATTRS = {
+        "border_top": "fo:border-top",
+        "border_bottom": "fo:border-bottom",
+        "border_left": "fo:border-left",
+        "border_right": "fo:border-right",
+    }
 
-    def __init__(self, reader: "ODSReader", name: str, value=None):
+    def __init__(self, reader: "ODSReader", name: str, value=None, cell: "Cell" = None):
         self.name = name
+        self._reader = reader
+        self._cell = cell
+        self._value = value
         chain = []
         seen = set()
         current = reader._find_style(name, family="table-cell")
@@ -1572,47 +1877,45 @@ class CellStyle:
                     return child.attrs[attr]
             return None
 
-        self.bold = prop("style:text-properties", "fo:font-weight") == "bold"
-        self.italic = prop("style:text-properties", "fo:font-style") == "italic"
-        self.underline = prop("style:text-properties", "style:text-underline-style") not in (None, "none")
-        self.strikethrough = prop("style:text-properties", "style:text-line-through-style") not in (
+        self._bold = prop("style:text-properties", "fo:font-weight") == "bold"
+        self._italic = prop("style:text-properties", "fo:font-style") == "italic"
+        self._underline = prop("style:text-properties", "style:text-underline-style") not in (None, "none")
+        self._strikethrough = prop("style:text-properties", "style:text-line-through-style") not in (
             None,
             "none",
         )
-        self.font_family = prop("style:text-properties", "style:font-name")
-        self.font_color = prop("style:text-properties", "fo:color")
-        self.font_size = prop("style:text-properties", "fo:font-size")
-        self.background_color = prop("style:table-cell-properties", "fo:background-color")
-        self.vertical_align = prop("style:table-cell-properties", "style:vertical-align")
-        self.horizontal_align = prop("style:paragraph-properties", "fo:text-align")
+        self._font_family = prop("style:text-properties", "style:font-name")
+        self._font_color = prop("style:text-properties", "fo:color")
+        self._font_size = prop("style:text-properties", "fo:font-size")
+        self._background_color = prop("style:table-cell-properties", "fo:background-color")
+        self._vertical_align = prop("style:table-cell-properties", "style:vertical-align")
+        self._horizontal_align = prop("style:paragraph-properties", "fo:text-align")
         rotation = prop("style:table-cell-properties", "style:rotation-angle")
-        self.rotation = int(rotation) if rotation is not None else None
-        self.writing_mode = prop("style:table-cell-properties", "style:writing-mode")
-        self.wrap_text = prop("style:table-cell-properties", "fo:wrap-option") == "wrap"
-        self.shrink_to_fit = prop("style:table-cell-properties", "style:shrink-to-fit") == "true"
-        self.protection = prop("style:table-cell-properties", "style:cell-protect")
-        self.text_position = prop("style:text-properties", "style:text-position")
-        self.superscript = (self.text_position or "").startswith("super")
-        self.subscript = (self.text_position or "").startswith("sub")
-        self.diagonal_bl_tr = _make_border(prop("style:table-cell-properties", "style:diagonal-bl-tr"))
-        self.diagonal_tl_br = _make_border(prop("style:table-cell-properties", "style:diagonal-tl-br"))
+        self._rotation = int(rotation) if rotation is not None else None
+        self._writing_mode = prop("style:table-cell-properties", "style:writing-mode")
+        self._wrap_text = prop("style:table-cell-properties", "fo:wrap-option") == "wrap"
+        self._shrink_to_fit = prop("style:table-cell-properties", "style:shrink-to-fit") == "true"
+        self._protection = prop("style:table-cell-properties", "style:cell-protect")
+        self._text_position = prop("style:text-properties", "style:text-position")
+        self._diagonal_bl_tr = _make_border(prop("style:table-cell-properties", "style:diagonal-bl-tr"))
+        self._diagonal_tl_br = _make_border(prop("style:table-cell-properties", "style:diagonal-tl-br"))
 
         # Borders are resolved as a unit from the nearest style that defines
         # *any* border info (rather than merging per-side across inheritance
         # levels): within that one style, a specific side (fo:border-top...)
         # overrides the fo:border shorthand for that side, exactly as ODF
         # itself resolves it within a single style declaration.
-        self.border_top = self.border_bottom = self.border_left = self.border_right = None
+        self._border_top = self._border_bottom = self._border_left = self._border_right = None
         for style in chain:
             cell_props = style.find("style:table-cell-properties")
             if cell_props is None or not any(a in cell_props.attrs for a in self._BORDER_ATTRS):
                 continue
             attrs = cell_props.attrs
             shorthand = attrs.get("fo:border")
-            self.border_top = _make_border(attrs.get("fo:border-top", shorthand))
-            self.border_bottom = _make_border(attrs.get("fo:border-bottom", shorthand))
-            self.border_left = _make_border(attrs.get("fo:border-left", shorthand))
-            self.border_right = _make_border(attrs.get("fo:border-right", shorthand))
+            self._border_top = _make_border(attrs.get("fo:border-top", shorthand))
+            self._border_bottom = _make_border(attrs.get("fo:border-bottom", shorthand))
+            self._border_left = _make_border(attrs.get("fo:border-left", shorthand))
+            self._border_right = _make_border(attrs.get("fo:border-right", shorthand))
             break
 
         # raw, flattened property dicts as an escape hatch for anything not
@@ -1630,12 +1933,295 @@ class CellStyle:
         data_style_name = next(
             (s.get("style:data-style-name") for s in chain if s.get("style:data-style-name")), None
         )
-        self.number_format = None
+        self._number_format = None
         if data_style_name:
             number_tag = reader._find_number_style(data_style_name)
             if number_tag is not None:
                 base_format = NumberFormat(number_tag, reader=reader)
-                self.number_format = base_format.resolve(value) if value is not None else base_format
+                self._number_format = base_format.resolve(value) if value is not None else base_format
+
+    def _require_cell(self):
+        if self._cell is None:
+            raise RuntimeError(f"style {self.name!r} has no owning Cell and cannot be written to")
+
+    def _write_attr(self, props_tag_name, attr, raw_value):
+        """Set (or, if `raw_value` is `None`, remove) one attribute on this
+        cell's own automatic style."""
+        self._require_cell()
+        tag = self._cell._ensure_own_style()
+        if raw_value is None:
+            child = tag.find(props_tag_name)
+            if child is not None:
+                child.attrs.pop(attr, None)
+            return
+        _ensure_style_child(tag, props_tag_name).attrs[attr] = raw_value
+
+    def _write_border_sides(self, updates):
+        """Set 1+ of the 4 border sides, carrying the other (currently
+        resolved) sides along explicitly - see the class docstring."""
+        self._require_cell()
+        tag = self._cell._ensure_own_style()
+        values = {
+            "border_top": self._border_top,
+            "border_bottom": self._border_bottom,
+            "border_left": self._border_left,
+            "border_right": self._border_right,
+        }
+        values.update(updates)
+        props = _ensure_style_child(tag, "style:table-cell-properties")
+        props.attrs.pop("fo:border", None)
+        for key, value in values.items():
+            raw = _border_to_raw(value)
+            props.attrs[self._BORDER_SIDE_ATTRS[key]] = raw if raw is not None else "none"
+            setattr(self, f"_{key}", _make_border(raw))
+
+    @property
+    def bold(self):
+        return self._bold
+
+    @bold.setter
+    def bold(self, value):
+        self._write_attr("style:text-properties", "fo:font-weight", "bold" if value else "normal")
+        self._bold = bool(value)
+
+    @property
+    def italic(self):
+        return self._italic
+
+    @italic.setter
+    def italic(self, value):
+        self._write_attr("style:text-properties", "fo:font-style", "italic" if value else "normal")
+        self._italic = bool(value)
+
+    @property
+    def underline(self):
+        return self._underline
+
+    @underline.setter
+    def underline(self, value):
+        self._require_cell()
+        tag = self._cell._ensure_own_style()
+        props = _ensure_style_child(tag, "style:text-properties")
+        if value:
+            props.attrs["style:text-underline-style"] = "solid"
+            props.attrs["style:text-underline-width"] = "auto"
+            props.attrs["style:text-underline-color"] = "font-color"
+        else:
+            props.attrs["style:text-underline-style"] = "none"
+            props.attrs.pop("style:text-underline-width", None)
+            props.attrs.pop("style:text-underline-color", None)
+        self._underline = bool(value)
+
+    @property
+    def strikethrough(self):
+        return self._strikethrough
+
+    @strikethrough.setter
+    def strikethrough(self, value):
+        self._write_attr("style:text-properties", "style:text-line-through-style", "solid" if value else "none")
+        self._strikethrough = bool(value)
+
+    @property
+    def font_family(self):
+        return self._font_family
+
+    @font_family.setter
+    def font_family(self, value):
+        self._write_attr("style:text-properties", "style:font-name", value)
+        self._font_family = value
+
+    @property
+    def font_color(self):
+        return self._font_color
+
+    @font_color.setter
+    def font_color(self, value):
+        self._write_attr("style:text-properties", "fo:color", value)
+        self._font_color = value
+
+    @property
+    def font_size(self):
+        return self._font_size
+
+    @font_size.setter
+    def font_size(self, value):
+        self._write_attr("style:text-properties", "fo:font-size", value)
+        self._font_size = value
+
+    @property
+    def background_color(self):
+        return self._background_color
+
+    @background_color.setter
+    def background_color(self, value):
+        self._write_attr("style:table-cell-properties", "fo:background-color", value)
+        self._background_color = value
+
+    @property
+    def vertical_align(self):
+        return self._vertical_align
+
+    @vertical_align.setter
+    def vertical_align(self, value):
+        self._write_attr("style:table-cell-properties", "style:vertical-align", value)
+        self._vertical_align = value
+
+    @property
+    def horizontal_align(self):
+        return self._horizontal_align
+
+    @horizontal_align.setter
+    def horizontal_align(self, value):
+        self._write_attr("style:paragraph-properties", "fo:text-align", value)
+        self._horizontal_align = value
+
+    @property
+    def rotation(self):
+        return self._rotation
+
+    @rotation.setter
+    def rotation(self, value):
+        self._write_attr(
+            "style:table-cell-properties", "style:rotation-angle", None if value is None else str(int(value))
+        )
+        self._rotation = None if value is None else int(value)
+
+    @property
+    def writing_mode(self):
+        return self._writing_mode
+
+    @writing_mode.setter
+    def writing_mode(self, value):
+        self._write_attr("style:table-cell-properties", "style:writing-mode", value)
+        self._writing_mode = value
+
+    @property
+    def wrap_text(self):
+        return self._wrap_text
+
+    @wrap_text.setter
+    def wrap_text(self, value):
+        self._write_attr("style:table-cell-properties", "fo:wrap-option", "wrap" if value else "no-wrap")
+        self._wrap_text = bool(value)
+
+    @property
+    def shrink_to_fit(self):
+        return self._shrink_to_fit
+
+    @shrink_to_fit.setter
+    def shrink_to_fit(self, value):
+        self._write_attr("style:table-cell-properties", "style:shrink-to-fit", "true" if value else "false")
+        self._shrink_to_fit = bool(value)
+
+    @property
+    def protection(self):
+        return self._protection
+
+    @protection.setter
+    def protection(self, value):
+        self._write_attr("style:table-cell-properties", "style:cell-protect", value)
+        self._protection = value
+
+    @property
+    def text_position(self):
+        return self._text_position
+
+    @text_position.setter
+    def text_position(self, value):
+        self._write_attr("style:text-properties", "style:text-position", value)
+        self._text_position = value
+
+    @property
+    def superscript(self):
+        return (self._text_position or "").startswith("super")
+
+    @superscript.setter
+    def superscript(self, value):
+        self.text_position = "super 58%" if value else None
+
+    @property
+    def subscript(self):
+        return (self._text_position or "").startswith("sub")
+
+    @subscript.setter
+    def subscript(self, value):
+        self.text_position = "sub 58%" if value else None
+
+    @property
+    def diagonal_bl_tr(self):
+        return self._diagonal_bl_tr
+
+    @diagonal_bl_tr.setter
+    def diagonal_bl_tr(self, value):
+        raw = _border_to_raw(value)
+        self._write_attr("style:table-cell-properties", "style:diagonal-bl-tr", raw)
+        self._diagonal_bl_tr = _make_border(raw)
+
+    @property
+    def diagonal_tl_br(self):
+        return self._diagonal_tl_br
+
+    @diagonal_tl_br.setter
+    def diagonal_tl_br(self, value):
+        raw = _border_to_raw(value)
+        self._write_attr("style:table-cell-properties", "style:diagonal-tl-br", raw)
+        self._diagonal_tl_br = _make_border(raw)
+
+    @property
+    def border_top(self):
+        return self._border_top
+
+    @border_top.setter
+    def border_top(self, value):
+        self._write_border_sides({"border_top": value})
+
+    @property
+    def border_bottom(self):
+        return self._border_bottom
+
+    @border_bottom.setter
+    def border_bottom(self, value):
+        self._write_border_sides({"border_bottom": value})
+
+    @property
+    def border_left(self):
+        return self._border_left
+
+    @border_left.setter
+    def border_left(self, value):
+        self._write_border_sides({"border_left": value})
+
+    @property
+    def border_right(self):
+        return self._border_right
+
+    @border_right.setter
+    def border_right(self, value):
+        self._write_border_sides({"border_right": value})
+
+    @property
+    def number_format(self):
+        return self._number_format
+
+    @number_format.setter
+    def number_format(self, fmt):
+        self._require_cell()
+        tag = self._cell._ensure_own_style()
+        if fmt is None:
+            tag.attrs.pop("style:data-style-name", None)
+            self._number_format = None
+            return
+        if isinstance(fmt, NumberFormat):
+            name = fmt.name
+        elif isinstance(fmt, str):
+            name = fmt
+        else:
+            raise TypeError(f"number_format must be a NumberFormat, str, or None, got {type(fmt)!r}")
+        number_tag = self._cell.sheet.reader._find_number_style(name)
+        if number_tag is None:
+            raise ValueError(f"no number format named {name!r} exists in this document")
+        tag.attrs["style:data-style-name"] = name
+        self._number_format = NumberFormat(number_tag, reader=self._cell.sheet.reader)
 
     def __repr__(self):
         return (
@@ -1646,18 +2232,68 @@ class CellStyle:
 
 class RowStyle:
     """Resolved `<style:style style:family="table-row">` behind a row's
-    `table:style-name` - read-only, no inheritance chain (rows don't
-    meaningfully use `style:parent-style-name` in practice). Look up via
-    `Sheet.row_style(row)`, not directly."""
+    `table:style-name` - no inheritance chain (rows don't meaningfully use
+    `style:parent-style-name` in practice). Look up via
+    `Sheet.row_style(row)`, not directly.
 
-    def __init__(self, tag):
-        self.name = tag.get("style:name")
-        props = tag.find("style:table-row-properties")
-        self.height = props.attrs.get("style:row-height") if props is not None else None
-        self.optimal_height = (
+    Writable: setting `.height`/`.optimal_height`/`.visible` forks the row
+    its own private automatic style on first use (see
+    `Sheet._ensure_row_style`), carrying over whatever the row's current
+    style already had (all 3 properties come from one single style tag,
+    not a chain, so nothing here is resolved independently)."""
+
+    def __init__(self, tag, sheet: "Sheet" = None, row: int = None):
+        self._sheet = sheet
+        self._row = row
+        self.name = tag.get("style:name") if tag is not None else None
+        props = tag.find("style:table-row-properties") if tag is not None else None
+        self._height = props.attrs.get("style:row-height") if props is not None else None
+        self._optimal_height = (
             props is not None and props.attrs.get("style:use-optimal-row-height") == "true"
         )
-        self.visible = props is None or props.attrs.get("table:visibility", "visible") == "visible"
+        self._visible = props is None or props.attrs.get("table:visibility", "visible") == "visible"
+
+    def _require_owner(self):
+        if self._sheet is None or self._row is None:
+            raise RuntimeError(f"style {self.name!r} has no owning Sheet/row and cannot be written to")
+
+    @property
+    def height(self):
+        return self._height
+
+    @height.setter
+    def height(self, value):
+        self._require_owner()
+        props = _ensure_style_child(self._sheet._ensure_row_style(self._row), "style:table-row-properties")
+        if value is None:
+            props.attrs.pop("style:row-height", None)
+        else:
+            props.attrs["style:row-height"] = value
+        props.attrs["style:use-optimal-row-height"] = "false"
+        self._height = value
+        self._optimal_height = False
+
+    @property
+    def optimal_height(self):
+        return self._optimal_height
+
+    @optimal_height.setter
+    def optimal_height(self, value):
+        self._require_owner()
+        props = _ensure_style_child(self._sheet._ensure_row_style(self._row), "style:table-row-properties")
+        props.attrs["style:use-optimal-row-height"] = "true" if value else "false"
+        self._optimal_height = bool(value)
+
+    @property
+    def visible(self):
+        return self._visible
+
+    @visible.setter
+    def visible(self, value):
+        self._require_owner()
+        props = _ensure_style_child(self._sheet._ensure_row_style(self._row), "style:table-row-properties")
+        props.attrs["table:visibility"] = "visible" if value else "collapse"
+        self._visible = bool(value)
 
     def __repr__(self):
         return f"RowStyle(name={self.name!r}, height={self.height!r})"
@@ -1665,14 +2301,53 @@ class RowStyle:
 
 class ColumnStyle:
     """Resolved `<style:style style:family="table-column">` behind a
-    column's `table:style-name` - read-only, no inheritance chain. Look up
-    via `Sheet.column_style(col)`, not directly."""
+    column's `table:style-name` - no inheritance chain. Look up via
+    `Sheet.column_style(col)`, not directly.
 
-    def __init__(self, tag):
-        self.name = tag.get("style:name")
-        props = tag.find("style:table-column-properties")
-        self.width = props.attrs.get("style:column-width") if props is not None else None
-        self.visible = props is None or props.attrs.get("table:visibility", "visible") == "visible"
+    Writable: setting `.width`/`.visible` forks the column its own private
+    automatic style on first use (see `Sheet._ensure_column_style`),
+    carrying over whatever the column's current style already had."""
+
+    def __init__(self, tag, sheet: "Sheet" = None, col: int = None):
+        self._sheet = sheet
+        self._col = col
+        self.name = tag.get("style:name") if tag is not None else None
+        props = tag.find("style:table-column-properties") if tag is not None else None
+        self._width = props.attrs.get("style:column-width") if props is not None else None
+        self._visible = props is None or props.attrs.get("table:visibility", "visible") == "visible"
+
+    def _require_owner(self):
+        if self._sheet is None or self._col is None:
+            raise RuntimeError(f"style {self.name!r} has no owning Sheet/column and cannot be written to")
+
+    @property
+    def width(self):
+        return self._width
+
+    @width.setter
+    def width(self, value):
+        self._require_owner()
+        props = _ensure_style_child(
+            self._sheet._ensure_column_style(self._col), "style:table-column-properties"
+        )
+        if value is None:
+            props.attrs.pop("style:column-width", None)
+        else:
+            props.attrs["style:column-width"] = value
+        self._width = value
+
+    @property
+    def visible(self):
+        return self._visible
+
+    @visible.setter
+    def visible(self, value):
+        self._require_owner()
+        props = _ensure_style_child(
+            self._sheet._ensure_column_style(self._col), "style:table-column-properties"
+        )
+        props.attrs["table:visibility"] = "visible" if value else "collapse"
+        self._visible = bool(value)
 
     def __repr__(self):
         return f"ColumnStyle(name={self.name!r}, width={self.width!r})"
@@ -1680,14 +2355,49 @@ class ColumnStyle:
 
 class TableStyle:
     """Resolved `<style:style style:family="table">` behind a sheet's
-    `table:style-name` - read-only, no inheritance chain. Look up via
-    `Sheet.style`, not directly."""
+    `table:style-name` - no inheritance chain. Look up via `Sheet.style`,
+    not directly.
 
-    def __init__(self, tag):
-        self.name = tag.get("style:name")
-        props = tag.find("style:table-properties")
-        self.tab_color = props.attrs.get("table:tab-color") if props is not None else None
-        self.visible = props is None or props.attrs.get("table:display", "true") != "false"
+    Writable: setting `.tab_color`/`.visible` forks the sheet its own
+    private automatic style on first use (see
+    `Sheet._ensure_table_style`), carrying over whatever the sheet's
+    current style already had."""
+
+    def __init__(self, tag, sheet: "Sheet" = None):
+        self._sheet = sheet
+        self.name = tag.get("style:name") if tag is not None else None
+        props = tag.find("style:table-properties") if tag is not None else None
+        self._tab_color = props.attrs.get("table:tab-color") if props is not None else None
+        self._visible = props is None or props.attrs.get("table:display", "true") != "false"
+
+    def _require_owner(self):
+        if self._sheet is None:
+            raise RuntimeError(f"style {self.name!r} has no owning Sheet and cannot be written to")
+
+    @property
+    def tab_color(self):
+        return self._tab_color
+
+    @tab_color.setter
+    def tab_color(self, value):
+        self._require_owner()
+        props = _ensure_style_child(self._sheet._ensure_table_style(), "style:table-properties")
+        if value is None:
+            props.attrs.pop("table:tab-color", None)
+        else:
+            props.attrs["table:tab-color"] = value
+        self._tab_color = value
+
+    @property
+    def visible(self):
+        return self._visible
+
+    @visible.setter
+    def visible(self, value):
+        self._require_owner()
+        props = _ensure_style_child(self._sheet._ensure_table_style(), "style:table-properties")
+        props.attrs["table:display"] = "true" if value else "false"
+        self._visible = bool(value)
 
     def __repr__(self):
         return f"TableStyle(name={self.name!r}, tab_color={self.tab_color!r})"
@@ -1744,6 +2454,46 @@ class ODSReader:
         return self.data.find(_NUMBER_STYLE_TAGS, attrs={"style:name": name}) or self.styles_data.find(
             _NUMBER_STYLE_TAGS, attrs={"style:name": name}
         )
+
+    def _automatic_styles(self):
+        """The `<office:automatic-styles>` element in `content.xml` - the
+        only place a newly created style can go and still survive `save()`
+        (styles already in `styles.xml` are copied through unchanged, see
+        `save()`)."""
+        styles = self.data.find("office:automatic-styles")
+        if styles is None:
+            styles = _new_qualified_tag("office:automatic-styles")
+            body = self.data.find("office:body")
+            if body is not None:
+                body.insert_before(styles)
+            else:
+                self.data.append(styles)
+        return styles
+
+    def _new_style_name(self, prefix):
+        """A `style:name` not already used by any style in the document
+        (either file), of the form `f"{prefix}{n}"` for the smallest
+        available `n`."""
+        pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+        max_n = 0
+        for doc in (self.data, self.styles_data):
+            for tag in doc.find_all(attrs={"style:name": True}):
+                m = pattern.match(tag.get("style:name") or "")
+                if m:
+                    max_n = max(max_n, int(m.group(1)))
+        return f"{prefix}{max_n + 1}"
+
+    def _new_style_tag(self, family, prefix, parent_style_name=None):
+        """A brand new, empty `<style:style style:family=family>` with a
+        fresh unique name, already inserted into `content.xml`'s automatic
+        styles."""
+        tag = _blank_template(self.data, "style:style")
+        tag.attrs["style:name"] = self._new_style_name(prefix)
+        tag.attrs["style:family"] = family
+        if parent_style_name:
+            tag.attrs["style:parent-style-name"] = parent_style_name
+        self._automatic_styles().append(tag)
+        return tag
 
     _TEMPLATE_PATH = Path(__file__).parent / "_template.ods"
 

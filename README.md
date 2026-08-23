@@ -10,20 +10,20 @@ The module parses `content.xml` directly (via BeautifulSoup) and handles ODF cel
 (text, number, percentage, currency, date, time, boolean), formulas, as well as repeated and
 merged rows/columns.
 
-Write support: `cell.value = ...` then `reader.save(...)`. Repeated or merged cells are
-automatically unrolled/unmerged in the background on first write access, and writing beyond a
-sheet's current extent grows it automatically (new rows/columns) — see
+Write support: `cell.value = ...`, `cell.formula = ...`, `cell.style.bold = ...` (and other
+formatting properties), `sheet.merge(...)`/`.unmerge(...)`, new sheets, even brand new files
+from scratch — then `reader.save(...)`. Repeated or merged cells are automatically
+unrolled/unmerged in the background on first write access, and writing beyond a sheet's
+current extent grows it automatically (new rows/columns) — see
 [Writing](#writing-experimental) below for details and remaining limitations.
 
 ## Installation
 
-Not published on PyPI yet. Install directly from GitHub in the meantime:
-
 ```bash
-pip install git+https://github.com/antnardo/odsslicer.git
+pip install odsslicer
 ```
 
-Or clone it and install it editable (for local development):
+Or install straight from GitHub, or clone it and install it editable (for local development):
 
 ```bash
 git clone https://github.com/antnardo/odsslicer.git
@@ -163,6 +163,37 @@ under `table:covered-table-cell`, exactly as LibreOffice would when manually un-
 `Cell` objects already obtained before the write remain valid and are automatically repointed
 to their new individual XML element; `sheet.size` never changes as a result of unrolling (the
 logical row/column count was already that value).
+
+### Merged cells
+
+A cell's merge state is directly readable, without triggering the automatic un-merging above:
+
+```python
+cell.is_merged           # True for either the master or one of the hidden/covered cells
+cell.is_merge_master     # True only for the top-left cell of the range
+cell.is_covered          # True only for a hidden `table:covered-table-cell`
+cell.merge_master        # the top-left Cell of the range, from any cell in it - or None
+cell.merge_span          # (n_rows, n_cols), or None
+cell.merge_range         # "A1:C2"-style address string, or None
+```
+
+`Sheet.merge(address)` merges a rectangular selection (any address `sheet[...]` accepts, e.g.
+`"A1:C2"`) into one cell: the top-left cell becomes the master and keeps its value; every
+other cell becomes a hidden `table:covered-table-cell` — nothing is erased, its value/
+formatting just stops showing, exactly like `unmerge` (below) expects to find it. Grows the
+sheet first if needed; raises `ValueError` for a single-cell range or if any cell in it is
+already part of a merge.
+
+`Sheet.unmerge(address)` undoes the merge covering `address` (any single cell in the range,
+master or covered) — every cell becomes independent again and reveals whatever value ODF was
+keeping hidden underneath it. Raises `ValueError` if `address` isn't a single cell, or isn't
+part of any merge.
+
+```python
+sheet.merge("A1:C2")
+sheet["A1"].merge_range     # "A1:C2"
+sheet.unmerge("B2")         # any cell in the range works, not just the master
+```
 
 ### Automatic sheet growth
 
@@ -409,13 +440,14 @@ A malformed address (`"1A"`, `"A:2"`, `"2:A"`, `"B:A"`...) raises a `ValueError`
 the usual spreadsheet bijective base-26 numbering (`Z` = 25, `AA` = 26, `AZ` = 51, `BA` =
 52...).
 
-## Styles (read-only)
+## Styles
 
 `Cell.style` resolves a cell's actual formatting (as opposed to `odsslicer`'s own
-value/text/format detection above) — `None` if the cell has no `table:style-name` at all. It
-returns a `CellStyle`. All the classes below are also importable directly from the top-level
-package (`from odsslicer import CellStyle, NumberFormat, Border, RowStyle, ColumnStyle,
-TableStyle`), e.g. for type hints:
+value/text/format detection above) and is writable — `None` only if the cell has no owning
+`ODSReader` at all; a cell with no `table:style-name` yet still returns a `CellStyle` (every
+property `None`/`False`) that a write turns into a real one. All the classes below are also
+importable directly from the top-level package (`from odsslicer import CellStyle,
+NumberFormat, Border, RowStyle, ColumnStyle, TableStyle`), e.g. for type hints:
 
 ```python
 sheet["A7"].style.bold                            # False
@@ -475,6 +507,51 @@ nearest style that defines any border info at all, rather than mixing individual
 levels). `.cell_properties`/`.text_properties` expose the raw, flattened attribute dicts as
 an escape hatch for anything not surfaced as a named property above.
 
+### Writing cell styles
+
+Every property listed above except `.conditions` is writable:
+
+```python
+sheet["A1"].style.bold = True
+sheet["A1"].style.font_color = "#FF0000"
+sheet["A1"].style.background_color = "#FFFF00"
+sheet["A1"].style.border_top = "0.5pt solid #000000"   # a Border also works
+sheet["A1"].style.horizontal_align = "center"
+sheet["A1"].style.wrap_text = True
+```
+
+The first write on a given cell forks it its own private automatic style — off the cell's
+current style as `style:parent-style-name`, so every other already-resolved property (from
+the old, possibly shared, style) keeps applying — and reuses that same forked style for every
+later write on the same cell, so setting several properties one after another never affects
+any other cell that used to share the original style:
+
+```python
+sheet["A1"].attrs.get("table:style-name")   # None, or some shared style like "ce9"
+sheet["A1"].style.bold = True
+sheet["A1"].attrs.get("table:style-name")   # "ocs1" - a new style, private to A1
+sheet["A1"].style.italic = True             # reuses "ocs1", doesn't fork again
+```
+
+`border_top`/`border_bottom`/`border_left`/`border_right` accept a `Border`, a raw ODF
+shorthand string (`"0.5pt solid #000000"`), or `None`. Because the 4 sides resolve as one
+block from a single style (see above), setting just one side also re-writes the other three
+explicitly from whatever's currently resolved, so they're never silently lost; `None` cancels
+a side outright (writes literal `"none"`, same as ODF itself uses to override an inherited
+border). `diagonal_bl_tr`/`diagonal_tl_br` resolve independently instead, so `None` there just
+removes the override (falls back to whatever's inherited) — pass the string `"none"` for an
+explicit "no diagonal regardless of inheritance".
+
+`number_format` can be *assigned* an existing `NumberFormat` (or its style name, as a plain
+string) already present in the document — e.g. copying the format from another cell:
+
+```python
+sheet["B1"].style.number_format = sheet["A7"].style.number_format   # or = "N108"
+```
+
+Creating a brand new number format from scratch, and writing `.conditions` (conditional
+formatting), aren't supported yet — assign an existing one instead.
+
 ### Row, column and sheet styles
 
 `Sheet.row_style(row)` / `Sheet.column_style(col)` / `Sheet.style` resolve the same way, for
@@ -487,17 +564,27 @@ sheet.column_style(0).width      # e.g. "2.258cm", or None
 sheet.style.tab_color            # the sheet tab's color, or None
 ```
 
-`RowStyle`: `.height`, `.optimal_height` (bool), `.visible`. `ColumnStyle`: `.width`,
-`.visible`. `TableStyle`: `.tab_color`, `.visible`. Any of the three is `None` if the
-row/column/sheet has no `table:style-name`, is out of range (rows/columns), or the `Sheet`
-has no owning `ODSReader` (e.g. one built directly from a bare tag rather than via
-`ODSReader.sheet()`/`.add_sheet()`).
+`RowStyle`: `.height`, `.optimal_height` (bool), `.visible` — all writable. `ColumnStyle`:
+`.width`, `.visible` — writable. `TableStyle`: `.tab_color`, `.visible` — writable. Any of the
+three is `None` if it's out of range (rows/columns) or the `Sheet` has no owning `ODSReader`
+(e.g. one built directly from a bare tag rather than via `ODSReader.sheet()`/`.add_sheet()`).
 
-Not yet supported: writing/changing styles (this is read-only for now), and `odsslicer`'s
-own value/text heuristics (see [Writing formulas](#writing-formulas) and
+```python
+sheet.row_style(0).height = "1cm"
+sheet.column_style(0).width = "5cm"
+sheet.style.tab_color = "#FF0000"
+```
+
+Like cell styles, the first write on a given row/column/sheet forks it a private automatic
+style, reused on every later write on the same row/column/sheet — but since these don't chain
+via `style:parent-style-name`, the fork instead copies the current style's properties over
+verbatim, so setting only `.height` doesn't silently reset `.visible`/`.optimal_height` to
+their defaults.
+
+`odsslicer`'s own value/text heuristics (see [Writing formulas](#writing-formulas) and
 [Displayed text](#displayed-text-learned-from-an-example-rather-than-a-raw-conversion) above)
-don't consult `.number_format` either — they still learn from another cell's example rather
-than reading the real format.
+don't consult `.number_format` either way — they still learn from another cell's example
+rather than reading or writing the real format.
 
 ## Known limitations
 
