@@ -11,11 +11,13 @@ The module parses `content.xml` directly (via BeautifulSoup) and handles ODF cel
 merged rows/columns.
 
 Write support: `cell.value = ...`, `cell.formula = ...`, `cell.style.bold = ...` (and other
-formatting properties), `sheet.merge(...)`/`.unmerge(...)`, new sheets, even brand new files
-from scratch — then `reader.save(...)`. Repeated or merged cells are automatically
-unrolled/unmerged in the background on first write access, and writing beyond a sheet's
-current extent grows it automatically (new rows/columns) — see
-[Writing](#writing-experimental) below for details and remaining limitations.
+formatting properties, including creating number formats and conditional formatting from
+scratch), `sheet.merge(...)`/`.unmerge(...)`, `sheet.copy(...)`, `sheet.delete_row(...)`/
+`.delete_column(...)`/`table.delete_sheet(...)`, new sheets, even brand new files from scratch
+— then `reader.save(...)`. Repeated or merged cells are automatically unrolled/unmerged in the
+background on first write access, and writing beyond a sheet's current extent grows it
+automatically (new rows/columns) — see [Writing](#writing-experimental) below for details and
+remaining limitations.
 
 ## Installation
 
@@ -227,6 +229,40 @@ sheet["A1"].value = "Total"     # grows it like any other sheet, see above
 
 Raises a `ValueError` for an empty name or one that's already used by another sheet in the
 document. Like grown rows/cells, the new sheet carries no particular style.
+
+### Deleting rows, columns and sheets
+
+```python
+sheet.delete_row(3)        # shifts every row below it up by one
+sheet.delete_column(0)     # shifts every column to its right left by one
+table.delete_sheet("Data")
+```
+
+Any merge intersecting the removed row/column is undone first (see [Merged
+cells](#merged-cells) below) rather than left with a now-wrong span — there's no general way to
+"shrink" a span by one row/column instead. `delete_row`/`delete_column` raise `IndexError` for
+an out-of-range index; `delete_sheet` raises `IndexError` for an unknown name and `ValueError`
+for the document's last remaining sheet (an ODF spreadsheet needs at least one). **Formula
+references elsewhere are not adjusted** — no calculation engine, see [Writing
+formulas](#writing-formulas) below — a formula referring to a row/column that shifted keeps its
+old, now-wrong address.
+
+### Copying cells and ranges
+
+`Sheet.copy(source, dest)` copies a cell or rectangular range onto `dest` (its top-left
+corner), like a spreadsheet's copy-paste — value, formula (shifted the same way `Cell.
+fill_formula` shifts it: a relative reference like `A1` moves with the copy, `$A$1` stays put),
+and style all come along:
+
+```python
+sheet.copy("A1", "C1")           # single cell
+sheet.copy("A1:B2", "D5")        # a whole range, same shape at the new anchor
+```
+
+Grows the sheet first if `dest` extends past its current extent, and is safe when `source` and
+`dest` overlap (every source cell is read before any destination cell is written). A merged
+source cell copies whatever value/style it individually carries (its own hidden value, if it's
+a covered cell) — the merge itself is not replicated at the destination.
 
 ### Creating a new file from scratch
 
@@ -533,6 +569,18 @@ sheet["A1"].attrs.get("table:style-name")   # "ocs1" - a new style, private to A
 sheet["A1"].style.italic = True             # reuses "ocs1", doesn't fork again
 ```
 
+Copy a whole style from one cell to another in one shot by assigning `Cell.style` itself:
+
+```python
+sheet["B1"].style = sheet["A1"].style   # or = sheet["A1"], or = "ce9" (a raw style name)
+sheet["B1"].style = None                # clears B1's style
+```
+
+This points the target at the *same* underlying style as the source rather than deep-copying
+its properties — safe even if that style is shared with many other cells, since setting an
+individual property later (`sheet["B1"].style.bold = True`) forks a private copy on the spot,
+same as above, without affecting the source or anything else that still uses it.
+
 `border_top`/`border_bottom`/`border_left`/`border_right` accept a `Border`, a raw ODF
 shorthand string (`"0.5pt solid #000000"`), or `None`. Because the 4 sides resolve as one
 block from a single style (see above), setting just one side also re-writes the other three
@@ -542,15 +590,33 @@ border). `diagonal_bl_tr`/`diagonal_tl_br` resolve independently instead, so `No
 removes the override (falls back to whatever's inherited) — pass the string `"none"` for an
 explicit "no diagonal regardless of inheritance".
 
-`number_format` can be *assigned* an existing `NumberFormat` (or its style name, as a plain
-string) already present in the document — e.g. copying the format from another cell:
+`number_format` can be *assigned* an existing `NumberFormat` already present in the document
+(or its style name, as a plain string), or one built from scratch with `NumberFormat.create`:
 
 ```python
 sheet["B1"].style.number_format = sheet["A7"].style.number_format   # or = "N108"
+
+pct = NumberFormat.create(table, "percentage", decimal_places=1)
+sheet["C1"].style.number_format = pct
 ```
 
-Creating a brand new number format from scratch, and writing `.conditions` (conditional
-formatting), aren't supported yet — assign an existing one instead.
+`create(reader, family, ...)` supports `family="number"`/`"percentage"`/`"currency"`/`"date"`/
+`"time"`/`"boolean"`: `decimal_places`/`grouping`/`min_integer_digits` for the numeric
+families, `currency_symbol` (required for `"currency"`), `components` (required for `"date"`/
+`"time"` — the same ordered `[(component, style_or_text), ...]` list `.components` itself
+already exposes on read), and `font_color` for any family.
+
+Conditional formatting (`.conditions`) is writable too, via `.add_condition(condition, target)`
+on an existing `NumberFormat` — `target` (another `NumberFormat`, already in the document)
+applies instead whenever `condition` (ODF's `"value()>=0"`-style syntax) matches, same as
+`.resolve(value)` already reads. The classic red-negative-currency pattern:
+
+```python
+positive = NumberFormat.create(table, "currency", decimal_places=2, currency_symbol="€")
+negative = NumberFormat.create(table, "currency", decimal_places=2, currency_symbol="€", font_color="#FF0000")
+positive.add_condition("value()<0", negative)
+sheet["A1"].style.number_format = positive
+```
 
 ### Row, column and sheet styles
 

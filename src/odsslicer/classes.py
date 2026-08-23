@@ -57,6 +57,7 @@ _ODF_NAMESPACES = {
     "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0",
     "style": "urn:oasis:names:tc:opendocument:xmlns:style:1.0",
     "fo": "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0",
+    "number": "urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0",
 }
 
 
@@ -548,6 +549,12 @@ class Cell:
 
         self.is_formula = self._formula is not None
         self.is_empty = self._compute_is_empty()
+        # tracks the style forked by _ensure_own_style, if any - a Python-side
+        # attribute rather than a "does the name look forked" check on
+        # `table:style-name`, since `cell.style = other_cell.style`/`Sheet.copy`
+        # can legitimately point two different cells at the very same forked
+        # style name, and a name-based check can't tell those apart.
+        self._own_style_name = None
 
     @property
     def value(self):
@@ -910,28 +917,63 @@ class Cell:
         name = self.attrs.get("table:style-name")
         return CellStyle(self.sheet.reader, name, value=self._value, cell=self)
 
+    @style.setter
+    def style(self, other):
+        """Copy another cell's whole style onto this one in one shot -
+        `cell.style = other_cell.style`, `= other_cell`, or `= "ce9"` (a
+        raw style name) all work; `= None` clears this cell's style.
+
+        This points this cell at the *same* underlying style as `other`
+        (or the named one) rather than deep-copying its properties - safe
+        even if that style is shared with many other cells, since setting
+        any individual property later (`cell.style.bold = True`) forks a
+        private copy on the spot (see `_ensure_own_style`) without
+        affecting `other` or anything else that still uses it."""
+        self._prepare_for_write()
+        if other is None:
+            name = None
+        elif isinstance(other, CellStyle):
+            name = other.name
+        elif isinstance(other, Cell):
+            name = other.attrs.get("table:style-name")
+        elif isinstance(other, str):
+            name = other
+        else:
+            raise TypeError(f"cell.style must be a CellStyle, Cell, str, or None, got {type(other)!r}")
+        if name is None:
+            self.attrs.pop("table:style-name", None)
+        else:
+            self.attrs["table:style-name"] = name
+
     _OWN_STYLE_PREFIX = "ocs"
 
     def _ensure_own_style(self):
         """This cell's own, uniquely-owned automatic style tag - safe to
-        mutate in place without affecting any other cell.
+        mutate in place without affecting any other cell, even one that
+        currently points at the very same style name (e.g. right after
+        `cell.style = other_cell.style`, or `Sheet.copy`).
 
         The first call forks one off the cell's current style (if any) as
         `style:parent-style-name`, so every already-resolved property keeps
         applying except the ones a later write explicitly overrides;
-        further calls (e.g. setting several properties one after another)
-        reuse that same forked style instead of forking again."""
+        further calls on this same `Cell` (e.g. setting several properties
+        one after another) reuse that same forked style instead of forking
+        again - tracked via `self._own_style_name`, a Python-side flag
+        rather than a check on the style name's shape, since two different
+        cells can legitimately share a forked-looking name and a
+        name-based check can't tell those apart."""
         self._prepare_for_write()
         reader = self.sheet.reader
         if reader is None:
             raise RuntimeError(f"cell {self.address} has no owning ODSReader and cannot be styled")
         current_name = self.attrs.get("table:style-name")
-        if _is_forked_style_name(current_name, self._OWN_STYLE_PREFIX):
+        if self._own_style_name is not None and current_name == self._own_style_name:
             tag = reader._find_style(current_name, family="table-cell")
             if tag is not None:
                 return tag
         tag = reader._new_style_tag("table-cell", self._OWN_STYLE_PREFIX, parent_style_name=current_name)
         self.attrs["table:style-name"] = tag["style:name"]
+        self._own_style_name = tag["style:name"]
         return tag
 
     @property
@@ -1327,6 +1369,53 @@ class Sheet:
             raise ValueError(f"cell {Sheet.string_address(row0, col0)} is not part of a merged range")
         self._unmerge(row0, col0)
 
+    def copy(self, source, dest):
+        """Copy the cells in `source` (any address `sheet[...]` accepts,
+        e.g. `"A1:B2"` or a single cell) onto `dest` (the *top-left*
+        address of the target range - the copy always has the same shape
+        as `source`, any larger selection there is ignored) - like a
+        spreadsheet's copy-paste: value, formula (shifted the same way
+        `Cell.fill_formula` shifts it - a relative reference like `A1`
+        moves with the copy, `$A$1` stays put), and style (see
+        `Cell.style`'s setter - the destination points at the same
+        underlying style as the source, forking its own private copy only
+        once something on it is actually changed) all come along.
+
+        Grows the sheet first if `dest` extends past its current extent.
+        Safe when `source` and `dest` overlap (every source cell is read
+        before any destination cell is written). A merged source cell
+        copies whatever value/style it individually carries (its own
+        hidden value, if it's a covered cell) - the merge itself is not
+        replicated at the destination.
+        """
+        row0, row1, col0, col1 = self._resolve_range(source)
+        dest_row0, _, dest_col0, _ = self._resolve_range(dest)
+        n_rows, n_cols = row1 - row0 + 1, col1 - col0 + 1
+        self.grow_to(dest_row0 + n_rows - 1, dest_col0 + n_cols - 1)
+
+        snapshot = [
+            [
+                (
+                    self.get_cell(r, c).value,
+                    self.get_cell(r, c).formula,
+                    self.get_cell(r, c).attrs.get("table:style-name"),
+                )
+                for c in range(col0, col1 + 1)
+            ]
+            for r in range(row0, row1 + 1)
+        ]
+
+        drow, dcol = dest_row0 - row0, dest_col0 - col0
+        for i in range(n_rows):
+            for j in range(n_cols):
+                value, formula, style_name = snapshot[i][j]
+                target = self.rows[dest_row0 + i][dest_col0 + j]
+                if formula is not None:
+                    target.formula = _shift_odf_formula(formula, drow, dcol)
+                else:
+                    target.value = value
+                target.style = style_name
+
     def _empty_cell_template(self):
         """A detached, blank `<table:table-cell/>` tag."""
         return _blank_template(self.table, "table:table-cell")
@@ -1393,6 +1482,62 @@ class Sheet:
             following = stray.find_next_sibling("table:table-row")
             stray.decompose()
             stray = following
+
+    def delete_row(self, row):
+        """Remove logical row `row` entirely, shifting every row below it
+        up by one (`sheet.size` shrinks accordingly).
+
+        Any merge intersecting `row` (master, covered, or entirely on
+        another row but spanning through it) is undone first (see
+        `unmerge`) rather than left with a now-wrong span - there's no
+        general way to "shrink" a span by one row instead. Formula
+        references elsewhere in the sheet are **not** adjusted (no
+        calculation engine, see the README) - a formula referring to a
+        row below the one removed keeps its old, now-off-by-one address.
+        """
+        if row < 0 or row >= self.n_rows:
+            raise IndexError(f"row {row} out of range (sheet has {self.n_rows} rows)")
+        c = 0
+        while c < self.n_cols:
+            if self.rows[row][c].is_merged:
+                self._unmerge(row, c)
+            c += 1
+
+        self._unrepeat_row(row)
+        self.rows[row][0].cell.parent.decompose()
+        del self.rows[row]
+        for r in range(row, len(self.rows)):
+            for cell in self.rows[r]:
+                cell.row = r
+        self.n_rows = len(self.rows)
+        self.size = (self.n_rows, self.n_cols)
+
+    def delete_column(self, col):
+        """Remove logical column `col` entirely, shifting every column to
+        its right left by one (`sheet.size` shrinks accordingly).
+
+        Any merge intersecting `col` is undone first, same as
+        `delete_row`; formula references elsewhere are **not** adjusted,
+        same caveat as `delete_row`.
+        """
+        if col < 0 or col >= self.n_cols:
+            raise IndexError(f"column {col} out of range (sheet has {self.n_cols} columns)")
+        r = 0
+        while r < self.n_rows:
+            if self.rows[r][col].is_merged:
+                self._unmerge(r, col)
+            r += 1
+
+        for r in range(self.n_rows):
+            self._unrepeat_col(r, col)
+        self._unrepeat_column_tag(col).decompose()
+        for r in range(self.n_rows):
+            self.rows[r][col].cell.decompose()
+            del self.rows[r][col]
+            for c in range(col, len(self.rows[r])):
+                self.rows[r][c].col = c
+        self.n_cols -= 1
+        self.size = (self.n_rows, self.n_cols)
 
     def __repr__(self):
         return f"Sheet(name='{self.name}', size[rows, cols]={self.size})"
@@ -1743,9 +1888,25 @@ class NumberFormat:
     style:apply-style-name="...">`, e.g. currency amounts shown in red when
     negative): `.conditions` holds `(condition, NumberFormat)` pairs in
     document order, and `.resolve(value)` follows them to the `NumberFormat`
-    that actually applies to a given value (itself, if none match)."""
+    that actually applies to a given value (itself, if none match).
+
+    Writable: `NumberFormat.create(reader, family, ...)` builds a brand new
+    format from scratch (for when no existing one in the document already
+    has the layout you want); `.add_condition(condition, target)` appends
+    a conditional variant to an existing format."""
+
+    _FAMILY_TAGS = {
+        "number": "number:number-style",
+        "percentage": "number:percentage-style",
+        "currency": "number:currency-style",
+        "date": "number:date-style",
+        "time": "number:time-style",
+        "boolean": "number:boolean-style",
+    }
 
     def __init__(self, tag, reader: "ODSReader" = None, _seen=None):
+        self._tag = tag
+        self._reader = reader
         self.name = tag.get("style:name")
         self.family = tag.name[: -len("-style")] if tag.name.endswith("-style") else tag.name
         number_tag = tag.find("number:number") or tag.find("number:boolean")
@@ -1793,6 +1954,106 @@ class NumberFormat:
             if target is not None and _evaluate_number_format_condition(condition, value):
                 return target
         return self
+
+    @classmethod
+    def create(
+        cls,
+        reader: "ODSReader",
+        family: str,
+        decimal_places: int = None,
+        grouping: bool = False,
+        min_integer_digits: int = 1,
+        currency_symbol: str = None,
+        components: list = None,
+        font_color: str = None,
+    ):
+        """Build a brand new `<number:*-style>` from scratch and register
+        it in the document's automatic styles, returning a `NumberFormat`
+        bound to it.
+
+        `family` is one of `"number"`/`"percentage"`/`"currency"`/
+        `"date"`/`"time"`/`"boolean"`. `decimal_places`/`grouping`/
+        `min_integer_digits` apply to `"number"`/`"percentage"`/
+        `"currency"`; `currency_symbol` is required for `"currency"`.
+        `"date"`/`"time"` take `components` - the same ordered
+        `[(component, style_or_text), ...]` list `.components` itself
+        already exposes on read, e.g. `[("day", "long"), ("text", "/"),
+        ("month", "long"), ("text", "/"), ("year", "long")]` (a `"text"`
+        entry is a literal separator - its second element is the literal
+        text itself, rather than a component style). `"boolean"` takes
+        none of the above. `font_color` works for any family - the
+        classic use is the "positive/negative" pair behind conditional
+        formatting (see `add_condition`): a plain black format for the
+        base, and a `font_color="#FF0000"` variant applied when
+        `"value()<0"` matches.
+        """
+        if family not in cls._FAMILY_TAGS:
+            raise ValueError(
+                f"unknown number format family {family!r} - expected one of {sorted(cls._FAMILY_TAGS)}"
+            )
+        if family == "currency" and not currency_symbol:
+            raise ValueError("family='currency' requires currency_symbol")
+        if family in ("date", "time") and not components:
+            raise ValueError(f"family={family!r} requires components")
+
+        tag = _blank_template(reader.data, cls._FAMILY_TAGS[family])
+        tag.attrs["style:name"] = reader._new_style_name("N")
+        if font_color is not None:
+            text_props = _blank_template(reader.data, "style:text-properties")
+            text_props.attrs["fo:color"] = font_color
+            tag.append(text_props)
+
+        if family in ("number", "percentage", "currency"):
+            number_child = _blank_template(reader.data, "number:number")
+            if decimal_places is not None:
+                number_child.attrs["number:decimal-places"] = str(decimal_places)
+                number_child.attrs["number:min-decimal-places"] = str(decimal_places)
+            number_child.attrs["number:min-integer-digits"] = str(min_integer_digits)
+            if grouping:
+                number_child.attrs["number:grouping"] = "true"
+            tag.append(number_child)
+            if family == "percentage":
+                text_child = _blank_template(reader.data, "number:text")
+                text_child.string = " %"
+                tag.append(text_child)
+            elif family == "currency":
+                separator = _blank_template(reader.data, "number:text")
+                separator.string = " "
+                tag.append(separator)
+                symbol_child = _blank_template(reader.data, "number:currency-symbol")
+                symbol_child.string = currency_symbol
+                tag.append(symbol_child)
+        elif family == "boolean":
+            tag.append(_blank_template(reader.data, "number:boolean"))
+        else:  # date / time
+            for kind, value in components:
+                if kind == "text":
+                    child = _blank_template(reader.data, "number:text")
+                    child.string = value
+                else:
+                    child = _blank_template(reader.data, f"number:{kind}")
+                    if value:
+                        child.attrs["number:style"] = value
+                tag.append(child)
+
+        reader._automatic_styles().append(tag)
+        return cls(tag, reader=reader)
+
+    def add_condition(self, condition, target):
+        """Add a `<style:map>` entry (see the class docstring): `target` -
+        an existing `NumberFormat` in the same document - applies instead
+        of this one whenever `condition` (ODF's `style:condition` syntax,
+        e.g. `"value()<0"`) matches. Appended after any conditions already
+        there; `.resolve(value)` tries them in order, first match wins."""
+        if self._tag is None or self._reader is None:
+            raise RuntimeError(f"number format {self.name!r} has no underlying tag and cannot be written to")
+        if not isinstance(target, NumberFormat):
+            raise TypeError(f"target must be a NumberFormat, got {type(target)!r}")
+        style_map = _blank_template(self._reader.data, "style:map")
+        style_map.attrs["style:condition"] = condition
+        style_map.attrs["style:apply-style-name"] = target.name
+        self._tag.append(style_map)
+        self.conditions.append((condition, target))
 
     def __repr__(self):
         return f"NumberFormat(name={self.name!r}, family={self.family!r})"
@@ -2592,3 +2853,21 @@ class ODSReader:
         self.sheets_names.append(name)
         self._sheets[name] = Sheet(table, verbose=self.verbose, reader=self)
         return self._sheets[name]
+
+    def delete_sheet(self, name: str):
+        """Remove the sheet named `name` entirely.
+
+        Raises `IndexError` for an unknown name, and `ValueError` for the
+        document's last remaining sheet (an ODF spreadsheet needs at least
+        one). Any `Sheet`/`Cell` object obtained before the call that
+        pointed into this sheet is now backed by a decomposed, detached
+        XML element - stop using it."""
+        if name not in self.sheets_names:
+            raise IndexError(f"No sheet named {name}")
+        if len(self.sheets_names) <= 1:
+            raise ValueError("cannot delete the only remaining sheet in the document")
+        idx = self.sheets_names.index(name)
+        self.tables[idx].decompose()
+        del self.tables[idx]
+        del self.sheets_names[idx]
+        del self._sheets[name]

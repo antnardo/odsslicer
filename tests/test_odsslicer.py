@@ -18,7 +18,7 @@ import math
 import pytest
 
 from odsslicer import ODSReader
-from odsslicer.classes import ArrayValues, Border, Cell, CellStyle, Sheet
+from odsslicer.classes import ArrayValues, Border, Cell, CellStyle, NumberFormat, Sheet
 
 
 # ---------------------------------------------------------------------------
@@ -2207,3 +2207,339 @@ def test_save_round_trip_after_row_column_table_style_writes(writable_reader, tm
     assert reread.row_style(0).height == "2cm"
     assert reread.column_style(0).width == "5cm"
     assert reread.style.tab_color == "#123456"
+
+
+# ---------------------------------------------------------------------------
+# Cell.style setter : copier/dupliquer un style d'une cellule vers une autre
+# ---------------------------------------------------------------------------
+
+def test_assigning_another_cells_style_points_at_the_same_style(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].style.bold = True
+    s["B1"].style = s["A1"].style
+    assert s["B1"].attrs.get("table:style-name") == s["A1"].attrs.get("table:style-name")
+    assert s["B1"].style.bold is True
+
+
+def test_assigning_a_cell_directly_also_works(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].style.italic = True
+    s["B1"].style = s["A1"]
+    assert s["B1"].style.italic is True
+
+
+def test_assigning_a_bare_style_name_also_works(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    name = s["A7"].attrs.get("table:style-name")  # ce2, has a real named style
+    s["B1"].style = name
+    assert s["B1"].attrs.get("table:style-name") == name
+
+
+def test_assigning_none_clears_the_style(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].style.bold = True
+    s["A1"].style = None
+    assert s["A1"].attrs.get("table:style-name") is None
+
+
+def test_forking_after_a_style_copy_does_not_affect_the_source_cell(writable_reader):
+    # regression: the "already forked, reuse" cache used to be keyed off
+    # whether table:style-name *looked* like a forked name, which broke as
+    # soon as two different cells legitimately shared one via this setter
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].style.bold = True
+    s["B1"].style = s["A1"].style
+    assert s["A1"].attrs.get("table:style-name") == s["B1"].attrs.get("table:style-name")
+
+    s["B1"].style.italic = True
+    assert s["A1"].style.italic is False
+    assert s["B1"].style.italic is True
+    assert s["B1"].style.bold is True  # still carried over from the shared parent
+    assert s["A1"].attrs.get("table:style-name") != s["B1"].attrs.get("table:style-name")
+
+
+def test_assigning_an_invalid_style_value_raises(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(TypeError):
+        s["A1"].style = 42
+
+
+# ---------------------------------------------------------------------------
+# NumberFormat.create / .add_condition (écriture)
+# ---------------------------------------------------------------------------
+
+def test_create_a_number_format(writable_reader):
+    r = writable_reader
+    fmt = NumberFormat.create(r, "number", decimal_places=3, grouping=True)
+    assert fmt.family == "number"
+    assert fmt.decimal_places == 3
+    assert fmt.grouping is True
+
+    s = r.sheet("Sheet1")
+    s["A1"].value = 1234.5678
+    s["A1"].style.number_format = fmt
+    assert s["A1"].style.number_format.name == fmt.name
+
+
+def test_create_a_percentage_format(writable_reader):
+    fmt = NumberFormat.create(writable_reader, "percentage", decimal_places=1)
+    assert fmt.family == "percentage"
+    assert fmt.decimal_places == 1
+
+
+def test_create_a_currency_format(writable_reader):
+    fmt = NumberFormat.create(writable_reader, "currency", decimal_places=2, currency_symbol="$")
+    assert fmt.family == "currency"
+    assert fmt.currency_symbol == "$"
+
+
+def test_create_currency_without_symbol_raises(writable_reader):
+    with pytest.raises(ValueError):
+        NumberFormat.create(writable_reader, "currency")
+
+
+def test_create_a_date_format_from_components(writable_reader):
+    components = [("day", "long"), ("text", "-"), ("month", "long"), ("text", "-"), ("year", "long")]
+    fmt = NumberFormat.create(writable_reader, "date", components=components)
+    assert fmt.family == "date"
+    assert fmt.components == components
+
+
+def test_create_date_without_components_raises(writable_reader):
+    with pytest.raises(ValueError):
+        NumberFormat.create(writable_reader, "date")
+
+
+def test_create_a_boolean_format(writable_reader):
+    fmt = NumberFormat.create(writable_reader, "boolean")
+    assert fmt.family == "boolean"
+
+
+def test_create_unknown_family_raises(writable_reader):
+    with pytest.raises(ValueError):
+        NumberFormat.create(writable_reader, "fraction")
+
+
+def test_create_with_font_color(writable_reader):
+    fmt = NumberFormat.create(writable_reader, "currency", currency_symbol="€", font_color="#FF0000")
+    assert fmt.font_color == "#FF0000"
+
+
+def test_add_condition_wires_up_conditional_resolution(writable_reader):
+    r = writable_reader
+    negative = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€", font_color="#FF0000")
+    base = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€")
+    base.add_condition("value()<0", negative)
+
+    assert base.resolve(-5).name == negative.name
+    assert base.resolve(-5).font_color == "#FF0000"
+    assert base.resolve(5).name == base.name
+    assert base.resolve(5).font_color is None
+
+
+def test_add_condition_with_non_number_format_target_raises(writable_reader):
+    fmt = NumberFormat.create(writable_reader, "number")
+    with pytest.raises(TypeError):
+        fmt.add_condition("value()<0", "not a NumberFormat")
+
+
+def test_save_round_trip_after_creating_and_assigning_a_number_format(writable_reader, tmp_path):
+    r = writable_reader
+    negative = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€", font_color="#FF0000")
+    base = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€")
+    base.add_condition("value()<0", negative)
+
+    s = r.sheet("Sheet1")
+    s["A1"].value = -10.0
+    s["A1"].style.number_format = base
+
+    out = tmp_path / "out.ods"
+    r.save(out)
+
+    reread = ODSReader(out).sheet("Sheet1")
+    resolved = reread["A1"].style.number_format
+    assert resolved.currency_symbol == "€"
+    assert resolved.font_color == "#FF0000"
+
+
+# ---------------------------------------------------------------------------
+# Sheet.delete_row / delete_column / ODSReader.delete_sheet (écriture)
+# ---------------------------------------------------------------------------
+
+def test_delete_row_shifts_everything_up(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    before = [s[i, 0].value for i in range(s.n_rows)]
+    n_rows_before = s.n_rows
+    s.delete_row(1)
+    after = [s[i, 0].value for i in range(s.n_rows)]
+    assert s.n_rows == n_rows_before - 1
+    assert s.size == (n_rows_before - 1, s.n_cols)
+    assert after == before[:1] + before[2:]
+
+
+def test_delete_column_shifts_everything_left(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    n_cols_before = s.n_cols
+    assert s[0, 1].value == "seconde colonne"
+    s.delete_column(0)
+    assert s.n_cols == n_cols_before - 1
+    assert s[0, 0].value == "seconde colonne"
+
+
+def test_delete_row_out_of_range_raises(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(IndexError):
+        s.delete_row(999)
+
+
+def test_delete_column_out_of_range_raises(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(IndexError):
+        s.delete_column(999)
+
+
+def test_delete_row_through_a_merge_unmerges_only_that_merge(writable_reader):
+    # A6:D7 and A8:D9 are two separate rectangular merges in SheetFusion -
+    # deleting row 5 ("A6", the first merge's master row) must dissolve
+    # only that one, leaving the untouched A8:D9 merge intact (just
+    # shifted up by one row, to A7:D8)
+    s = writable_reader.sheet("SheetFusion")
+    assert s["A6"].merge_span == (2, 4)
+    assert s["A8"].merge_span == (2, 4)
+    s.delete_row(5)
+    assert s["A7"].is_merge_master
+    assert s["A7"].merge_span == (2, 4)
+    # the two other, untouched merges (A1:C1 and A3:A5, 3 cells each) plus
+    # the surviving, shifted A7:D8 (8 cells) - nothing from the dissolved
+    # A6:D7 merge left over
+    merged_count = sum(cell.is_merged for row in s.rows for cell in row)
+    assert merged_count == 3 + 3 + 8
+
+
+def test_delete_column_through_a_merge_unmerges_first(writable_reader):
+    s = writable_reader.sheet("SheetFusion")
+    s.delete_column(0)  # column A carries the master of every merge in this fixture
+    for row in s.rows:
+        for cell in row:
+            assert not cell.is_merged
+
+
+def test_save_round_trip_after_delete_row_and_column(writable_reader, tmp_path):
+    s = writable_reader.sheet("Sheet1")
+    s.delete_row(1)  # drops the row holding 3.4
+    s.delete_column(1)  # drops "seconde colonne" - keeps col 0's real values
+    # in every remaining row, so none of them ends up empty and gets
+    # trimmed as a trailing blank row on reload (see load()'s cleanup)
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    reread = ODSReader(out).sheet("Sheet1")
+    assert reread.size == s.size
+    assert reread[0, 0].value == "texte simple"
+    assert reread[s.n_rows - 1, 0].value == dt.time(15, 0)
+
+
+def test_delete_sheet(writable_reader):
+    r = writable_reader
+    r.add_sheet("Extra")
+    r.delete_sheet("Extra")
+    assert "Extra" not in r.sheets_names
+    with pytest.raises(IndexError):
+        r.sheet("Extra")
+
+
+def test_delete_unknown_sheet_raises(writable_reader):
+    with pytest.raises(IndexError):
+        writable_reader.delete_sheet("NoSuchSheet")
+
+
+def test_delete_the_last_remaining_sheet_raises(writable_reader):
+    r = writable_reader
+    for name in list(r.sheets_names)[:-1]:
+        r.delete_sheet(name)
+    assert len(r.sheets_names) == 1
+    with pytest.raises(ValueError):
+        r.delete_sheet(r.sheets_names[0])
+
+
+def test_save_round_trip_after_delete_sheet(writable_reader, tmp_path):
+    r = writable_reader
+    r.add_sheet("Extra")
+    r.delete_sheet("Extra")
+    out = tmp_path / "out.ods"
+    r.save(out)
+    reread = ODSReader(out)
+    assert "Extra" not in reread.sheets_names
+
+
+# ---------------------------------------------------------------------------
+# Sheet.copy (copier-coller de cellules/plages, écriture)
+# ---------------------------------------------------------------------------
+
+def test_copy_a_single_cell(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].style.bold = True
+    s.copy("A1", "C1")
+    assert s["C1"].value == "texte simple"
+    assert s["C1"].style.bold is True
+
+
+def test_copy_a_range_preserves_shape(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s.copy("A1:B2", "D5")
+    assert s["D5"].value == s["A1"].value
+    assert s["E5"].value == s["B1"].value
+    assert s["D6"].value == s["A2"].value
+    assert s["E6"].value == s["B2"].value
+
+
+def test_copy_shifts_relative_formula_references(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "A2+A3"
+    s.copy("C1", "E5")
+    assert s["E5"].formula_friendly == "=C6+C7"
+
+
+def test_copy_keeps_absolute_formula_references_in_place(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "$A$2+A3"
+    s.copy("C1", "E5")
+    assert s["E5"].formula_friendly == "=$A$2+C7"
+
+
+def test_copy_grows_the_sheet_if_needed(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s.copy("A1:B2", "Z20")
+    assert s.n_rows >= 21 and s.n_cols >= 27
+    assert s["Z20"].value == s["A1"].value
+
+
+def test_copy_is_safe_with_overlapping_source_and_dest(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["H1"].value = 1
+    s["H2"].value = 2
+    s["H3"].value = 3
+    s.copy("H1:H3", "H2")
+    assert [s[f"H{i}"].value for i in (1, 2, 3, 4)] == [1, 1, 2, 3]
+
+
+def test_copy_an_empty_cell_clears_the_destination(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].value = "will be cleared"
+    s.copy("Z1", "C1")  # Z1 is out of range -> empty
+    assert s["C1"].value is None
+
+
+def test_save_round_trip_after_copy(writable_reader, tmp_path):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].style.bold = True
+    s["C1"].formula = "A2+A3"
+    s.copy("A1:C1", "E5")
+
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    reread = ODSReader(out).sheet("Sheet1")
+    assert reread["E5"].value == "texte simple"
+    assert reread["E5"].style.bold is True
+    assert reread["G5"].formula_friendly == "=E6+E7"

@@ -20,7 +20,7 @@ import re
 from conftest import requires_soffice
 
 from odsslicer import ODSReader
-from odsslicer.classes import Border
+from odsslicer.classes import Border, NumberFormat
 
 
 @requires_soffice
@@ -143,3 +143,73 @@ def test_libreoffice_opens_a_document_created_from_scratch(tmp_path, libreoffice
     xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
     assert "<text:p>Total</text:p>" in xml
     assert "of:=SUM([.A2:.A10])" in xml
+
+
+@requires_soffice
+def test_libreoffice_reads_back_a_created_number_format_and_conditional_formatting(
+    writable_reader, tmp_path, libreoffice_export
+):
+    r = writable_reader
+    negative = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€", font_color="#FF0000")
+    base = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€")
+    base.add_condition("value()<0", negative)
+
+    s = r.sheet("Sheet1")
+    s["A1"].value = -12.5
+    s["A1"].style.number_format = base
+    out = tmp_path / "out.ods"
+    r.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    idx = xml.find('office:value="-12.5"')
+    assert idx != -1
+    cell_xml = xml[idx - 200 : idx + 300]
+    assert "€" in cell_xml
+    cell_style_name = re.search(r'table:style-name="([^"]+)"[^>]*office:value="-12.5"', cell_xml).group(1)
+
+    # the cell's style always points at the *base* format (the one holding
+    # .conditions/style:map) - LibreOffice itself resolves which variant
+    # actually applies for a given value, same as CellStyle.number_format
+    # already does on read (see NumberFormat.resolve)
+    base_format_name = re.search(
+        rf'<style:style style:name="{cell_style_name}"[^>]*style:data-style-name="([^"]+)"', xml
+    ).group(1)
+    base_format_xml = re.search(
+        rf'<number:currency-style style:name="{base_format_name}"[^>]*>.*?</number:currency-style>', xml, re.DOTALL
+    ).group(0)
+    condition_target = re.search(r'style:apply-style-name="([^"]+)"', base_format_xml).group(1)
+    target_xml = re.search(
+        rf'<number:currency-style style:name="{condition_target}"[^>]*>.*?</number:currency-style>', xml, re.DOTALL
+    ).group(0)
+    assert 'fo:color="#ff0000"' in target_xml
+
+
+@requires_soffice
+def test_libreoffice_reads_back_a_sheet_after_delete_row_and_column(
+    writable_reader, tmp_path, libreoffice_export
+):
+    s = writable_reader.sheet("Sheet1")
+    s.delete_row(1)
+    s.delete_column(1)
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    assert "<text:p>texte simple</text:p>" in xml
+    # the deleted row's value (3.4) is nowhere left in the sheet
+    assert 'office:value="3.4"' not in xml
+
+
+@requires_soffice
+def test_libreoffice_reads_back_a_copy(writable_reader, tmp_path, libreoffice_export):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "A2+A3"
+    s["C1"].style.bold = True
+    s.copy("A1:C1", "E5")
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    assert "<text:p>texte simple</text:p>" in xml  # A1's value, copied to E5
+    # the copied formula's reference shifted by the same offset as the copy
+    assert re.search(r'table:formula="of:=\[\.E6\]\+\[\.E7\]"', xml)

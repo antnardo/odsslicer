@@ -1,14 +1,12 @@
 # Roadmap
 
-## Styles
+## Fait
 
-- Créer un format numérique **from scratch** (`number:number-style`, `number:currency-style`,
-  `number:date-style`...) — on ne peut aujourd'hui qu'assigner un `NumberFormat` déjà présent
-  dans le document (`cell.style.number_format = autre_format`).
-- Écrire les mises en forme **conditionnelles** (`.conditions` / `<style:map>`) — lecture seule
-  pour l'instant.
-- Copier/dupliquer un style complet d'une cellule vers une autre en une fois (pas de raccourci
-  type `cell.style = other.style`).
+- Formats numériques from scratch (`NumberFormat.create`), mises en forme conditionnelles en
+  écriture (`.add_condition`), copie de style cellule à cellule (`cell.style = other.style`).
+- Suppression de lignes/colonnes (`Sheet.delete_row`/`.delete_column`) et de feuilles
+  (`ODSReader.delete_sheet`).
+- Copier-coller de cellules/plages (`Sheet.copy`).
 
 ## Formules
 
@@ -33,9 +31,8 @@
 
 ## Autres
 
-- Suppression de lignes/colonnes/feuilles (on ne fait aujourd'hui que grandir/ajouter, jamais
-  retirer).
-- Copier-coller de cellules/plages (dupliquer valeur + style + formule d'une cellule vers une
-  autre).
+- Ajuster les références de formule lors d'un `delete_row`/`delete_column` (aujourd'hui elles
+  ne bougent pas, comme documenté dans le README — cohérent avec l'absence de moteur de calcul,
+  mais peut surprendre).
 - Gros classeurs au-delà de `MAX_REPEAT_ROWS`/`MAX_REPEAT_COLS` : les lignes/colonnes répétées
   surnuméraires sont détectées et jetées plutôt que matérialisées.
