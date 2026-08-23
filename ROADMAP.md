@@ -29,6 +29,11 @@
 - Tri d'une plage (`Sheet.sort(source, by, ascending=True)`) : tri stable, `None` toujours en
   dernier, le style/la formule de chaque ligne suit (une formule même-ligne comme `=B2*C2`
   garde son sens après déplacement, mêmes règles de décalage relatif que `Cell.fill_formula`).
+- Renommer (`ODSReader.rename_sheet`) et réordonner (`.move_sheet`) les feuilles. Le
+  renommage met aussi à jour les références de formule inter-feuilles qui nomment
+  explicitement l'ancien nom (`Sheet1.A6` → `NouveauNom.A6`, avec guillemets automatiques si
+  besoin) ; une référence non qualifiée dans les formules de la feuille elle-même n'a pas
+  besoin d'être touchée.
 
 ## Formules
 
@@ -41,10 +46,8 @@
 - Les références 3D (une plage sur plusieurs feuilles, `Sheet1:Sheet3.A1`) ne sont pas non plus
   traduites.
 
-## Gaps identifiés (rien d'entamé) — probablement les plus utiles
+## Gaps identifiés (rien d'entamé) — probablement le plus utile
 
-- **Renommer / réordonner les feuilles** : `add_sheet`/`delete_sheet` existent, mais pas
-  `rename_sheet`/de façon de changer l'ordre des onglets (position dans `self.tables`).
 - **Liens hypertexte dans une cellule** (`<text:a xlink:href="...">` autour du texte) : pas lus,
   pas écrits — `Cell.text` les aplatit dans le texte brut.
 

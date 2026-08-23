@@ -3001,3 +3001,128 @@ def test_save_round_trip_after_sort(writable_reader, tmp_path):
     reread = ODSReader(out).sheet("Sheet1")
     assert [reread[i, 0].value for i in range(4)] == ["Alice", "Dana", "Charlie", "Bob"]
     assert reread["C1"].formula_friendly == "=B1*10"
+
+
+# ---------------------------------------------------------------------------
+# ODSReader.rename_sheet / .move_sheet
+# ---------------------------------------------------------------------------
+
+def test_rename_sheet_updates_names(writable_reader):
+    r = writable_reader
+    r.rename_sheet("Sheet1", "Renamed")
+    assert "Renamed" in r.sheets_names
+    assert "Sheet1" not in r.sheets_names
+    assert r.sheet("Renamed").name == "Renamed"
+
+
+def test_rename_sheet_updates_an_already_constructed_sheet_object(writable_reader):
+    r = writable_reader
+    s = r.sheet("Sheet1")  # force construction before the rename
+    r.rename_sheet("Sheet1", "Renamed")
+    assert s.name == "Renamed"
+    assert r.sheet("Renamed") is s
+
+
+def test_rename_sheet_updates_cross_sheet_formula_references(writable_reader):
+    r = writable_reader
+    s2 = r.sheet("Sheet2Repeat")
+    s2["A1"].formula = "Sheet1.A2+Sheet1.A3"
+    r.rename_sheet("Sheet1", "Renamed")
+    assert s2["A1"].formula_friendly == "=Renamed.A2+Renamed.A3"
+
+
+def test_rename_sheet_quotes_a_name_with_spaces_in_references(writable_reader):
+    r = writable_reader
+    s2 = r.sheet("Sheet2Repeat")
+    s2["A1"].formula = "Sheet1.A2"
+    r.rename_sheet("Sheet1", "Mon Bilan")
+    assert s2["A1"].formula == "of:=['Mon Bilan'.A2]"
+
+
+def test_rename_sheet_does_not_touch_an_unqualified_reference_in_its_own_formulas(writable_reader):
+    r = writable_reader
+    s1 = r.sheet("Sheet1")
+    s1["C1"].formula = "A2+A3"
+    r.rename_sheet("Sheet1", "Renamed")
+    assert s1["C1"].formula_friendly == "=A2+A3"
+
+
+def test_rename_unknown_sheet_raises(writable_reader):
+    with pytest.raises(IndexError):
+        writable_reader.rename_sheet("NoSuchSheet", "x")
+
+
+def test_rename_sheet_to_an_existing_name_raises(writable_reader):
+    with pytest.raises(ValueError):
+        writable_reader.rename_sheet("Sheet1", "Sheet2Repeat")
+
+
+def test_rename_sheet_to_empty_name_raises(writable_reader):
+    with pytest.raises(ValueError):
+        writable_reader.rename_sheet("Sheet1", "")
+
+
+def test_rename_sheet_to_its_own_name_is_a_no_op(writable_reader):
+    r = writable_reader
+    r.rename_sheet("Sheet1", "Sheet1")
+    assert r.sheets_names.count("Sheet1") == 1
+
+
+def test_save_round_trip_after_rename_sheet(writable_reader, tmp_path):
+    r = writable_reader
+    s2 = r.sheet("Sheet2Repeat")
+    s2["A1"].formula = "Sheet1.A2"
+    r.rename_sheet("Sheet1", "Renamed")
+    out = tmp_path / "out.ods"
+    r.save(out)
+
+    reread = ODSReader(out)
+    assert "Renamed" in reread.sheets_names
+    assert reread.sheet("Sheet2Repeat")["A1"].formula_friendly == "=Renamed.A2"
+    assert reread.sheet("Renamed")["A1"].value == "texte simple"
+
+
+def test_move_sheet_reorders(writable_reader):
+    r = writable_reader
+    r.move_sheet("SheetFusion", 0)
+    assert r.sheets_names == ["SheetFusion", "Sheet1", "Sheet2Repeat", "SheetEmpty"]
+
+
+def test_move_sheet_to_the_end(writable_reader):
+    r = writable_reader
+    r.move_sheet("Sheet1", 3)
+    assert r.sheets_names == ["Sheet2Repeat", "SheetEmpty", "SheetFusion", "Sheet1"]
+
+
+def test_move_sheet_to_the_middle(writable_reader):
+    r = writable_reader
+    r.move_sheet("SheetFusion", 1)
+    assert r.sheets_names == ["Sheet1", "SheetFusion", "Sheet2Repeat", "SheetEmpty"]
+
+
+def test_move_sheet_to_its_own_position_is_a_no_op(writable_reader):
+    r = writable_reader
+    before = list(r.sheets_names)
+    r.move_sheet("Sheet2Repeat", 1)
+    assert r.sheets_names == before
+
+
+def test_move_unknown_sheet_raises(writable_reader):
+    with pytest.raises(IndexError):
+        writable_reader.move_sheet("NoSuchSheet", 0)
+
+
+def test_move_sheet_out_of_range_raises(writable_reader):
+    with pytest.raises(ValueError):
+        writable_reader.move_sheet("Sheet1", 99)
+
+
+def test_save_round_trip_after_move_sheet(writable_reader, tmp_path):
+    r = writable_reader
+    r.move_sheet("SheetFusion", 0)
+    out = tmp_path / "out.ods"
+    r.save(out)
+
+    reread = ODSReader(out)
+    assert reread.sheets_names == ["SheetFusion", "Sheet1", "Sheet2Repeat", "SheetEmpty"]
+    assert reread.sheet("Sheet1")["A1"].value == "texte simple"

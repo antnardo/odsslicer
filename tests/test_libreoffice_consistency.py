@@ -317,3 +317,21 @@ def test_libreoffice_reads_back_a_sort_with_shifted_formulas(writable_reader, tm
     assert "<text:p>Alice</text:p>" in xml
     # Alice's row (now row 1) still has a same-row formula
     assert re.search(r'table:formula="of:=\[\.B1\]\*10"[^>]*office:value="10"', xml)
+
+
+@requires_soffice
+def test_libreoffice_reads_back_a_renamed_and_reordered_sheet(writable_reader, tmp_path, libreoffice_export):
+    r = writable_reader
+    s2 = r.sheet("Sheet2Repeat")
+    s2["A1"].formula = "Sheet1.A2"
+    r.rename_sheet("Sheet1", "Mon Bilan")
+    r.move_sheet("SheetFusion", 0)
+    out = tmp_path / "out.ods"
+    r.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    # sheet order: SheetFusion first, then the renamed sheet
+    names = re.findall(r'<table:table table:name="([^"]+)"', xml)
+    assert names[:2] == ["SheetFusion", "Mon Bilan"]
+    # the cross-sheet formula follows the rename, correctly quoted
+    assert re.search(r"table:formula=\"of:=\[&apos;Mon Bilan&apos;\.A2\]\"", xml)

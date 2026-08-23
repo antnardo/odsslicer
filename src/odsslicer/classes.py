@@ -347,6 +347,48 @@ def _adjust_odf_formula_for_deletion(formula, target_sheet, containing_sheet, de
     )
 
 
+_SIMPLE_SHEET_NAME_RE = re.compile(r"^[A-Za-z_]\w*$")
+
+
+def _quote_odf_sheet_name(name):
+    """The ODF bracket-syntax form of a sheet name: unquoted if it's a
+    plain identifier, else single-quoted with any embedded `'` doubled -
+    the reverse of `_unquote_odf_sheet_name`."""
+    if _SIMPLE_SHEET_NAME_RE.match(name):
+        return name
+    return "'" + name.replace("'", "''") + "'"
+
+
+def _rename_odf_reference_sheet(inner, old_name, new_name):
+    """Rewrite the sheet-name portion of one bracket's content for a
+    sheet rename - only a reference *explicitly* qualified with
+    `old_name` is touched; a bare reference (`.A1`, no sheet prefix)
+    means "this same sheet" regardless of what it's named, so it's
+    already correct and left alone."""
+
+    def rename_one(part):
+        m = _SHEET_QUALIFIED_RE.match(part)
+        ref_sheet, addr = m.group("sheet"), m.group("addr")
+        if ref_sheet is None or _unquote_odf_sheet_name(ref_sheet) != old_name:
+            return part
+        return f"{_quote_odf_sheet_name(new_name)}.{addr}"
+
+    if ":" in inner:
+        start, end = inner.split(":", 1)
+        return f"{rename_one(start)}:{rename_one(end)}"
+    return rename_one(inner)
+
+
+def _rename_odf_formula_sheet(formula, old_name, new_name):
+    """Rewrite every explicitly-qualified reference to `old_name` in an
+    already ODF-syntax formula to `new_name` instead - used by
+    `ODSReader.rename_sheet` to keep cross-sheet formulas (in any sheet)
+    pointing at the renamed sheet."""
+    return _ODF_BRACKET_RE.sub(
+        lambda m: f"[{_rename_odf_reference_sheet(m.group(1), old_name, new_name)}]", formula
+    )
+
+
 _TEMPLATE_TOKEN_RE = re.compile(r"\{([^{}]*)\}")
 _TEMPLATE_ALLOWED_NODES = (
     ast.Expression,
@@ -3444,3 +3486,68 @@ class ODSReader:
         del self.tables[idx]
         del self.sheets_names[idx]
         del self._sheets[name]
+
+    def rename_sheet(self, old_name: str, new_name: str):
+        """Rename sheet `old_name` to `new_name`.
+
+        Also rewrites any formula elsewhere in the document (in this
+        sheet or any other) that references this sheet by name -
+        `OldName.A1` becomes `NewName.A1`, quoted (`'New Name'.A1`) if
+        `new_name` needs it. An unqualified reference within the renamed
+        sheet's own formulas (`.A1`, meaning "this sheet") needs no
+        rewrite - it already means the same thing regardless of the name.
+
+        Raises `IndexError` for an unknown `old_name`, and `ValueError`
+        for an empty `new_name` or one already used by another sheet."""
+        if old_name not in self.sheets_names:
+            raise IndexError(f"No sheet named {old_name}")
+        if not new_name:
+            raise ValueError("a sheet name is required")
+        if new_name != old_name and new_name in self.sheets_names:
+            raise ValueError(f"a sheet named {new_name!r} already exists")
+
+        idx = self.sheets_names.index(old_name)
+        self.tables[idx].attrs["table:name"] = new_name
+        self.sheets_names[idx] = new_name
+        sheet_obj = self._sheets.pop(old_name, None)
+        if sheet_obj is not None:
+            sheet_obj.name = new_name
+        self._sheets[new_name] = sheet_obj
+
+        for sheet in self.sheets:
+            for row in sheet.rows:
+                for cell in row:
+                    if cell.formula is None:
+                        continue
+                    renamed = _rename_odf_formula_sheet(cell.formula, old_name, new_name)
+                    if renamed != cell.formula:
+                        cell.formula = renamed
+
+    def move_sheet(self, name: str, index: int):
+        """Move sheet `name` to position `index` (0-based) among the
+        document's sheets, shifting the others - e.g. `move_sheet("Data",
+        0)` makes it the first tab.
+
+        Raises `IndexError` for an unknown name, and `ValueError` if
+        `index` is out of range."""
+        if name not in self.sheets_names:
+            raise IndexError(f"No sheet named {name}")
+        if not 0 <= index < len(self.sheets_names):
+            raise ValueError(f"index {index} out of range (document has {len(self.sheets_names)} sheets)")
+
+        old_index = self.sheets_names.index(name)
+        if index == old_index:
+            return
+
+        table = self.tables[old_index]
+        table.extract()
+        del self.tables[old_index]
+        del self.sheets_names[old_index]
+
+        self.tables.insert(index, table)
+        self.sheets_names.insert(index, name)
+
+        if index == 0:
+            self.tables[1].insert_before(table)
+        else:
+            self.tables[index - 1].insert_after(table)

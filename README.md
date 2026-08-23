@@ -13,9 +13,10 @@ merged rows/columns.
 Write support: `cell.value = ...`, `cell.formula = ...`, `cell.style.bold = ...` (and other
 formatting properties, including creating number formats and conditional formatting from
 scratch), `cell.comment = ...`, `sheet.merge(...)`/`.unmerge(...)`, `sheet.copy(...)`,
-`sheet.sort(...)`, `sheet.delete_row(...)`/`.delete_column(...)`/`table.delete_sheet(...)`, `table.properties`
-(title, author, custom document properties), new sheets, even brand new files from scratch —
-then `reader.save(...)`. Repeated or merged cells are automatically unrolled/unmerged in the
+`sheet.sort(...)`, `sheet.delete_row(...)`/`.delete_column(...)`/`table.delete_sheet(...)`,
+`table.rename_sheet(...)`/`.move_sheet(...)`, `table.properties` (title, author, custom
+document properties), new sheets, even brand new files from scratch — then `reader.save(...)`.
+Repeated or merged cells are automatically unrolled/unmerged in the
 background on first write access, and writing beyond a sheet's current extent grows it
 automatically (new rows/columns) — see [Writing](#writing-experimental) below for details and
 remaining limitations.
@@ -230,6 +231,24 @@ sheet["A1"].value = "Total"     # grows it like any other sheet, see above
 
 Raises a `ValueError` for an empty name or one that's already used by another sheet in the
 document. Like grown rows/cells, the new sheet carries no particular style.
+
+### Renaming and reordering sheets
+
+```python
+table.rename_sheet("Sheet1", "Q4 Budget")
+table.move_sheet("Q4 Budget", 0)     # make it the first tab
+```
+
+`rename_sheet` also rewrites any formula elsewhere in the document that references the sheet
+by name — `OldName.A1` becomes `NewName.A1` (quoted, `'New Name'.A1`, if the new name needs
+it) — an unqualified reference within the renamed sheet's own formulas (`.A1`, meaning "this
+sheet") needs no rewrite, since it already means the same thing regardless of what it's named.
+Raises `IndexError` for an unknown `old_name`, and `ValueError` for an empty `new_name` or one
+already used by another sheet.
+
+`move_sheet(name, index)` moves a sheet to position `index` (0-based) among the document's
+sheets, shifting the others. Raises `IndexError` for an unknown name, and `ValueError` if
+`index` is out of range.
 
 ### Deleting rows, columns and sheets
 
