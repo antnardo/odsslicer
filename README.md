@@ -612,6 +612,14 @@ sheets, `ArrayValues`, writing (`Cell.value = ...`, `ODSReader.save()` and its s
 well as regression tests for the fixed bugs (see below). It runs on every push/PR via
 [GitHub Actions](.github/workflows/ci.yml) across Python 3.10 to 3.13.
 
+`tests/test_libreoffice_consistency.py` is a separate, opt-in suite that hands files
+`odsslicer` wrote to a real, local LibreOffice (`soffice --headless --convert-to fods`) and
+inspects what LibreOffice itself made of them — the strongest available signal that a write
+(a style fork, a merge, a formula...) is genuinely valid ODF, not just something our own
+BeautifulSoup-based reader happens to parse back. It skips automatically if no
+`soffice`/`libreoffice` binary is on `PATH` (not installed in CI by default) — install
+LibreOffice locally to exercise it.
+
 ## Are there already equivalent PyPI modules?
 
 | Package | Read/Write | Latest release | Status |
