@@ -298,3 +298,22 @@ def test_libreoffice_reads_back_a_comment_without_corrupting_the_value(
     assert "<text:p>Sur deux lignes</text:p>" in xml
     # LibreOffice itself reads A1's actual value separately from the note
     assert "<text:p>texte simple</text:p>" in xml
+
+
+@requires_soffice
+def test_libreoffice_reads_back_a_sort_with_shifted_formulas(writable_reader, tmp_path, libreoffice_export):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].value = "Charlie"
+    s["B1"].value = 3.0
+    s["C1"].formula = "B1*10"
+    s["A2"].value = "Alice"
+    s["B2"].value = 1.0
+    s["C2"].formula = "B2*10"
+    s.sort("A1:C2", by=1, ascending=True)
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    assert "<text:p>Alice</text:p>" in xml
+    # Alice's row (now row 1) still has a same-row formula
+    assert re.search(r'table:formula="of:=\[\.B1\]\*10"[^>]*office:value="10"', xml)

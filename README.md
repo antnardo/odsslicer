@@ -13,7 +13,7 @@ merged rows/columns.
 Write support: `cell.value = ...`, `cell.formula = ...`, `cell.style.bold = ...` (and other
 formatting properties, including creating number formats and conditional formatting from
 scratch), `cell.comment = ...`, `sheet.merge(...)`/`.unmerge(...)`, `sheet.copy(...)`,
-`sheet.delete_row(...)`/`.delete_column(...)`/`table.delete_sheet(...)`, `table.properties`
+`sheet.sort(...)`, `sheet.delete_row(...)`/`.delete_column(...)`/`table.delete_sheet(...)`, `table.properties`
 (title, author, custom document properties), new sheets, even brand new files from scratch —
 then `reader.save(...)`. Repeated or merged cells are automatically unrolled/unmerged in the
 background on first write access, and writing beyond a sheet's current extent grows it
@@ -280,6 +280,24 @@ Grows the sheet first if `dest` extends past its current extent, and is safe whe
 `dest` overlap (every source cell is read before any destination cell is written). A merged
 source cell copies whatever value/style it individually carries (its own hidden value, if it's
 a covered cell) — the merge itself is not replicated at the destination.
+
+### Sorting a range
+
+`Sheet.sort(source, by, ascending=True)` sorts the rows of `source` (a range address) in
+place, by the values in column `by` (an absolute column index within `source`):
+
+```python
+sheet.sort("A2:C10", by=1)                   # sort rows 2-10 by column B, ascending
+sheet.sort("A2:C10", by=1, ascending=False)
+```
+
+A stable sort — rows with equal keys keep their relative order — and `None` always sorts last
+regardless of `ascending`, matching a real spreadsheet's usual treatment of blanks. Each row's
+value/formula/style moves together as a unit; a formula's references shift by that row's own
+displacement (same relative-reference semantics as `Cell.fill_formula`/`Sheet.copy` — a
+`$`-anchored reference stays put), so a same-row formula like `=B2*C2` still refers to its own,
+now-relocated row afterwards. Raises `ValueError` if `by` falls outside `source`'s columns. A
+merged cell within `source` moves only its own raw content, same caveat as `Sheet.copy`.
 
 ### Creating a new file from scratch
 

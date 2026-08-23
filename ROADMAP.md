@@ -26,6 +26,9 @@
   correction d'un vrai bug latent : la lecture/écriture de `Cell.text`/`.value` n'était pas
   scopée aux enfants directs de `table:table-cell`, donc un commentaire (qui contient ses
   propres `text:p`) aurait pu être confondu avec la valeur de la cellule.
+- Tri d'une plage (`Sheet.sort(source, by, ascending=True)`) : tri stable, `None` toujours en
+  dernier, le style/la formule de chaque ligne suit (une formule même-ligne comme `=B2*C2`
+  garde son sens après déplacement, mêmes règles de décalage relatif que `Cell.fill_formula`).
 
 ## Formules
 
@@ -40,9 +43,6 @@
 
 ## Gaps identifiés (rien d'entamé) — probablement les plus utiles
 
-- **Trier une plage** (`Sheet.sort(range, by=col, ascending=True)` ou similaire) : opération de
-  base de tableur, absente. Nécessite de réordonner des lignes de `Cell` en préservant style/
-  formule — proche en mécanique de `Sheet.copy`.
 - **Renommer / réordonner les feuilles** : `add_sheet`/`delete_sheet` existent, mais pas
   `rename_sheet`/de façon de changer l'ordre des onglets (position dans `self.tables`).
 - **Liens hypertexte dans une cellule** (`<text:a xlink:href="...">` autour du texte) : pas lus,

@@ -11,6 +11,7 @@ from typing import Union, Dict, Tuple
 import ast
 import copy
 import datetime as dt
+import functools
 import numpy as np
 import re
 import math
@@ -1638,6 +1639,72 @@ class Sheet:
                 target = self.rows[dest_row0 + i][dest_col0 + j]
                 if formula is not None:
                     target.formula = _shift_odf_formula(formula, drow, dcol)
+                else:
+                    target.value = value
+                target.style = style_name
+
+    def sort(self, source, by, ascending=True):
+        """Sort the rows of `source` (a range address, e.g. `"A2:C10"`) in
+        place by the values in column `by` (an absolute column index,
+        which must fall within `source`'s own columns) - a stable sort
+        (rows with equal keys keep their relative order), and `None`
+        values always sort last regardless of `ascending`, matching how a
+        real spreadsheet's sort treats blanks.
+
+        Each row's value/formula/style moves together as a unit; a
+        formula's references shift by that row's own displacement - the
+        same relative-reference semantics as `Cell.fill_formula`/
+        `Sheet.copy` (a `$`-anchored reference stays put) - so e.g. a
+        same-row `=B2*C2` formula still refers to its own, now-relocated
+        row afterwards. A merged cell within `source` moves only its own
+        raw content, same caveat as `Sheet.copy` - the merge itself isn't
+        preserved.
+
+        Raises `ValueError` if `by` falls outside `source`'s columns.
+        """
+        row0, row1, col0, col1 = self._resolve_range(source)
+        if not col0 <= by <= col1:
+            raise ValueError(f"sort column {by} is outside {source!r}'s columns ({col0}-{col1})")
+
+        snapshot = [
+            (
+                r,
+                [
+                    (
+                        self.rows[r][c].value,
+                        self.rows[r][c].formula,
+                        self.rows[r][c].attrs.get("table:style-name"),
+                    )
+                    for c in range(col0, col1 + 1)
+                ],
+            )
+            for r in range(row0, row1 + 1)
+        ]
+        key_offset = by - col0
+
+        def compare(a, b):
+            va, vb = a[1][key_offset][0], b[1][key_offset][0]
+            if va is None and vb is None:
+                return 0
+            if va is None:
+                return 1
+            if vb is None:
+                return -1
+            if va < vb:
+                return -1 if ascending else 1
+            if va > vb:
+                return 1 if ascending else -1
+            return 0
+
+        ordered = sorted(snapshot, key=functools.cmp_to_key(compare))
+
+        for new_offset, (old_row, row_data) in enumerate(ordered):
+            new_row = row0 + new_offset
+            drow = new_row - old_row
+            for j, (value, formula, style_name) in enumerate(row_data):
+                target = self.rows[new_row][col0 + j]
+                if formula is not None:
+                    target.formula = _shift_odf_formula(formula, drow, 0)
                 else:
                     target.value = value
                 target.style = style_name

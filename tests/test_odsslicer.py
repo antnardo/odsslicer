@@ -2917,3 +2917,87 @@ def test_save_round_trip_after_comment(writable_reader, tmp_path):
     assert comment.author == "Antonin"
     assert comment.date == dt.datetime(2026, 8, 23, 10, 30)
     assert comment.visible is True
+
+
+# ---------------------------------------------------------------------------
+# Sheet.sort
+# ---------------------------------------------------------------------------
+
+def _fill_sort_table(s):
+    s["A1"].value = "Charlie"
+    s["B1"].value = 3.0
+    s["C1"].formula = "B1*10"
+    s["A2"].value = "Alice"
+    s["B2"].value = 1.0
+    s["C2"].formula = "B2*10"
+    s["A3"].value = "Bob"
+    s["B3"].value = None
+    s["A4"].value = "Dana"
+    s["B4"].value = 2.0
+    s["C4"].formula = "B4*10"
+    s["A1"].style.bold = True
+
+
+def test_sort_ascending_by_column(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    _fill_sort_table(s)
+    s.sort("A1:C4", by=1, ascending=True)
+    assert [s[i, 0].value for i in range(4)] == ["Alice", "Dana", "Charlie", "Bob"]
+
+
+def test_sort_none_always_sorts_last(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    _fill_sort_table(s)
+    s.sort("A1:C4", by=1, ascending=False)
+    # descending would put a "biggest" None first under naive reverse=True -
+    # it must still sort last
+    assert [s[i, 0].value for i in range(4)] == ["Charlie", "Dana", "Alice", "Bob"]
+
+
+def test_sort_is_stable(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].value = "first"
+    s["B1"].value = 1.0
+    s["A2"].value = "second"
+    s["B2"].value = 1.0
+    s["A3"].value = "third"
+    s["B3"].value = 1.0
+    s.sort("A1:B3", by=1)
+    assert [s[i, 0].value for i in range(3)] == ["first", "second", "third"]
+
+
+def test_sort_moves_style_with_its_row(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    _fill_sort_table(s)
+    s.sort("A1:C4", by=1, ascending=True)
+    assert s["A3"].value == "Charlie" and s["A3"].style.bold is True
+    assert s["A1"].style.bold is False
+
+
+def test_sort_shifts_same_row_formula_references(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    _fill_sort_table(s)
+    s.sort("A1:C4", by=1, ascending=True)
+    # Alice's row (was row 2, now row 1) keeps a formula referring to its
+    # own (now relocated) row
+    assert s["A1"].value == "Alice"
+    assert s["C1"].formula_friendly == "=B1*10"
+
+
+def test_sort_column_out_of_range_raises(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    _fill_sort_table(s)
+    with pytest.raises(ValueError):
+        s.sort("A1:C4", by=5)
+
+
+def test_save_round_trip_after_sort(writable_reader, tmp_path):
+    s = writable_reader.sheet("Sheet1")
+    _fill_sort_table(s)
+    s.sort("A1:C4", by=1, ascending=True)
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    reread = ODSReader(out).sheet("Sheet1")
+    assert [reread[i, 0].value for i in range(4)] == ["Alice", "Dana", "Charlie", "Bob"]
+    assert reread["C1"].formula_friendly == "=B1*10"
