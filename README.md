@@ -658,34 +658,14 @@ real differentiator — numpy-style indexing/slicing by cell address — rather 
 ## Notable bug fixes
 
 The following bugs were found and fixed in `src/odsslicer/classes.py` while developing this
-module (most of them while rereading the original internal version ahead of its first
-release):
+module.
 
-1. **`Sheet.string_address`** produced a wrong address for most multi-letter columns (e.g.
-   column 27 → `"BB1"` instead of `"AB1"`, column 51 → `"ZZ1"` instead of `"AZ1"`) due to a
-   poorly implemented base-26 numbering. Fixed with the standard bijective numbering
-   algorithm.
-2. **`Sheet.get_col`** compared the requested column index to `self.n_rows` instead of
-   `self.n_cols` to detect an out-of-range access: on any sheet with more rows than columns,
-   requesting an out-of-range column raised an `IndexError` instead of returning an empty
-   column.
-3. The `[WARNING]` for rows of differing lengths **never** fired, even in the presence of a
-   genuine inconsistency: `rows_len` was a `map` iterator already exhausted once by `max()`,
-   hence empty on the second read used to compute the warning.
-4. **`Sheet.empty_row` / `Sheet.empty_col`**, when explicitly passed the `slice` argument,
-   returned one fewer element than expected (an element count was recomputed and then
-   mistakenly reused as a `range` stop bound).
-5. **`ODSReader.sheets`** was a single-use generator property (couldn't `len()` it or iterate
-   it twice), with dead code after the `yield` that could never execute. Replaced with a
-   plain, reusable list.
-6. `Cell.__floot__` (a typo for `__floor__`) was fixed — with no observed functional impact
-   (Python fell back to `__float__` for `math.floor()`), but it kept a misleading name.
-7. **Reading boolean cells**: the `"boolean"` format looked up the value in `office:value`
+1. **Reading boolean cells**: the `"boolean"` format looked up the value in `office:value`
    (like numbers) instead of the actual ODF attribute `office:boolean-value`, and converted
    it with `bool(s)` — which returns `True` for the non-empty string `"false"`. A real ODF
    boolean cell therefore always read back as `False`. Fixed (reading and writing are now
    symmetric for this format).
-8. **`Cell.text`/`str(cell)` returned the literal string `"None"`** instead of the actual
+2. **`Cell.text`/`str(cell)` returned the literal string `"None"`** instead of the actual
    text, in two common cases: a cell whose `<text:p>` is empty (typically a formula whose
    cached result is an empty string) and a cell whose text is spread across several nodes
    (`<text:span>` for partial formatting, e.g. "1st" with "st" as superscript). In both
@@ -693,19 +673,19 @@ release):
    the old code did `str(p.string)`, turning that `None` into the string `"None"`. Fixed by
    using `p.get_text()`, which correctly concatenates all descendant text (and returns `""`
    for a genuinely empty cell).
-9. **Growing an empty sheet (or one whose XML has a trailing empty row) could corrupt it on
+3. **Growing an empty sheet (or one whose XML has a trailing empty row) could corrupt it on
    the next save/reload.** `load()` discards some rows from its in-memory view (a lone blank
    row on an "empty" sheet, a trailing empty row) but never removes the corresponding
    `<table:table-row>` from the underlying XML. `Sheet.grow_to` appended new rows after
    whatever was physically there without accounting for this, so those still-present rows
    would resurface as an extra, wrongly-shaped row once the file was saved and re-parsed.
    Fixed: any such stray row is now discarded first.
-10. **A cell holding only a formula (no cached value/text) was wrongly treated as
+4. **A cell holding only a formula (no cached value/text) was wrongly treated as
     `is_empty`.** `Cell.is_empty` never accounted for `.formula`, only for value/text/format.
     If such a cell ended up as a sheet's last row, `load()`'s "trim a trailing empty row"
     cleanup silently dropped it — a formula written near the edge of a sheet could vanish on
     the next save/reload. Fixed: `is_empty` now also checks the formula.
-11. **Writing to a sheet that is the only one in the whole document, with nothing anywhere
+5. **Writing to a sheet that is the only one in the whole document, with nothing anywhere
     else to copy a namespace template from, failed outright.** Building `ODSReader.new()`'s
     bundled template surfaced two related bugs in the "copy an existing tag" approach used to
     create new XML elements: `Sheet.grow_to` discarded a sheet's own lone "phantom" blank row
