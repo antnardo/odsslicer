@@ -12,7 +12,7 @@ merged rows/columns.
 
 Write support: `cell.value = ...`, `cell.formula = ...`, `cell.style.bold = ...` (and other
 formatting properties, including creating number formats and conditional formatting from
-scratch), `cell.comment = ...`, `sheet.merge(...)`/`.unmerge(...)`, `sheet.copy(...)`,
+scratch), `cell.comment = ...`, `cell.hyperlink = ...`, `sheet.merge(...)`/`.unmerge(...)`, `sheet.copy(...)`,
 `sheet.sort(...)`, `sheet.delete_row(...)`/`.delete_column(...)`/`table.delete_sheet(...)`,
 `table.rename_sheet(...)`/`.move_sheet(...)`, `table.properties` (title, author, custom
 document properties), new sheets, even brand new files from scratch — then `reader.save(...)`.
@@ -784,6 +784,22 @@ cell.comment.visible = True     # pinned open, rather than only shown on hover
 
 `.text` joins ODF's own multiple `text:p` paragraphs with `\n` on read, and splits on `\n`
 back into separate paragraphs on write, so a multi-line note round-trips correctly.
+
+## Cell hyperlinks
+
+`Cell.hyperlink` reads a cell's link URL (`xlink:href` on a `<text:a>` wrapping the cell's
+whole text) — `None` if it has none:
+
+```python
+cell.hyperlink                         # None, or a URL
+cell.hyperlink = "https://example.com"  # wraps the cell's current text in a link
+cell.hyperlink = None                   # unwraps it, leaving the plain text in place
+```
+
+Setting a hyperlink on an empty cell gives it empty text to wrap first. Only a whole-cell link
+is supported — a link on just part of the text, mixed with plain text, isn't modeled. Writing
+a new `.value` afterwards replaces the cell's text (link included), same as it always does —
+the link isn't carried over, since it was tied to that specific text.
 
 ## Known limitations
 

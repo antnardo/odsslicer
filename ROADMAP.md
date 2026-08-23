@@ -34,6 +34,9 @@
   explicitement l'ancien nom (`Sheet1.A6` → `NouveauNom.A6`, avec guillemets automatiques si
   besoin) ; une référence non qualifiée dans les formules de la feuille elle-même n'a pas
   besoin d'être touchée.
+- Liens hypertexte dans une cellule (`Cell.hyperlink`, `<text:a xlink:href="...">`) — lien sur
+  la cellule entière uniquement (pas sur une portion du texte, voir "texte enrichi partiel"
+  ci-dessous). Écrire une nouvelle `.value` efface le lien, comme dans un vrai tableur.
 
 ## Formules
 
@@ -45,11 +48,6 @@
   syntaxe "friendly" des formules — il faut les référencer via la syntaxe ODF brute (`[...]`).
 - Les références 3D (une plage sur plusieurs feuilles, `Sheet1:Sheet3.A1`) ne sont pas non plus
   traduites.
-
-## Gaps identifiés (rien d'entamé) — probablement le plus utile
-
-- **Liens hypertexte dans une cellule** (`<text:a xlink:href="...">` autour du texte) : pas lus,
-  pas écrits — `Cell.text` les aplatit dans le texte brut.
 
 ## Gaps identifiés — utiles mais plus de niche
 

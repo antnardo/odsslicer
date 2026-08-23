@@ -57,6 +57,7 @@ _ODF_NAMESPACES = {
     "number": "urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0",
     "meta": "urn:oasis:names:tc:opendocument:xmlns:meta:1.0",
     "dc": "http://purl.org/dc/elements/1.1/",
+    "xlink": "http://www.w3.org/1999/xlink",
 }
 
 
@@ -1306,6 +1307,51 @@ class Cell:
             tag = _blank_template(self.cell, "office:annotation")
             self.cell.insert(0, tag)
         Comment(tag).text = value
+
+    @property
+    def hyperlink(self):
+        """This cell's hyperlink URL (`xlink:href` on a `<text:a>`
+        wrapping the cell's whole text), or `None` if it has none.
+        Writable: `cell.hyperlink = "https://..."` wraps the cell's
+        current text in a link (giving it empty text first if it has
+        none yet); `cell.hyperlink = None` unwraps it, leaving the plain
+        text in place. Only a whole-cell link is supported - a link on
+        just part of the text, mixed with plain text, isn't modeled.
+
+        Writing a new `.value` afterwards replaces the cell's text (link
+        included) same as it always does - the link isn't carried over,
+        since it was tied to that specific text."""
+        p = self.cell.find("text:p", recursive=False)
+        if p is None:
+            return None
+        a = p.find("text:a", recursive=False)
+        return a.get("xlink:href") if a is not None else None
+
+    @hyperlink.setter
+    def hyperlink(self, url):
+        self._prepare_for_write()
+        p = self.cell.find("text:p", recursive=False)
+        if url is None:
+            if p is not None:
+                a = p.find("text:a", recursive=False)
+                if a is not None:
+                    a.unwrap()
+            return
+        if not isinstance(url, str):
+            raise TypeError(f"cell.hyperlink must be a str or None, got {type(url)!r}")
+        if p is None:
+            self._set_text(self.text or "")
+            p = self.cell.find("text:p", recursive=False)
+        a = p.find("text:a", recursive=False)
+        if a is None:
+            a = _blank_template(self.cell, "text:a")
+            a.attrs["xmlns:xlink"] = _ODF_NAMESPACES["xlink"]
+            text = p.get_text()
+            for child in list(p.children):
+                child.extract()
+            a.string = text
+            p.append(a)
+        a.attrs["xlink:href"] = url
 
 
 class Sheet:

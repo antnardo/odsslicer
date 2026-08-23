@@ -3126,3 +3126,75 @@ def test_save_round_trip_after_move_sheet(writable_reader, tmp_path):
     reread = ODSReader(out)
     assert reread.sheets_names == ["SheetFusion", "Sheet1", "Sheet2Repeat", "SheetEmpty"]
     assert reread.sheet("Sheet1")["A1"].value == "texte simple"
+
+
+# ---------------------------------------------------------------------------
+# Cell.hyperlink
+# ---------------------------------------------------------------------------
+
+def test_cell_with_no_hyperlink_is_none(reader):
+    s = reader.sheet("Sheet1")
+    assert s["A1"].hyperlink is None
+
+
+def test_setting_a_hyperlink_wraps_the_existing_text(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].hyperlink = "https://example.com"
+    assert s["A1"].hyperlink == "https://example.com"
+    assert s["A1"].value == "texte simple"  # text/value untouched
+
+
+def test_setting_a_hyperlink_on_an_empty_cell_gives_it_empty_text(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].hyperlink = "https://example.com"
+    assert s["C1"].hyperlink == "https://example.com"
+    assert s["C1"].text == ""
+
+
+def test_removing_a_hyperlink_keeps_the_text(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].hyperlink = "https://example.com"
+    s["A1"].hyperlink = None
+    assert s["A1"].hyperlink is None
+    assert s["A1"].value == "texte simple"
+
+
+def test_overwriting_the_value_clears_the_hyperlink(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].hyperlink = "https://example.com"
+    s["A1"].value = "new text"
+    assert s["A1"].hyperlink is None
+    assert s["A1"].value == "new text"
+
+
+def test_setting_a_non_string_hyperlink_raises(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(TypeError):
+        s["A1"].hyperlink = 42
+
+
+def test_setting_a_hyperlink_twice_replaces_the_url(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].hyperlink = "https://first.example"
+    s["A1"].hyperlink = "https://second.example"
+    assert s["A1"].hyperlink == "https://second.example"
+    assert s["A1"].value == "texte simple"  # text still there, not duplicated
+
+
+def test_hyperlink_on_a_repeated_cell_only_affects_that_cell(writable_reader):
+    s = writable_reader.sheet("Sheet2Repeat")
+    s["A1"].hyperlink = "https://example.com"
+    assert s["A1"].hyperlink == "https://example.com"
+    assert s["C1"].hyperlink is None  # shared the same compressed element originally
+
+
+def test_save_round_trip_after_hyperlink(writable_reader, tmp_path):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].value = "Anthropic"
+    s["C1"].hyperlink = "https://anthropic.com"
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    reread = ODSReader(out).sheet("Sheet1")
+    assert reread["C1"].value == "Anthropic"
+    assert reread["C1"].hyperlink == "https://anthropic.com"

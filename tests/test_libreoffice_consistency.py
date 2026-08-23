@@ -335,3 +335,15 @@ def test_libreoffice_reads_back_a_renamed_and_reordered_sheet(writable_reader, t
     assert names[:2] == ["SheetFusion", "Mon Bilan"]
     # the cross-sheet formula follows the rename, correctly quoted
     assert re.search(r"table:formula=\"of:=\[&apos;Mon Bilan&apos;\.A2\]\"", xml)
+
+
+@requires_soffice
+def test_libreoffice_reads_back_a_hyperlink(writable_reader, tmp_path, libreoffice_export):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].value = "Anthropic"
+    s["C1"].hyperlink = "https://anthropic.com"
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    assert re.search(r'<text:a xlink:href="https://anthropic\.com/?"[^>]*>Anthropic</text:a>', xml)
