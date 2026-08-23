@@ -259,3 +259,25 @@ def test_libreoffice_reads_back_a_delete_row_with_adjusted_formulas(
     # reference at their new, shifted addresses
     assert re.search(r'table:formula="of:=\[\.A5\]\+\[\.A6\]"', xml)
     assert re.search(r'table:formula="of:=\[Sheet1\.A5\]\+\[Sheet1\.A6\]"', xml)
+
+
+@requires_soffice
+def test_libreoffice_opens_a_value_rendered_from_a_real_format_with_no_example(tmp_path, libreoffice_export):
+    # a document with a single cell - genuinely nothing for the
+    # learn-by-example heuristic to work from, so the written text comes
+    # entirely from _render_number_from_format reading the real NumberFormat
+    r = ODSReader.new()
+    s = r.sheet("Sheet1")
+    fmt = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="$", grouping=True)
+    s["A1"].style.number_format = fmt
+    s["A1"].value = 1234.5
+    out = tmp_path / "out.ods"
+    r.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    # LibreOffice opened it, accepted office:value-type/office:currency, and
+    # recomputed its own (locale-formatted) display text from the real format
+    # - proof the underlying data (not just our own cached text guess) is valid
+    assert 'office:value-type="currency"' in xml
+    assert 'office:value="1234.5"' in xml
+    assert re.search(r"<text:p>1.234[,.]50\s*\$</text:p>", xml)

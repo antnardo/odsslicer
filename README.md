@@ -458,20 +458,38 @@ sheet["A8"].text    # "05/01/30"
 ```
 
 If no example is found, or if the inferred pattern doesn't reproduce the example's text
-exactly (and is therefore deemed unreliable), `odsslicer` falls back to a plain Python
-conversion rather than producing incoherent text. For "general" numbers (plain `float`
-format, not percentage/currency), only the decimal separator is reused — never the decimal
-count, which would truncate the new value's precision.
+exactly (and is therefore deemed unreliable), `odsslicer` falls back to reading the cell's own
+real, resolved `NumberFormat` directly (see [Styles](#styles) above) — decimal places,
+thousands grouping, currency symbol, or a date/time layout from `.components` — genuinely
+reading the document's format rather than guessing at it:
+
+```python
+table = ODSReader.new()             # a blank document - nothing anywhere to learn from
+sheet = table.sheet("Sheet1")
+fmt = NumberFormat.create(table, "currency", decimal_places=2, currency_symbol="$", grouping=True)
+sheet["A1"].style.number_format = fmt
+sheet["A1"].value = 1234.5
+sheet["A1"].text                     # "1,234.50 $" - read from the real format, not guessed
+```
+
+This second layer renders with a plain `.`/`,` (decimal/grouping) convention, since a
+`NumberFormat` doesn't capture the document's actual locale the way a real example's text
+does — real spreadsheet applications recompute the display text from the format on open
+anyway, so this cached text is mostly relevant to `odsslicer`'s own `.text` reads. Only if
+*neither* layer applies (no example anywhere, and the cell has no resolvable format either)
+does it fall back to a plain Python conversion. For "general" numbers (plain `float` format,
+not percentage/currency) the first layer only ever reuses the decimal separator — never the
+decimal count, which would truncate the new value's precision.
 
 ### What is **not** supported
 
 - No formula evaluation (see above). Named ranges and 3D references (a range spanning several
   sheets) aren't translated by the friendly formula syntax either — write them in ODF's own
   bracket syntax directly (the `[` escape hatch, see above).
-- No real ODF formatting engine (resolving `styles.xml`, the document's locale, the actual
-  currency): the inference above is a learn-by-example heuristic, not a read of the cell's
-  style — it can silently fail (falling back to a plain conversion) for a format no other
-  cell in the document already illustrates.
+- The displayed-text inference above doesn't capture the document's actual locale (see
+  [Displayed text](#displayed-text-learned-from-an-example-rather-than-a-raw-conversion)) -
+  its two layers can each produce a different decimal/thousands separator convention than the
+  rest of the document when they apply.
 
 ## Cell addressing
 

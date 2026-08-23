@@ -853,16 +853,88 @@ def test_boolean_display_text_learned_from_another_cell_of_the_same_polarity(wri
     assert s["C3"].text == "false"
 
 
-def test_number_inference_bails_out_safely_on_a_style_it_cannot_reproduce(writable_reader):
-    # if the self-consistency check fails the inferred pattern is discarded, so a
-    # cell whose template text doesn't match our simple prefix/number/suffix model
-    # falls back to the plain str() conversion rather than producing garbage.
+def test_number_inference_falls_through_to_the_real_format_when_it_cannot_reproduce_an_example(
+    writable_reader,
+):
+    # if the self-consistency check fails, the inferred (learn-by-example) pattern
+    # is discarded - but A6 still has a real, resolvable percentage NumberFormat of
+    # its own (ce1 -> N11, 2 decimal places), so the *real format* fallback (see
+    # below) renders it correctly instead of giving up to a bare str() conversion
     s = writable_reader.sheet("Sheet1")
     cell = s["A6"]
     cell.cell.find("text:p").string = "deux cents"  # not a model our regex can parse
     cell.__init__(cell.cell, row=cell.row, col=cell.col, sheet=cell.sheet)  # refresh the cache
     cell.value = 0.75
-    assert cell.text == "0.75"
+    assert cell.text == "75.00 %"
+
+
+# ---------------------------------------------------------------------------
+# Écriture : texte affiché - repli sur une vraie lecture du format ODF
+# (plutôt qu'une heuristique par apprentissage) quand aucun exemple n'existe
+# ---------------------------------------------------------------------------
+
+def _blank_document():
+    # a document freshly created with ODSReader.new() has exactly one
+    # cell, blank - genuinely nothing anywhere for _infer_*_display to
+    # learn from, unlike any sheet within TEST.ods (find_previous/
+    # find_next search the *whole* document, so even an unrelated
+    # sheet's plain numbers can accidentally supply a matching template)
+    return ODSReader.new()
+
+
+def test_number_display_reads_the_real_format_with_no_example_anywhere():
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    fmt = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="$", grouping=True)
+    s["A1"].style.number_format = fmt  # no prior .value write - a truly virgin cell
+    s["A1"].value = 1234.5
+    assert s["A1"].text == "1,234.50 $"
+
+
+def test_percentage_display_reads_the_real_format_with_no_example_anywhere():
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    fmt = NumberFormat.create(r, "percentage", decimal_places=1)
+    s["A1"].style.number_format = fmt
+    s["A1"].value = 0.256
+    assert s["A1"].text == "25.6 %"
+
+
+def test_date_display_reads_the_real_format_with_no_example_anywhere():
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    fmt = NumberFormat.create(
+        r, "date", components=[("year", "long"), ("text", "-"), ("month", "long"), ("text", "-"), ("day", "long")]
+    )
+    s["A1"].style.number_format = fmt
+    s["A1"].value = dt.date(2026, 3, 5)
+    assert s["A1"].text == "2026-03-05"
+
+
+def test_time_display_reads_the_real_format_with_no_example_anywhere():
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    fmt = NumberFormat.create(r, "time", components=[("hours", "long"), ("text", "h"), ("minutes", "long")])
+    s["A1"].style.number_format = fmt
+    s["A1"].value = dt.time(9, 5)
+    assert s["A1"].text == "09h05"
+
+
+def test_display_falls_back_to_plain_conversion_with_no_example_and_no_style():
+    # the ultimate fallback still applies when there's truly nothing to go on
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    s["A1"].value = 1234.5
+    assert s["A1"].text == "1234.5"
+
+
+def test_number_format_with_an_unsupported_date_component_falls_back_safely():
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    fmt = NumberFormat.create(r, "date", components=[("day-of-week", "long"), ("text", " "), ("day", "long")])
+    s["A1"].style.number_format = fmt
+    s["A1"].value = dt.date(2026, 3, 5)
+    assert s["A1"].text == "2026-03-05"  # isoformat() fallback, not a partial/garbled render
 
 
 # ---------------------------------------------------------------------------

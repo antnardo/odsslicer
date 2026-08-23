@@ -654,15 +654,27 @@ class Cell:
             # keep the existing display format (float/percentage/currency) if there was one
             fmt = self.format if self.format in ("float", "percentage", "currency") else "float"
             tag.attrs["office:value"] = str(new_value)
-            text = self._infer_number_display(fmt, new_value) or str(new_value)
+            text = (
+                self._infer_number_display(fmt, new_value)
+                or self._render_display_from_number_format(new_value)
+                or str(new_value)
+            )
         elif isinstance(new_value, dt.date) and not isinstance(new_value, dt.datetime):
             fmt = "date"
             tag.attrs["office:date-value"] = new_value.isoformat()
-            text = self._infer_date_display(new_value) or new_value.isoformat()
+            text = (
+                self._infer_date_display(new_value)
+                or self._render_display_from_number_format(new_value)
+                or new_value.isoformat()
+            )
         elif isinstance(new_value, dt.time):
             fmt = "time"
             tag.attrs["office:time-value"] = new_value.strftime("PT%HH%MM%SS")
-            text = self._infer_time_display(new_value) or new_value.isoformat()
+            text = (
+                self._infer_time_display(new_value)
+                or self._render_display_from_number_format(new_value)
+                or new_value.isoformat()
+            )
         else:
             raise TypeError(f"unsupported value type for a Cell: {type(new_value)}")
 
@@ -886,6 +898,37 @@ class Cell:
         for template_raw, template_text in self._format_template_candidates("boolean", "office:boolean-value"):
             if template_raw == target_raw:
                 return template_text
+        return None
+
+    def _resolved_number_format(self, value):
+        """This cell's real `NumberFormat`, resolved against `value` (for
+        a conditional format, e.g. red-negative-currency) - unlike the
+        `.style` property, this always resolves against `value` directly
+        rather than `self._value` (which, mid-write, still holds the
+        *previous* value). `None` if this cell has no owning
+        `ODSReader`/style, or no `style:data-style-name` at all."""
+        if self.sheet is None or self.sheet.reader is None:
+            return None
+        style = CellStyle(self.sheet.reader, self.attrs.get("table:style-name"), value=value, cell=self)
+        return style.number_format
+
+    def _render_display_from_number_format(self, new_value):
+        """The display text `new_value` should have per this cell's own
+        real, resolved number format - decimal places, grouping, currency
+        symbol, or a date/time layout - read directly from the document
+        rather than guessed from another cell's example. Used as a
+        fallback in `.value`'s setter, once `_infer_*_display` finds no
+        example cell to learn from (previously the silent gap this closes
+        - see the README's known limitations). `None` if this cell has no
+        resolvable format, or the format's family doesn't apply to
+        `new_value`'s type."""
+        number_format = self._resolved_number_format(new_value)
+        if isinstance(new_value, (int, float)) and not isinstance(new_value, bool):
+            return _render_number_from_format(number_format, new_value)
+        if isinstance(new_value, dt.date) and not isinstance(new_value, dt.datetime):
+            return _render_date_time_from_format(number_format, new_value, "date")
+        if isinstance(new_value, dt.time):
+            return _render_date_time_from_format(number_format, new_value, "time")
         return None
 
     def _set_text(self, text):
@@ -2157,6 +2200,70 @@ class NumberFormat:
 
     def __repr__(self):
         return f"NumberFormat(name={self.name!r}, family={self.family!r})"
+
+
+_DATE_TIME_RENDER_LONG = {
+    "day": lambda v: f"{v.day:02d}",
+    "month": lambda v: f"{v.month:02d}",
+    "year": lambda v: f"{v.year:04d}",
+    "hours": lambda v: f"{v.hour:02d}",
+    "minutes": lambda v: f"{v.minute:02d}",
+    "seconds": lambda v: f"{v.second:02d}",
+}
+_DATE_TIME_RENDER_SHORT = {
+    "day": lambda v: str(v.day),
+    "month": lambda v: str(v.month),
+    "year": lambda v: str(v.year % 100),
+    "hours": lambda v: str(v.hour),
+    "minutes": lambda v: str(v.minute),
+    "seconds": lambda v: str(v.second),
+}
+
+
+def _render_number_from_format(number_format, value):
+    """Render `value` per `number_format`'s own real definition - decimal
+    places, thousands grouping, currency symbol - a genuine read of the
+    document's ODF format rather than a guess from another cell's
+    example (see `Cell._infer_number_display`). `None` if `number_format`
+    isn't a `"number"`/`"percentage"`/`"currency"` family.
+
+    Renders with a plain `.`/`,` (decimal/grouping) convention - the
+    document's actual locale isn't captured by `NumberFormat` - so this
+    is only ever tried as a fallback once no example cell is available to
+    learn the real locale-specific separators from."""
+    if number_format is None or number_format.family not in ("number", "percentage", "currency"):
+        return None
+    scale = 100 if number_format.family == "percentage" else 1
+    decimals = number_format.decimal_places or 0
+    rendered = f"{value * scale:,.{decimals}f}" if number_format.grouping else f"{value * scale:.{decimals}f}"
+    if number_format.family == "percentage":
+        return f"{rendered} %"
+    if number_format.family == "currency" and number_format.currency_symbol:
+        return f"{rendered} {number_format.currency_symbol}"
+    return rendered
+
+
+def _render_date_time_from_format(number_format, value, family):
+    """Render `value` (a `datetime.date` or `datetime.time`) by walking
+    `number_format.components` - the same ordered layout `.components`
+    itself exposes on read. `None` if `number_format` isn't a `family`
+    format, has no `.components`, or uses a component this doesn't know
+    how to render (`day-of-week`/`week-of-year`/`quarter`/`era`) - safer
+    to fall back than to silently drop part of the layout."""
+    if number_format is None or number_format.family != family or not number_format.components:
+        return None
+    parts = []
+    for kind, style in number_format.components:
+        if kind == "text":
+            parts.append(style)
+        elif kind == "am-pm":
+            parts.append("PM" if value.hour >= 12 else "AM")
+        elif kind in _DATE_TIME_RENDER_LONG:
+            renderer = _DATE_TIME_RENDER_LONG if style == "long" else _DATE_TIME_RENDER_SHORT
+            parts.append(renderer[kind](value))
+        else:
+            return None
+    return "".join(parts)
 
 
 def _make_border(raw):

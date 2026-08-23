@@ -15,6 +15,12 @@
   inter-feuilles (`Sheet1.A6`) — une référence pointant exactement sur la ligne/colonne
   supprimée reste inchangée (pas d'équivalent `#REF!`, cohérent avec l'absence de moteur de
   calcul).
+- Texte affiché à l'écriture : quand aucune cellule du document n'illustre déjà le format
+  (l'heuristique par apprentissage échoue), repli sur une vraie lecture du `NumberFormat`
+  résolu de la cellule (décimales, groupement, symbole monétaire, composants date/heure)
+  plutôt qu'une conversion brute — `_render_number_from_format`/`_render_date_time_from_format`.
+  Reste approximatif sur la locale exacte (séparateurs `.`/`,` fixes, pas de lecture de
+  `number:language`/`number:country`).
 
 ## Formules
 
@@ -22,15 +28,3 @@
   recalculée — écrire une formule n'actualise pas le résultat affiché.
 - Les plages nommées et les références 3D (plusieurs feuilles) ne sont pas traduites par la
   syntaxe "friendly" — il faut passer par la syntaxe ODF brute (`[...]`).
-
-## Texte affiché à l'écriture
-
-- L'inférence du format d'affichage (`Cell._infer_number_display` et consorts) reste une
-  heuristique par apprentissage sur d'autres cellules du document, pas une vraie lecture du
-  moteur de formatage ODF/locale — peut se rabattre silencieusement sur une conversion brute
-  si aucune cellule n'illustre déjà ce format.
-
-## Autres
-
-- Gros classeurs au-delà de `MAX_REPEAT_ROWS`/`MAX_REPEAT_COLS` : les lignes/colonnes répétées
-  surnuméraires sont détectées et jetées plutôt que matérialisées.
