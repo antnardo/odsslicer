@@ -3313,3 +3313,47 @@ def test_save_round_trip_after_create_pivot_table(writable_reader, tmp_path):
     assert tag.get("table:target-range-address") == "SheetEmpty.E1"
     # source data survived untouched
     assert reread.sheet("SheetEmpty")["A2"].value == "A"
+
+
+# ---------------------------------------------------------------------------
+# recalculate(): error paths that don't need LibreOffice installed
+# ---------------------------------------------------------------------------
+
+def test_recalculate_missing_file_raises(tmp_path):
+    from odsslicer import recalculate
+
+    with pytest.raises(FileNotFoundError):
+        recalculate(tmp_path / "does_not_exist.ods")
+
+
+def test_recalculate_explicit_nonexistent_executable_raises(writable_reader, tmp_path):
+    # an explicit absolute path that doesn't exist must error out, not fall
+    # back silently to whatever default install happens to be around
+    import odsslicer
+    from odsslicer import recalculate
+
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+    saved = odsslicer.LIBREOFFICE_COMMAND[0]
+    odsslicer.LIBREOFFICE_COMMAND[0] = str(tmp_path / "no" / "such" / "soffice")
+    try:
+        with pytest.raises(FileNotFoundError):
+            recalculate(out)
+    finally:
+        odsslicer.LIBREOFFICE_COMMAND[0] = saved
+
+
+def test_recalculate_bare_name_not_found_anywhere_raises(writable_reader, tmp_path, monkeypatch):
+    import odsslicer
+    from odsslicer import classes, recalculate
+
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+    monkeypatch.setattr(classes, "_LIBREOFFICE_FALLBACKS", [])
+    saved = odsslicer.LIBREOFFICE_COMMAND[0]
+    odsslicer.LIBREOFFICE_COMMAND[0] = "definitely-not-a-real-binary-name"
+    try:
+        with pytest.raises(FileNotFoundError):
+            recalculate(out)
+    finally:
+        odsslicer.LIBREOFFICE_COMMAND[0] = saved

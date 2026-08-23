@@ -373,3 +373,71 @@ def test_libreoffice_reads_back_a_pivot_table_definition(writable_reader, tmp_pa
     assert 'table:source-field-name="Category" table:orientation="row"' in pivot_xml
     assert 'table:source-field-name="Region" table:orientation="column"' in pivot_xml
     assert 'table:source-field-name="Amount" table:orientation="data" table:function="sum"' in pivot_xml
+
+
+# ---------------------------------------------------------------------------
+# recalculate() / save(recalculate=True): delegate computing to LibreOffice
+# ---------------------------------------------------------------------------
+
+def _write_stale_formula_and_pivot(reader):
+    s = reader.sheet("Sheet1")
+    assert s["A5"].formula_friendly == "=SUM(A2:A3)" and s["A5"].value == 6.4
+    s["A2"].value = 100.0  # A5's cached 6.4 is now stale (A3 is 3.0 -> should become 103.0)
+    s["C1"].formula = "A2*2"  # fresh formula, no cached value at all
+    se = reader.sheet("SheetEmpty")
+    for i, (cat, amt) in enumerate([("Category", "Amount"), ("A", 10), ("B", 20), ("A", 5)]):
+        se[i, 0].value = cat
+        se[i, 1].value = amt
+    se.create_pivot_table("A1:B4", "D1", rows=["Category"], values={"Amount": "sum"})
+
+
+@requires_soffice
+def test_save_with_recalculate_computes_stale_and_fresh_formulas(writable_reader, tmp_path):
+    _write_stale_formula_and_pivot(writable_reader)
+    out = tmp_path / "out.ods"
+    writable_reader.save(out, recalculate=True)
+
+    reread = ODSReader(out).sheet("Sheet1")
+    assert reread["A5"].value == 103.0  # stale cached value was recomputed, not trusted
+    assert reread["C1"].value == 200.0  # fresh formula got a value
+    assert reread["A5"].formula_friendly == "=SUM(A2:A3)"  # formulas themselves preserved
+
+
+@requires_soffice
+def test_save_with_recalculate_materializes_pivot_tables(writable_reader, tmp_path):
+    _write_stale_formula_and_pivot(writable_reader)
+    out = tmp_path / "out.ods"
+    writable_reader.save(out, recalculate=True)
+
+    se = ODSReader(out).sheet("SheetEmpty")
+    # LibreOffice wrote the pivot's output grid at the target (D1): header row,
+    # one row per category, a grand total - the part odsslicer never computes
+    grid = {(se[i, 3].value, se[i, 4].value) for i in range(se.n_rows)}
+    assert ("Category", "Sum - Amount") in grid
+    assert ("A", 15.0) in grid
+    assert ("B", 20.0) in grid
+    assert ("Total Result", 35.0) in grid
+
+
+@requires_soffice
+def test_recalculate_function_on_an_existing_file(writable_reader, tmp_path):
+    from odsslicer import recalculate
+
+    _write_stale_formula_and_pivot(writable_reader)
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)  # plain save: nothing computed yet
+    assert ODSReader(out).sheet("Sheet1")["C1"].value is None
+
+    recalculate(out)
+    assert ODSReader(out).sheet("Sheet1")["C1"].value == 200.0
+
+
+@requires_soffice
+def test_recalculate_is_idempotent(writable_reader, tmp_path):
+    from odsslicer import recalculate
+
+    _write_stale_formula_and_pivot(writable_reader)
+    out = tmp_path / "out.ods"
+    writable_reader.save(out, recalculate=True)
+    recalculate(out)  # a second pass on an already-computed file must work too
+    assert ODSReader(out).sheet("Sheet1")["A5"].value == 103.0

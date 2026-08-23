@@ -45,13 +45,23 @@
   mais la zone cible reste vide jusqu'à un `Données > Pivot > Actualiser` explicite. Pas de
   `data-pilot-level`/tri/sous-totaux/champ "page" (filtre) : à ajouter si besoin, la structure
   est en place.
+- Recalcul via LibreOffice (`recalculate(path)` / `save(path, recalculate=True)`) : délègue
+  à un LibreOffice local en headless le calcul de toutes les formules (y compris celles dont la
+  valeur en cache est obsolète) et le rafraîchissement des tableaux croisés (matérialisation
+  de la grille de résultat). Profil utilisateur jetable dans un répertoire temporaire (le
+  profil de l'utilisateur n'est jamais touché), script exécuté par le Python embarqué de
+  LibreOffice via le scripting framework (pas de `python-uno` système). Commande configurable
+  en tête de module (`LIBREOFFICE_COMMAND`), avec détection des emplacements d'installation
+  usuels. Vérifié : formule obsolète 6.4 → 103.0, pivot vide → grille complète, en ~2 s.
+  Note d'investigation : la voie "macro Basic dans le profil jetable" (`macro:///…`) n'a
+  jamais démarré malgré des fichiers `.xlc/.xlb` calqués sur un vrai profil — la voie Python
+  du scripting framework marche du premier coup et n'a besoin d'aucun enregistrement.
 
 ## Formules
 
-- Pas de moteur de calcul : la valeur `office:value` mise en cache est lue telle quelle, jamais
-  recalculée — écrire une formule n'actualise pas le résultat affiché. Gros morceau, sans doute
-  hors de portée d'une lib légère — à séparer d'un futur support des plages nommées (voir
-  ci-dessous), qui lui est tractable indépendamment.
+- Pas de moteur de calcul *interne* : la valeur `office:value` mise en cache est lue telle
+  quelle. Couvert en pratique par `recalculate()` ci-dessus (délégation à LibreOffice) ; un
+  vrai moteur en pur Python reste hors de portée d'une lib légère.
 - Les plages nommées (`table:named-range`) ne sont ni lues, ni créables, ni traduites par la
   syntaxe "friendly" des formules — il faut les référencer via la syntaxe ODF brute (`[...]`).
 - Les références 3D (une plage sur plusieurs feuilles, `Sheet1:Sheet3.A1`) ne sont pas non plus

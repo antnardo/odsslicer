@@ -18,14 +18,14 @@ sheet[:, 0]                 # entire column A
 
 sheet["C1"].formula = "SUM(A1:A10)"
 sheet["C1"].style.bold = True
-table.save("out.ods")
+table.save("out.ods")                     # add recalculate=True to have LibreOffice compute formulas/pivots
 ```
 
 `odsslicer` works directly on the ODF XML (via BeautifulSoup/lxml), so it preserves what
 other tools tend to drop — cell formats (currency, percentage, date, time), formulas, merged
-and repeated cells, styles, comments — and writes them back faithfully. There is no
-calculation engine: like ODF itself, it describes what to compute and lets the spreadsheet
-application compute it.
+and repeated cells, styles, comments — and writes them back faithfully. It has no calculation
+engine of its own: like ODF itself, it describes what to compute — and can hand the file to a
+local LibreOffice (`save(..., recalculate=True)`) to compute formulas and pivot tables for you.
 
 **Full documentation with an example for every feature: [DOCS.md](https://github.com/antnardo/odsslicer/blob/master/DOCS.md).**
 
@@ -69,16 +69,17 @@ Each line links to the detailed section (with examples) in [DOCS.md](https://git
 | | [Fill across a range](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#filling-a-formula-across-a-range) like a fill handle | `cell.fill_formula("B3:B10")` |
 | | [`{r}`/`{c}` templates](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#formula-templates-with-rc) for per-cell patterns | `sheet["A2:A10"].formula = "$A{r-1}+1"` |
 | | [Pivot tables](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#6-pivot-tables) — definition written, computed by the spreadsheet | `sheet.create_pivot_table(...)` |
+| | [Recalculate with LibreOffice](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#7-recalculating-with-libreoffice) — formulas + pivot refresh, headless, no UNO needed | `table.save("out.ods", recalculate=True)` |
 | **Styles** | [Read](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#reading-a-cells-style) and [write](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#writing-cell-styles) cell styles — font, colors, alignment, borders, rotation, wrap… | `cell.style.bold = True` |
 | | [Copy a style](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#copying-a-style-from-one-cell-to-another) in one shot | `b.style = a.style` |
 | | [Number formats](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#number-formats) — read, assign, or create from scratch | `NumberFormat.create(table, "currency", ...)` |
 | | [Conditional formats](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#conditional-number-formats) (e.g. negatives in red) | `fmt.add_condition("value()<0", red)` |
 | | [Row / column / sheet styles](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#row-column-and-sheet-styles) — height, width, visibility, tab color | `sheet.column_style(0).width = "5cm"` |
-| **Annotations** | [Comments](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#8-cell-comments) — text, author, date, visibility | `cell.comment = "Check this"` |
-| | [Hyperlinks](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#9-cell-hyperlinks) | `cell.hyperlink = "https://…"` |
-| **Document** | [Properties](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#10-document-properties) — title, author, keywords, typed custom properties | `table.properties.title = "Q4"` |
+| **Annotations** | [Comments](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#9-cell-comments) — text, author, date, visibility | `cell.comment = "Check this"` |
+| | [Hyperlinks](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#10-cell-hyperlinks) | `cell.hyperlink = "https://…"` |
+| **Document** | [Properties](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#11-document-properties) — title, author, keywords, typed custom properties | `table.properties.title = "Q4"` |
 
-See [Known limitations](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#11-known-limitations) for what's deliberately out of scope
+See [Known limitations](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#12-known-limitations) for what's deliberately out of scope
 (no calculation engine, no charts/images, no partial rich text…).
 
 ## Are there already equivalent PyPI modules?

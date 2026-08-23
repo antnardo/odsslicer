@@ -46,7 +46,8 @@ sheet = table.sheet("Sheet1")
    - [Formula templates with `{r}`/`{c}`](#formula-templates-with-rc)
    - [Formula references follow structural edits](#formula-references-follow-structural-edits)
 6. [Pivot tables](#6-pivot-tables)
-7. [Styles](#7-styles)
+7. [Recalculating with LibreOffice](#7-recalculating-with-libreoffice)
+8. [Styles](#8-styles)
    - [Reading a cell's style](#reading-a-cells-style)
    - [Writing cell styles](#writing-cell-styles)
    - [Copying a style from one cell to another](#copying-a-style-from-one-cell-to-another)
@@ -54,11 +55,11 @@ sheet = table.sheet("Sheet1")
    - [Number formats](#number-formats)
    - [Conditional number formats](#conditional-number-formats)
    - [Row, column and sheet styles](#row-column-and-sheet-styles)
-8. [Cell comments](#8-cell-comments)
-9. [Cell hyperlinks](#9-cell-hyperlinks)
-10. [Document properties](#10-document-properties)
-11. [Known limitations](#11-known-limitations)
-12. [Appendix: notable bug fixes](#12-appendix-notable-bug-fixes)
+9. [Cell comments](#9-cell-comments)
+10. [Cell hyperlinks](#10-cell-hyperlinks)
+11. [Document properties](#11-document-properties)
+12. [Known limitations](#12-known-limitations)
+13. [Appendix: notable bug fixes](#13-appendix-notable-bug-fixes)
 
 ---
 
@@ -566,11 +567,69 @@ reader recalculates formulas on load; a pivot table needs an explicit refresh (D
 Table > Refresh in LibreOffice) before its result appears at `target`. Confirmed against a
 real LibreOffice: a file holding only the definition opens fine, the definition is fully
 recognized and editable from the pivot UI, but the target area stays empty until refreshed.
-`odsslicer` writes only the definition, never a computed grid.
+`odsslicer` writes only the definition, never a computed grid — unless you let LibreOffice do
+it for you with [`recalculate()` / `save(recalculate=True)`](#7-recalculating-with-libreoffice),
+which refreshes every pivot table and materializes its output.
 
 ---
 
-## 7. Styles
+## 7. Recalculating with LibreOffice
+
+`odsslicer` has no calculation engine of its own — formulas are written but not evaluated
+(`.value` is `None`), and pivot tables are written as definitions only. `recalculate(path)`
+closes that gap by delegating to a **local LibreOffice**, run headless: it opens the file,
+recalculates every formula (including ones whose cached value went stale because you changed
+an input cell), refreshes every pivot table (materializing its output grid), and saves the
+file back in place:
+
+```python
+from odsslicer import ODSReader, recalculate
+
+table = ODSReader("workbook.ods")
+sheet = table.sheet("Sheet1")
+sheet["A2"].value = 100.0                 # A5 = SUM(A2:A3) now has a stale cached value
+sheet["C1"].formula = "A2*2"              # fresh formula, no value yet
+sheet.create_pivot_table("A1:B50", "E1", rows=["Category"], values={"Amount": "sum"})
+
+table.save("out.ods", recalculate=True)    # save, then let LibreOffice compute everything
+
+computed = ODSReader("out.ods")            # reopen to read the results back
+computed.sheet("Sheet1")["A5"].value        # 103.0 — recomputed, not the stale 6.4
+computed.sheet("Sheet1")["C1"].value        # 200.0
+computed.sheet("Sheet1")["E1"].value        # "Category" — the pivot's output grid is now real cells
+```
+
+`save(path, recalculate=True)` is a convenience for `save(path)` followed by
+`recalculate(path)`; the standalone function works on any existing `.ods` file. The in-memory
+document is *not* reloaded — reopen the file to read computed values. A run takes a couple of
+seconds (LibreOffice start-up).
+
+**How it works, and what it needs.** LibreOffice is started with a throwaway user profile in a
+temporary directory (`-env:UserInstallation=…`), so your own LibreOffice profile is never
+touched, and it runs a small script through LibreOffice's *own* embedded Python via the
+scripting framework — no system-side `python-uno` is required, only the `soffice` executable.
+LibreOffice re-saves the whole file in its own serialization, exactly as if you had opened it
+and hit Save, so expect it to grow and be normalized.
+
+**Configuring the command.** The command line lives in one module-level list you can edit at
+the top of your script:
+
+```python
+import odsslicer
+odsslicer.LIBREOFFICE_COMMAND          # ["soffice", "--headless", "--norestore", "--nologo", "--nodefault"]
+odsslicer.LIBREOFFICE_COMMAND[0] = "/opt/libreoffice/program/soffice"   # a specific build
+```
+
+The first element is the executable; the rest are the flags every run gets (the throwaway
+profile and the script URL are appended per call). A bare name is looked up on `PATH`, then in
+the usual install locations (macOS app bundle, `/usr/bin`, `/usr/lib/libreoffice`, `/opt`,
+snap, Windows `Program Files`); an explicit absolute path is taken at its word. Raises
+`FileNotFoundError` if no executable can be found, and `RuntimeError` if LibreOffice fails,
+times out (`timeout=120` seconds by default), or runs but doesn't rewrite the file (which is how
+a silently-not-executed script shows up — e.g. when another LibreOffice instance already owns
+the profile).
+
+## 8. Styles
 
 ODF splits a cell's formatting across two concerns: a `table:style-name` pointing to a
 `<style:style>` (the cell's *visual* look — in `content.xml`'s automatic styles or
@@ -736,7 +795,7 @@ only `.height` doesn't reset `.visible`.
 
 ---
 
-## 8. Cell comments
+## 9. Cell comments
 
 `Cell.comment` reads a cell's note (`office:annotation`) — `None` if it has none:
 
@@ -756,7 +815,7 @@ the cell's own value: writing `.value` keeps the comment.
 
 ---
 
-## 9. Cell hyperlinks
+## 10. Cell hyperlinks
 
 `Cell.hyperlink` reads a cell's link URL (a `<text:a>` wrapping the cell's whole text) —
 `None` if it has none:
@@ -774,7 +833,7 @@ afterwards replaces the text, link included, as in a real spreadsheet.
 
 ---
 
-## 10. Document properties
+## 11. Document properties
 
 `ODSReader.properties` gives structured, writable access to `meta.xml` — the document
 properties behind LibreOffice's "File > Properties" dialog:
@@ -811,12 +870,14 @@ props.custom               # a dict snapshot of every custom property
 
 ---
 
-## 11. Known limitations
+## 12. Known limitations
 
-- **No calculation engine.** Formulas are written and translated but never evaluated
-  (`.value` is `None` until a spreadsheet application recalculates). Pivot tables are written
-  as definitions only and need an explicit refresh on open (unlike formulas, which every
-  reader recomputes automatically).
+- **No calculation engine of its own.** Formulas are written and translated but not
+  evaluated by `odsslicer` (`.value` is `None` until a spreadsheet application recalculates),
+  and pivot tables are written as definitions only. Use
+  [`recalculate()` / `save(recalculate=True)`](#7-recalculating-with-libreoffice) to have a
+  local LibreOffice compute both; without it, a real application recomputes formulas on open,
+  but a pivot table needs an explicit refresh.
 - **Named ranges and 3D references** (`Sheet1:Sheet3.A1`) aren't translated by the friendly
   formula syntax — write them in ODF's bracket syntax directly (the `[` escape hatch).
 - **Displayed-text locale.** The on-write `.text` inference doesn't capture the document's
@@ -833,7 +894,7 @@ props.custom               # a dict snapshot of every custom property
 
 ---
 
-## 12. Appendix: notable bug fixes
+## 13. Appendix: notable bug fixes
 
 Bugs found and fixed in `src/odsslicer/classes.py` while developing the module — all covered
 by regression tests.

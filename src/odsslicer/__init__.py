@@ -36,4 +36,6 @@ from .classes import (
     TableStyle,
     DocumentProperties,
     Comment,
+    recalculate,
+    LIBREOFFICE_COMMAND,
 )
