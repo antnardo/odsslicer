@@ -239,3 +239,23 @@ def test_libreoffice_reads_back_document_properties(writable_reader, tmp_path, l
     assert (
         '<meta:user-defined meta:name="Echeance" meta:value-type="date">2026-12-31</meta:user-defined>' in meta
     )
+
+
+@requires_soffice
+def test_libreoffice_reads_back_a_delete_row_with_adjusted_formulas(
+    writable_reader, tmp_path, libreoffice_export
+):
+    r = writable_reader
+    s1 = r.sheet("Sheet1")
+    s2 = r.sheet("Sheet2Repeat")
+    s1["C5"].formula = "A6+A7"
+    s2["A1"].formula = "Sheet1.A6+Sheet1.A7"
+    s1.delete_row(3)
+    out = tmp_path / "out.ods"
+    r.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    # LibreOffice itself parses both the same-sheet and the cross-sheet
+    # reference at their new, shifted addresses
+    assert re.search(r'table:formula="of:=\[\.A5\]\+\[\.A6\]"', xml)
+    assert re.search(r'table:formula="of:=\[Sheet1\.A5\]\+\[Sheet1\.A6\]"', xml)

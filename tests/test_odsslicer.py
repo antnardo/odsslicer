@@ -2370,11 +2370,15 @@ def test_delete_row_shifts_everything_up(writable_reader):
     s = writable_reader.sheet("Sheet1")
     before = [s[i, 0].value for i in range(s.n_rows)]
     n_rows_before = s.n_rows
-    s.delete_row(1)
+    # row 7 (the date) isn't referenced by A5's SUM(A2:A3) formula, so this
+    # exercises the plain row-shift in isolation - see the dedicated
+    # "adjust formulas on delete" tests below for the formula-adjustment
+    # side effect itself
+    s.delete_row(7)
     after = [s[i, 0].value for i in range(s.n_rows)]
     assert s.n_rows == n_rows_before - 1
     assert s.size == (n_rows_before - 1, s.n_cols)
-    assert after == before[:1] + before[2:]
+    assert after == before[:7] + before[8:]
 
 
 def test_delete_column_shifts_everything_left(writable_reader):
@@ -2437,6 +2441,83 @@ def test_save_round_trip_after_delete_row_and_column(writable_reader, tmp_path):
     assert reread.size == s.size
     assert reread[0, 0].value == "texte simple"
     assert reread[s.n_rows - 1, 0].value == dt.time(15, 0)
+
+
+# ---------------------------------------------------------------------------
+# delete_row/delete_column : ajustement des références de formule
+# ---------------------------------------------------------------------------
+
+def test_delete_row_shifts_a_formula_reference_below_it(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C5"].formula = "A6+A7"  # row 4, referencing rows 5 and 6 (0-indexed)
+    s.delete_row(3)  # entirely above both references - both shift up by one
+    assert s["C4"].formula_friendly == "=A5+A6"
+
+
+def test_delete_row_leaves_an_unrelated_reference_untouched(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "A2+A3"
+    s.delete_row(7)  # far below both references - nothing to adjust
+    assert s["C1"].formula_friendly == "=A2+A3"
+
+
+def test_delete_row_shrinks_a_range_spanning_the_deletion(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    assert s["A5"].formula_friendly == "=SUM(A2:A3)"
+    s.delete_row(1)  # A2, the exact start of the range
+    # the start (exactly at the deleted row) is left as-is - best effort,
+    # no #REF!-style error value - the end (past it) shifts up
+    assert s["A4"].formula_friendly == "=SUM(A2:A2)"
+
+
+def test_delete_column_shifts_a_formula_reference_right_of_it(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].value = "x"
+    s["D1"].formula = "C1"
+    s.delete_column(1)  # column B, left of both C1 and D1
+    assert s["C1"].formula_friendly == "=B1"
+
+
+def test_delete_row_adjusts_a_cross_sheet_reference(writable_reader):
+    r = writable_reader
+    s1 = r.sheet("Sheet1")
+    s2 = r.sheet("Sheet2Repeat")
+    s2["A1"].formula = "Sheet1.A6+Sheet1.A7"
+    s1.delete_row(3)  # above both A6 and A7 - both shift up by one
+    assert s2["A1"].formula_friendly == "=Sheet1.A5+Sheet1.A6"
+
+
+def test_delete_row_does_not_touch_another_sheets_own_reference(writable_reader):
+    # Sheet2Repeat's own (unqualified) formula refers to ITS OWN sheet -
+    # deleting a row from Sheet1 must not touch it
+    r = writable_reader
+    s1 = r.sheet("Sheet1")
+    s2 = r.sheet("Sheet2Repeat")
+    s2["B1"].formula = "A6+A7"
+    s1.delete_row(3)
+    assert s2["B1"].formula_friendly == "=A6+A7"
+
+
+def test_delete_row_does_not_touch_a_reference_to_a_third_sheet(writable_reader):
+    # deleting a row from Sheet2Repeat must not touch a formula (wherever
+    # it lives) that references a completely unrelated third sheet
+    r = writable_reader
+    s1 = r.sheet("Sheet1")
+    s2 = r.sheet("Sheet2Repeat")
+    s1["C1"].formula = "SheetFusion.A1"
+    s2.delete_row(0)
+    assert s1["C1"].formula_friendly == "=SheetFusion.A1"
+
+
+def test_save_round_trip_after_delete_row_adjusts_formulas(writable_reader, tmp_path):
+    s = writable_reader.sheet("Sheet1")
+    s["C5"].formula = "A6+A7"
+    s.delete_row(3)
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    reread = ODSReader(out).sheet("Sheet1")
+    assert reread["C4"].formula_friendly == "=A5+A6"
 
 
 def test_delete_sheet(writable_reader):

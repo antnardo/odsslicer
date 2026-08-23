@@ -11,6 +11,10 @@
   description, auteur, mots-clés et propriétés personnalisées typées (`meta:user-defined`),
   en lecture et en écriture — `meta.xml` est maintenant régénéré à la sauvegarde comme
   `content.xml`.
+- Ajustement des références de formule lors d'un `delete_row`/`delete_column`, y compris
+  inter-feuilles (`Sheet1.A6`) — une référence pointant exactement sur la ligne/colonne
+  supprimée reste inchangée (pas d'équivalent `#REF!`, cohérent avec l'absence de moteur de
+  calcul).
 
 ## Formules
 
@@ -28,8 +32,5 @@
 
 ## Autres
 
-- Ajuster les références de formule lors d'un `delete_row`/`delete_column` (aujourd'hui elles
-  ne bougent pas, comme documenté dans le README — cohérent avec l'absence de moteur de calcul,
-  mais peut surprendre).
 - Gros classeurs au-delà de `MAX_REPEAT_ROWS`/`MAX_REPEAT_COLS` : les lignes/colonnes répétées
   surnuméraires sont détectées et jetées plutôt que matérialisées.

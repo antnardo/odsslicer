@@ -282,6 +282,74 @@ def _shift_odf_formula(formula, drow, dcol):
     )
 
 
+def _unquote_odf_sheet_name(raw):
+    """`'My Sheet'` -> `My Sheet` (undoing the doubled-`''` escape), or
+    `Sheet2` unchanged - the reverse of the quoting `_SHEET_NAME` matches."""
+    if raw.startswith("'") and raw.endswith("'"):
+        return raw[1:-1].replace("''", "'")
+    return raw
+
+
+def _delete_shift_cell_address(addr, deleted_row=None, deleted_col=None):
+    """Adjust a single ODF cell address (`.A1`, `.$A$1`, or bare `A1`) for
+    row `deleted_row` (or column `deleted_col`) having been physically
+    removed from the sheet: shifts the index down by one if it was
+    strictly past the deleted position, *regardless* of any `$` lock -
+    unlike `_shift_cell_address`'s fill/copy semantics, `$` is irrelevant
+    here, since the referenced cell itself moved rather than the formula.
+    A reference that pointed exactly at the removed row/column is left
+    unchanged (there's no `#REF!`-style error value to represent "this
+    reference is now broken" - see the README's known limitations)."""
+    dotted = addr.startswith(".")
+    body = addr[1:] if dotted else addr
+    m = _ODF_CELL_ADDRESS_RE.match(body)
+    if m is None:
+        return addr
+    col_abs, col_letters, row_abs, row_digits = m.groups()
+    col = Sheet.string_to_col(col_letters)
+    row = int(row_digits) - 1
+    if deleted_row is not None and row > deleted_row:
+        row -= 1
+    if deleted_col is not None and col > deleted_col:
+        col -= 1
+    new_letters = Sheet.string_address(0, col)[:-1]
+    shifted = f"{col_abs}{new_letters}{row_abs}{row + 1}"
+    return f".{shifted}" if dotted else shifted
+
+
+def _adjust_odf_reference_for_deletion(inner, target_sheet, containing_sheet, deleted_row, deleted_col):
+    """Adjust the address part(s) of one bracket's content for a row/
+    column deletion in `target_sheet` - only references that actually
+    resolve to `target_sheet` (explicitly sheet-qualified, or bare and
+    `containing_sheet is target_sheet`) are touched; anything pointing
+    elsewhere is returned as-is."""
+
+    def adjust_one(part):
+        m = _SHEET_QUALIFIED_RE.match(part)
+        ref_sheet, addr = m.group("sheet"), m.group("addr")
+        effective_sheet = _unquote_odf_sheet_name(ref_sheet) if ref_sheet else containing_sheet
+        if effective_sheet != target_sheet:
+            return part
+        shifted_addr = _delete_shift_cell_address(addr, deleted_row, deleted_col)
+        return f"{ref_sheet}.{shifted_addr}" if ref_sheet else shifted_addr
+
+    if ":" in inner:
+        start, end = inner.split(":", 1)
+        return f"{adjust_one(start)}:{adjust_one(end)}"
+    return adjust_one(inner)
+
+
+def _adjust_odf_formula_for_deletion(formula, target_sheet, containing_sheet, deleted_row=None, deleted_col=None):
+    """Adjust every reference in an already ODF-syntax formula that
+    resolves to `target_sheet`, for a row/column deletion there - used by
+    `Sheet.delete_row`/`.delete_column` to keep formulas (in this sheet or
+    any other) pointing at the same cells they did before."""
+    return _ODF_BRACKET_RE.sub(
+        lambda m: f"[{_adjust_odf_reference_for_deletion(m.group(1), target_sheet, containing_sheet, deleted_row, deleted_col)}]",
+        formula,
+    )
+
+
 _TEMPLATE_TOKEN_RE = re.compile(r"\{([^{}]*)\}")
 _TEMPLATE_ALLOWED_NODES = (
     ast.Expression,
@@ -1493,9 +1561,11 @@ class Sheet:
         another row but spanning through it) is undone first (see
         `unmerge`) rather than left with a now-wrong span - there's no
         general way to "shrink" a span by one row instead. Formula
-        references elsewhere in the sheet are **not** adjusted (no
-        calculation engine, see the README) - a formula referring to a
-        row below the one removed keeps its old, now-off-by-one address.
+        references elsewhere in the document that point at this sheet
+        (this sheet's own formulas, and any other sheet's formula
+        explicitly qualified with this sheet's name) are shifted to keep
+        pointing at the same cell - see `_adjust_formulas_for_deletion`
+        for what that does and doesn't cover.
         """
         if row < 0 or row >= self.n_rows:
             raise IndexError(f"row {row} out of range (sheet has {self.n_rows} rows)")
@@ -1513,14 +1583,15 @@ class Sheet:
                 cell.row = r
         self.n_rows = len(self.rows)
         self.size = (self.n_rows, self.n_cols)
+        self._adjust_formulas_for_deletion(deleted_row=row)
 
     def delete_column(self, col):
         """Remove logical column `col` entirely, shifting every column to
         its right left by one (`sheet.size` shrinks accordingly).
 
         Any merge intersecting `col` is undone first, same as
-        `delete_row`; formula references elsewhere are **not** adjusted,
-        same caveat as `delete_row`.
+        `delete_row`; formula references elsewhere in the document are
+        adjusted the same way too - see `_adjust_formulas_for_deletion`.
         """
         if col < 0 or col >= self.n_cols:
             raise IndexError(f"column {col} out of range (sheet has {self.n_cols} columns)")
@@ -1540,6 +1611,33 @@ class Sheet:
                 self.rows[r][c].col = c
         self.n_cols -= 1
         self.size = (self.n_rows, self.n_cols)
+        self._adjust_formulas_for_deletion(deleted_col=col)
+
+    def _adjust_formulas_for_deletion(self, deleted_row=None, deleted_col=None):
+        """After physically removing row `deleted_row` (or column
+        `deleted_col`) from this sheet, rewrite every formula in the whole
+        document - this sheet's own, and any other sheet's formula that
+        references into this sheet by name - so a reference past the
+        removed position still points at the same cell it did before
+        (exactly one of `deleted_row`/`deleted_col` is given, matching
+        `delete_row`/`delete_column`).
+
+        A reference that pointed *exactly* at the removed row/column is
+        left unchanged rather than modeled as a `#REF!`-style error - see
+        the README's known limitations. No-op if this sheet has no owning
+        `ODSReader` (nothing else to scan)."""
+        if self.reader is None:
+            return
+        for sheet in self.reader.sheets:
+            for row in sheet.rows:
+                for cell in row:
+                    if cell.formula is None:
+                        continue
+                    adjusted = _adjust_odf_formula_for_deletion(
+                        cell.formula, self.name, sheet.name, deleted_row, deleted_col
+                    )
+                    if adjusted != cell.formula:
+                        cell.formula = adjusted
 
     def __repr__(self):
         return f"Sheet(name='{self.name}', size[rows, cols]={self.size})"

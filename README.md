@@ -243,10 +243,26 @@ Any merge intersecting the removed row/column is undone first (see [Merged
 cells](#merged-cells) below) rather than left with a now-wrong span — there's no general way to
 "shrink" a span by one row/column instead. `delete_row`/`delete_column` raise `IndexError` for
 an out-of-range index; `delete_sheet` raises `IndexError` for an unknown name and `ValueError`
-for the document's last remaining sheet (an ODF spreadsheet needs at least one). **Formula
-references elsewhere are not adjusted** — no calculation engine, see [Writing
-formulas](#writing-formulas) below — a formula referring to a row/column that shifted keeps its
-old, now-wrong address.
+for the document's last remaining sheet (an ODF spreadsheet needs at least one).
+
+`delete_row`/`delete_column` also adjust formula references — every formula in the whole
+document that points into the affected sheet (that sheet's own formulas, and any other sheet's
+formula explicitly qualified with its name, e.g. `Sheet1.A6`) is rewritten so a reference past
+the removed row/column still points at the same cell it did before:
+
+```python
+sheet["C5"].formula = "A6+A7"
+sheet.delete_row(3)             # above both A6 and A7 - both shift up by one
+sheet["C4"].formula_friendly    # "=A5+A6" - C5's own content, now at C4
+```
+
+A reference that pointed *exactly* at the removed row/column is left as-is rather than modeled
+as a `#REF!`-style error — there's no error-value concept in `odsslicer` (see [Writing
+formulas](#writing-formulas) below) — e.g. deleting the first row of a `SUM(A2:A3)` range
+shrinks it to `SUM(A2:A2)` rather than raising or guessing. Since there's no calculation
+engine, any formula whose text actually changes has its cached displayed value cleared (same
+as any other write to `.formula`) — it'll show blank until the file is next opened in a real
+spreadsheet application.
 
 ### Copying cells and ranges
 
