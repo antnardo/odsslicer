@@ -13,8 +13,9 @@ merged rows/columns.
 Write support: `cell.value = ...`, `cell.formula = ...`, `cell.style.bold = ...` (and other
 formatting properties, including creating number formats and conditional formatting from
 scratch), `sheet.merge(...)`/`.unmerge(...)`, `sheet.copy(...)`, `sheet.delete_row(...)`/
-`.delete_column(...)`/`table.delete_sheet(...)`, new sheets, even brand new files from scratch
-— then `reader.save(...)`. Repeated or merged cells are automatically unrolled/unmerged in the
+`.delete_column(...)`/`table.delete_sheet(...)`, `table.properties` (title, author, custom
+document properties), new sheets, even brand new files from scratch — then `reader.save(...)`.
+Repeated or merged cells are automatically unrolled/unmerged in the
 background on first write access, and writing beyond a sheet's current extent grows it
 automatically (new rows/columns) — see [Writing](#writing-experimental) below for details and
 remaining limitations.
@@ -651,6 +652,45 @@ their defaults.
 [Displayed text](#displayed-text-learned-from-an-example-rather-than-a-raw-conversion) above)
 don't consult `.number_format` either way — they still learn from another cell's example
 rather than reading or writing the real format.
+
+## Document properties
+
+`ODSReader.properties` gives structured, writable access to `meta.xml` — the document
+properties behind LibreOffice's "File > Properties" dialog:
+
+```python
+props = table.properties
+props.title              # None, or e.g. "Q4 Budget"
+props.subject
+props.description
+props.creator             # who last saved it (dc:creator)
+props.initial_creator     # who originally created it (meta:initial-creator)
+props.generator           # the app that last saved it, e.g. "LibreOffice/25.8..." - read-only
+props.keywords            # a list, e.g. ["budget", "2026"]
+
+props.title = "Q4 Budget"
+props.keywords = ["budget", "2026"]     # replaces the whole list
+props.title = None                       # clears the field
+```
+
+Arbitrary custom properties (`meta:user-defined`) are available dict-style:
+
+```python
+props["Client"] = "Acme Corp"
+props["Amount"] = 42.5
+props["Approved"] = True
+props["Due"] = date(2026, 12, 31)
+props["Client"]           # "Acme Corp"
+"Client" in props          # True
+del props["Client"]
+props.custom               # a dict snapshot of every custom property
+```
+
+A custom property's Python type round-trips through ODF's own `meta:value-type` (`str`/
+`float`/`bool`/`datetime.date`) — assigning any other type raises `TypeError`. Both
+`content.xml` and `meta.xml` are regenerated from their in-memory trees on `save()`; every
+other zip member (`styles.xml`, `settings.xml`...) is still copied through unchanged from the
+source file.
 
 ## Known limitations
 

@@ -58,6 +58,8 @@ _ODF_NAMESPACES = {
     "style": "urn:oasis:names:tc:opendocument:xmlns:style:1.0",
     "fo": "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0",
     "number": "urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0",
+    "meta": "urn:oasis:names:tc:opendocument:xmlns:meta:1.0",
+    "dc": "http://purl.org/dc/elements/1.1/",
 }
 
 
@@ -2664,6 +2666,182 @@ class TableStyle:
         return f"TableStyle(name={self.name!r}, tab_color={self.tab_color!r})"
 
 
+def _parse_user_defined_value(tag):
+    """The typed Python value behind one `<meta:user-defined>` element,
+    per its `meta:value-type` (`"string"` if absent, per the ODF spec)."""
+    value_type = tag.get("meta:value-type", "string")
+    text = tag.get_text()
+    if value_type == "float":
+        return float(text)
+    if value_type == "boolean":
+        return text == "true"
+    if value_type == "date":
+        return dt.date.fromisoformat(text[:10])
+    return text
+
+
+def _write_user_defined_value(tag, value):
+    """Set `<meta:user-defined>`'s text content and `meta:value-type` from
+    a Python value - the reverse of `_parse_user_defined_value`."""
+    if isinstance(value, bool):
+        tag.attrs["meta:value-type"] = "boolean"
+        tag.string = "true" if value else "false"
+    elif isinstance(value, (int, float)):
+        tag.attrs["meta:value-type"] = "float"
+        tag.string = str(value)
+    elif isinstance(value, dt.date):
+        tag.attrs["meta:value-type"] = "date"
+        tag.string = value.isoformat()
+    elif isinstance(value, str):
+        tag.attrs.pop("meta:value-type", None)  # "string" is the implicit default
+        tag.string = value
+    else:
+        raise TypeError(f"unsupported custom property value type: {type(value)!r}")
+
+
+class DocumentProperties:
+    """Structured, writable access to `meta.xml` - the document properties
+    behind LibreOffice's "File > Properties" dialog: `.title`, `.subject`,
+    `.description`, `.creator` (who last saved it), `.initial_creator`
+    (who created it), `.keywords` (a list), plus arbitrary custom
+    properties (`meta:user-defined`) via dict-style access
+    (`props["Client"]`). Get it via `ODSReader.properties`, not directly.
+
+    A custom property's Python type round-trips through ODF's own
+    `meta:value-type` (`str`/`float`/`bool`/`datetime.date`) - assigning
+    any other type raises `TypeError`."""
+
+    def __init__(self, reader: "ODSReader"):
+        self._reader = reader
+
+    def _office_meta(self):
+        root = self._reader.meta_data.find("office:document-meta")
+        meta = root.find("office:meta")
+        if meta is None:
+            meta = _blank_template(self._reader.meta_data, "office:meta")
+            root.append(meta)
+        return meta
+
+    def _get_text(self, tag_name):
+        tag = self._office_meta().find(tag_name)
+        return tag.get_text() if tag is not None else None
+
+    def _set_text(self, tag_name, value):
+        meta = self._office_meta()
+        tag = meta.find(tag_name)
+        if value is None:
+            if tag is not None:
+                tag.decompose()
+            return
+        if tag is None:
+            tag = _blank_template(self._reader.meta_data, tag_name)
+            meta.append(tag)
+        tag.string = value
+
+    @property
+    def title(self):
+        return self._get_text("dc:title")
+
+    @title.setter
+    def title(self, value):
+        self._set_text("dc:title", value)
+
+    @property
+    def subject(self):
+        return self._get_text("dc:subject")
+
+    @subject.setter
+    def subject(self, value):
+        self._set_text("dc:subject", value)
+
+    @property
+    def description(self):
+        return self._get_text("dc:description")
+
+    @description.setter
+    def description(self, value):
+        self._set_text("dc:description", value)
+
+    @property
+    def creator(self):
+        """Who last saved the document (`dc:creator`)."""
+        return self._get_text("dc:creator")
+
+    @creator.setter
+    def creator(self, value):
+        self._set_text("dc:creator", value)
+
+    @property
+    def initial_creator(self):
+        """Who originally created the document (`meta:initial-creator`)."""
+        return self._get_text("meta:initial-creator")
+
+    @initial_creator.setter
+    def initial_creator(self, value):
+        self._set_text("meta:initial-creator", value)
+
+    @property
+    def keywords(self):
+        """`meta:keyword` values (0+), in document order."""
+        return [tag.get_text() for tag in self._office_meta().find_all("meta:keyword")]
+
+    @keywords.setter
+    def keywords(self, values):
+        meta = self._office_meta()
+        for tag in meta.find_all("meta:keyword"):
+            tag.decompose()
+        for value in values or ():
+            tag = _blank_template(self._reader.meta_data, "meta:keyword")
+            tag.string = value
+            meta.append(tag)
+
+    @property
+    def generator(self):
+        """The application that last saved this file (e.g.
+        `"LibreOffice/25.8..."`) - read-only, `odsslicer` doesn't claim
+        to be a spreadsheet application."""
+        return self._get_text("meta:generator")
+
+    @property
+    def custom(self):
+        """A dict snapshot `{name: value}` of every `meta:user-defined`
+        property - use `props["name"]`/`props["name"] = value` to read or
+        write a single one instead."""
+        return {
+            tag.get("meta:name"): _parse_user_defined_value(tag)
+            for tag in self._office_meta().find_all("meta:user-defined")
+        }
+
+    def _find_custom(self, name):
+        return self._office_meta().find("meta:user-defined", attrs={"meta:name": name})
+
+    def __getitem__(self, name):
+        tag = self._find_custom(name)
+        if tag is None:
+            raise KeyError(name)
+        return _parse_user_defined_value(tag)
+
+    def __setitem__(self, name, value):
+        tag = self._find_custom(name)
+        if tag is None:
+            tag = _blank_template(self._reader.meta_data, "meta:user-defined")
+            tag.attrs["meta:name"] = name
+            self._office_meta().append(tag)
+        _write_user_defined_value(tag, value)
+
+    def __delitem__(self, name):
+        tag = self._find_custom(name)
+        if tag is None:
+            raise KeyError(name)
+        tag.decompose()
+
+    def __contains__(self, name):
+        return self._find_custom(name) is not None
+
+    def __repr__(self):
+        return f"DocumentProperties(title={self.title!r}, creator={self.creator!r})"
+
+
 class ODSReader:
     def __init__(self, file: Union[Path, str], verbose: bool = False):
         self.file = file
@@ -2682,6 +2860,7 @@ class ODSReader:
             self.settings = zip.read("settings.xml")
         self.data = BeautifulSoup(self.content, "xml")
         self.styles_data = BeautifulSoup(self.styles, "xml")
+        self.meta_data = BeautifulSoup(self.meta, "xml")
         self.tables = self.data.find_all("table:table")
         self.sheets_names = [table["table:name"] for table in self.tables]
         self._sheets: dict[str, Sheet | None] = {name: None for name in self.sheets_names}
@@ -2690,6 +2869,12 @@ class ODSReader:
 
     def __repr__(self):
         return f"ODSReader({self.file}, sheets={self.sheets_names})"
+
+    @property
+    def properties(self) -> "DocumentProperties":
+        """Structured, writable access to `meta.xml`'s document properties
+        - see `DocumentProperties`."""
+        return DocumentProperties(self)
 
     def _find_style(self, name, family=None):
         """A `<style:style>` by name (optionally constrained to a
@@ -2781,11 +2966,14 @@ class ODSReader:
     def save(self, path: Union[Path, str, None] = None):
         """Write the in-memory content back out as a .ods file.
 
-        Only cell values changed via `cell.value = ...` are reflected; styles,
-        metadata, settings and all other zip members are copied through
-        unchanged from the source file. Defaults to overwriting `self.file` -
-        except for a document created with `ODSReader.new()`, which has no
-        source file of its own and requires an explicit `path`.
+        `content.xml` (sheets, cell data, automatic styles, formulas) and
+        `meta.xml` (`.properties` - title, author, custom properties...)
+        are regenerated from their in-memory trees; every other zip member
+        (`styles.xml`, `settings.xml`, `manifest.xml`, thumbnail...) is
+        copied through unchanged from the source file. Defaults to
+        overwriting `self.file` - except for a document created with
+        `ODSReader.new()`, which has no source file of its own and
+        requires an explicit `path`.
         """
         if path is None:
             if getattr(self, "_from_template", False):
@@ -2794,12 +2982,12 @@ class ODSReader:
                     "source file of its own - pass an explicit path to save(...)"
                 )
             path = self.file
-        new_content = self.data.encode("utf-8")
+        regenerated = {
+            "content.xml": self.data.encode("utf-8"),
+            "meta.xml": self.meta_data.encode("utf-8"),
+        }
         with ZipFile(self.file) as src:
-            entries = [
-                (item, new_content if item.filename == "content.xml" else src.read(item.filename))
-                for item in src.infolist()
-            ]
+            entries = [(item, regenerated.get(item.filename, src.read(item.filename))) for item in src.infolist()]
         with ZipFile(path, "w") as dst:
             for item, data in entries:
                 # the ODF spec requires `mimetype` to be the first entry and stored uncompressed

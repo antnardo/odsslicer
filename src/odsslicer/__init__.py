@@ -25,4 +25,14 @@ ArrayValue.to_numpy()
 Attention, comme numpy, un format (n x 1) (1 colonne) est de dimension 2
 On peut l'avoir en (n) avec .to_vector()
 """
-from .classes import ODSReader, FORMATS, CellStyle, NumberFormat, Border, RowStyle, ColumnStyle, TableStyle
+from .classes import (
+    ODSReader,
+    FORMATS,
+    CellStyle,
+    NumberFormat,
+    Border,
+    RowStyle,
+    ColumnStyle,
+    TableStyle,
+    DocumentProperties,
+)

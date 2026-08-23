@@ -7,6 +7,10 @@
 - Suppression de lignes/colonnes (`Sheet.delete_row`/`.delete_column`) et de feuilles
   (`ODSReader.delete_sheet`).
 - Copier-coller de cellules/plages (`Sheet.copy`).
+- Propriétés du fichier (`ODSReader.properties` / `DocumentProperties`) : titre, sujet,
+  description, auteur, mots-clés et propriétés personnalisées typées (`meta:user-defined`),
+  en lecture et en écriture — `meta.xml` est maintenant régénéré à la sauvegarde comme
+  `content.xml`.
 
 ## Formules
 
@@ -21,13 +25,6 @@
   heuristique par apprentissage sur d'autres cellules du document, pas une vraie lecture du
   moteur de formatage ODF/locale — peut se rabattre silencieusement sur une conversion brute
   si aucune cellule n'illustre déjà ce format.
-
-## Propriétés du fichier
-
-- `ODSReader.meta` ne garde aujourd'hui que les octets bruts de `meta.xml` (jamais parsés) : pas
-  d'accès structuré aux propriétés type "Fichier > Propriétés" de LibreOffice — titre, auteur,
-  mots-clés, commentaires (`dc:title`/`dc:creator`/`meta:keyword`/`dc:description`...) — ni aux
-  propriétés personnalisées (`meta:user-defined`), ni en lecture ni en écriture.
 
 ## Autres
 

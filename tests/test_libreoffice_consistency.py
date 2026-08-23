@@ -213,3 +213,29 @@ def test_libreoffice_reads_back_a_copy(writable_reader, tmp_path, libreoffice_ex
     assert "<text:p>texte simple</text:p>" in xml  # A1's value, copied to E5
     # the copied formula's reference shifted by the same offset as the copy
     assert re.search(r'table:formula="of:=\[\.E6\]\+\[\.E7\]"', xml)
+
+
+@requires_soffice
+def test_libreoffice_reads_back_document_properties(writable_reader, tmp_path, libreoffice_export):
+    import datetime as dt
+
+    p = writable_reader.properties
+    p.title = "Mon classeur de test"
+    p.keywords = ["test", "ods", "python"]
+    p["Client"] = "Acme Corp"
+    p["Montant"] = 42.5
+    p["Valide"] = True
+    p["Echeance"] = dt.date(2026, 12, 31)
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    meta = re.search(r"<office:meta>.*?</office:meta>", xml, re.DOTALL).group(0)
+    assert "<dc:title>Mon classeur de test</dc:title>" in meta
+    assert meta.count("<meta:keyword>") == 3
+    assert '<meta:user-defined meta:name="Client">Acme Corp</meta:user-defined>' in meta
+    assert '<meta:user-defined meta:name="Montant" meta:value-type="float">42.5</meta:user-defined>' in meta
+    assert '<meta:user-defined meta:name="Valide" meta:value-type="boolean">true</meta:user-defined>' in meta
+    assert (
+        '<meta:user-defined meta:name="Echeance" meta:value-type="date">2026-12-31</meta:user-defined>' in meta
+    )
