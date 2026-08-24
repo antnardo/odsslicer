@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Delegating formula recalculation and pivot refresh to a headless LibreOffice."""
 
+import glob
 import os
 import shutil
 import subprocess
@@ -93,6 +94,27 @@ def _find_libreoffice():
     )
 
 
+_SYSTEM_BIN_DIRS = ("/usr/local/bin", "/usr/bin", "/bin")
+
+
+def _path_without_foreign_pythons(path_value):
+    """`path_value` with every directory that ships a `python`/`python3`
+    executable removed, and (on POSIX) the standard system directories
+    guaranteed present at the end - so the only interpreter LibreOffice's
+    prefix discovery can find is the system one its own build links
+    against. See the environment note in `recalculate()`."""
+    keep = [
+        d
+        for d in path_value.split(os.pathsep)
+        if d
+        and not glob.glob(os.path.join(d, "python3*"))
+        and not glob.glob(os.path.join(d, "python.exe"))
+    ]
+    if os.name == "posix":
+        keep.extend(d for d in _SYSTEM_BIN_DIRS if d not in keep and os.path.isdir(d))
+    return os.pathsep.join(keep)
+
+
 def recalculate(path, timeout=120):
     """Have a local LibreOffice open the `.ods` at `path`, recalculate every
     formula (`calculateAll()` - including ones whose cached value is stale),
@@ -122,22 +144,18 @@ def recalculate(path, timeout=120):
         scripts.mkdir(parents=True)
         (scripts / "odsslicer_recalc.py").write_text(_LIBREOFFICE_RECALC_SCRIPT, encoding="utf-8")
         base = [exe, *LIBREOFFICE_COMMAND[1:], f"-env:UserInstallation={profile.as_uri()}"]
-        # Warm the brand-new profile up with a plain start-and-exit first:
-        # older LibreOffice builds (e.g. Ubuntu 24.04's 24.2) can crash with
-        # std::bad_alloc when profile initialization and a script-URL
-        # execution happen in the same very first launch. Best-effort - the
-        # real run below reports any actual failure.
-        subprocess.run(base + ["--terminate_after_init"], capture_output=True, timeout=timeout)
         cmd = base + ["vnd.sun.star.script:odsslicer_recalc.py$recalculate?language=Python&location=user"]
         env = dict(os.environ, ODSSLICER_RECALC_FILE=str(path))
-        # LibreOffice embeds its own Python and its own shared libraries -
-        # the calling process's Python environment must not leak into it.
-        # (Concretely: GitHub's setup-python exports LD_LIBRARY_PATH to its
-        # toolcache libs, and soffice inheriting it crashes with
-        # std::bad_alloc; a pytest venv's PYTHONPATH/PYTHONHOME would
-        # similarly poison the scripting framework's interpreter.)
+        # LibreOffice runs the script through its own Python, and the calling
+        # process's Python environment must not leak into it: PYTHONPATH/
+        # PYTHONHOME/LD_LIBRARY_PATH would poison the embedded interpreter,
+        # and (verified on Ubuntu builds) that interpreter derives its prefix
+        # by locating `python3` on PATH - a foreign interpreter first on PATH
+        # (an active venv, GitHub's setup-python toolcache) makes it load an
+        # incompatible stdlib and crash outright with std::bad_alloc.
         for var in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "PYTHONPATH", "PYTHONHOME"):
             env.pop(var, None)
+        env["PATH"] = _path_without_foreign_pythons(env.get("PATH", ""))
         mtime_before = path.stat().st_mtime_ns
         try:
             result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
