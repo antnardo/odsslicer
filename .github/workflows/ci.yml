@@ -67,42 +67,52 @@ jobs:
       - name: Install the package with test dependencies
         run: pip install -e ".[test]"
 
-      - name: Diagnostics (full stack of the script-provider crash)
+      - name: Diagnostics (embedded-python import trace + Basic fallback)
         run: |
-          sudo apt-get install -y --no-install-recommends dbus > /dev/null 2>&1 || true
           python - <<'PY'
           import os, subprocess, tempfile, pathlib, sys
 
           SCRIPT_MIN = "def hello(*a):\n    open('/tmp/lo_probe_min.txt','w').write('ok')\ng_exportedScripts=(hello,)\n"
 
-          def profile_with_script():
-              tmp = tempfile.mkdtemp()
-              profile = pathlib.Path(tmp) / "profile"
-              sp = profile / "user" / "Scripts" / "python"
-              sp.mkdir(parents=True)
-              (sp / "probe.py").write_text(SCRIPT_MIN)
-              return profile
-
-          def scrubbed_env():
+          def scrubbed():
               env = dict(os.environ)
               for v in ("LD_LIBRARY_PATH", "PYTHONPATH", "PYTHONHOME"):
                   env.pop(v, None)
               return env
 
-          def run(label, prefix=()):
-              profile = profile_with_script()
-              cmd = [*prefix, "soffice", "--headless", "--norestore", "--nologo", "--nodefault",
+          def pyprobe(label, extra_env):
+              tmp = tempfile.mkdtemp(); profile = pathlib.Path(tmp) / "profile"
+              sp = profile / "user" / "Scripts" / "python"; sp.mkdir(parents=True)
+              (sp / "probe.py").write_text(SCRIPT_MIN)
+              env = scrubbed(); env.update(extra_env)
+              cmd = ["soffice", "--headless", "--norestore", "--nologo", "--nodefault",
                      f"-env:UserInstallation={profile.as_uri()}",
                      "vnd.sun.star.script:probe.py$hello?language=Python&location=user"]
-              r = subprocess.run(cmd, env=scrubbed_env(), capture_output=True, text=True, timeout=120)
+              r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120)
               print(f"===== {label}: rc={r.returncode}")
-              print(r.stderr or "(stderr vide)")
-              if os.path.exists("/tmp/lo_probe_min.txt"):
-                  print("    marker OK"); os.remove("/tmp/lo_probe_min.txt")
+              err = (r.stderr or "").splitlines()
+              interesting = [l for l in err if "import" in l or "Error" in l or "error" in l or "pyuno" in l or "Traceback" in l or "No module" in l]
+              for l in (interesting[:40] or err[:15]): print("   ", l)
+              print("    marker:", os.path.exists("/tmp/lo_probe_min.txt"))
+              if os.path.exists("/tmp/lo_probe_min.txt"): os.remove("/tmp/lo_probe_min.txt")
               sys.stdout.flush()
 
-          run("A. python provider, plain")
-          run("B. python provider, dbus-run-session", ("dbus-run-session", "--"))
+          pyprobe("A. PYTHONVERBOSE=1", {"PYTHONVERBOSE": "1"})
+          pyprobe("B. SAL_LOG pyuno", {"SAL_LOG": "+INFO.pyuno+WARN.pyuno+INFO.scripting+WARN.scripting"})
+
+          # C. Basic macro route (no Python at all)
+          tmp = tempfile.mkdtemp(); profile = pathlib.Path(tmp) / "profile"
+          basic = profile / "user" / "basic"; std = basic / "Standard"; std.mkdir(parents=True)
+          (basic / "script.xlc").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE library:libraries PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "libraries.dtd">\n<library:libraries xmlns:library="http://openoffice.org/2000/library" xmlns:xlink="http://www.w3.org/1999/xlink">\n <library:library library:name="Standard" library:link="false"/>\n</library:libraries>\n')
+          (basic / "dialog.xlc").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE library:libraries PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "libraries.dtd">\n<library:libraries xmlns:library="http://openoffice.org/2000/library" xmlns:xlink="http://www.w3.org/1999/xlink">\n <library:library library:name="Standard" library:link="false"/>\n</library:libraries>\n')
+          (std / "script.xlb").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE library:library PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "library.dtd">\n<library:library xmlns:library="http://openoffice.org/2000/library" library:name="Standard" library:readonly="false" library:passwordprotected="false">\n <library:element library:name="Module1"/>\n</library:library>\n')
+          (std / "dialog.xlb").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE library:library PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "library.dtd">\n<library:library xmlns:library="http://openoffice.org/2000/library" library:name="Standard" library:readonly="false" library:passwordprotected="false"/>\n')
+          (std / "Module1.xba").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">\n<script:module xmlns:script="http://openoffice.org/2000/script" script:name="Module1" script:language="StarBasic">\nSub Hello()\n  Open "/tmp/lo_probe_basic.txt" For Output As #1\n  Print #1, "hi"\n  Close #1\nEnd Sub\n</script:module>\n')
+          cmd = ["soffice", "--headless", "--norestore", "--nologo", "--nodefault",
+                 f"-env:UserInstallation={profile.as_uri()}", "macro:///Standard.Module1.Hello()"]
+          r = subprocess.run(cmd, env=scrubbed(), capture_output=True, text=True, timeout=120)
+          print(f"===== C. Basic macro: rc={r.returncode}, marker={os.path.exists('/tmp/lo_probe_basic.txt')}")
+          for l in (r.stderr or "").splitlines()[:8]: print("   ", l)
           PY
 
       - name: Run the test suite (LibreOffice consistency tests active)
