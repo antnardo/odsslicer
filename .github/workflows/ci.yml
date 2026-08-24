@@ -67,52 +67,43 @@ jobs:
       - name: Install the package with test dependencies
         run: pip install -e ".[test]"
 
-      - name: Diagnostics (embedded-python import trace + Basic fallback)
+      - name: Diagnostics (PATH-prefix-discovery hypothesis)
         run: |
           python - <<'PY'
-          import os, subprocess, tempfile, pathlib, sys
+          import os, subprocess, tempfile, pathlib, sys, glob
 
           SCRIPT_MIN = "def hello(*a):\n    open('/tmp/lo_probe_min.txt','w').write('ok')\ng_exportedScripts=(hello,)\n"
 
-          def scrubbed():
-              env = dict(os.environ)
-              for v in ("LD_LIBRARY_PATH", "PYTHONPATH", "PYTHONHOME"):
-                  env.pop(v, None)
-              return env
-
-          def pyprobe(label, extra_env):
+          def probe(label, path_value=None, extra=None):
               tmp = tempfile.mkdtemp(); profile = pathlib.Path(tmp) / "profile"
               sp = profile / "user" / "Scripts" / "python"; sp.mkdir(parents=True)
               (sp / "probe.py").write_text(SCRIPT_MIN)
-              env = scrubbed(); env.update(extra_env)
-              cmd = ["soffice", "--headless", "--norestore", "--nologo", "--nodefault",
+              env = dict(os.environ)
+              for v in ("LD_LIBRARY_PATH", "PYTHONPATH", "PYTHONHOME"):
+                  env.pop(v, None)
+              if path_value is not None:
+                  env["PATH"] = path_value
+              if extra:
+                  env.update(extra)
+              cmd = ["/usr/bin/soffice", "--headless", "--norestore", "--nologo", "--nodefault",
                      f"-env:UserInstallation={profile.as_uri()}",
                      "vnd.sun.star.script:probe.py$hello?language=Python&location=user"]
               r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120)
-              print(f"===== {label}: rc={r.returncode}")
-              err = (r.stderr or "").splitlines()
-              interesting = [l for l in err if "import" in l or "Error" in l or "error" in l or "pyuno" in l or "Traceback" in l or "No module" in l]
-              for l in (interesting[:40] or err[:15]): print("   ", l)
-              print("    marker:", os.path.exists("/tmp/lo_probe_min.txt"))
-              if os.path.exists("/tmp/lo_probe_min.txt"): os.remove("/tmp/lo_probe_min.txt")
+              ok = os.path.exists("/tmp/lo_probe_min.txt")
+              print(f"===== {label}: rc={r.returncode}, script executed={ok}")
+              if not ok:
+                  for l in (r.stderr or "").splitlines()[:4]: print("   ", l)
+              if ok: os.remove("/tmp/lo_probe_min.txt")
               sys.stdout.flush()
 
-          pyprobe("A. PYTHONVERBOSE=1", {"PYTHONVERBOSE": "1"})
-          pyprobe("B. SAL_LOG pyuno", {"SAL_LOG": "+INFO.pyuno+WARN.pyuno+INFO.scripting+WARN.scripting"})
+          def has_python(d):
+              return bool(glob.glob(os.path.join(d, "python3*")))
 
-          # C. Basic macro route (no Python at all)
-          tmp = tempfile.mkdtemp(); profile = pathlib.Path(tmp) / "profile"
-          basic = profile / "user" / "basic"; std = basic / "Standard"; std.mkdir(parents=True)
-          (basic / "script.xlc").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE library:libraries PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "libraries.dtd">\n<library:libraries xmlns:library="http://openoffice.org/2000/library" xmlns:xlink="http://www.w3.org/1999/xlink">\n <library:library library:name="Standard" library:link="false"/>\n</library:libraries>\n')
-          (basic / "dialog.xlc").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE library:libraries PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "libraries.dtd">\n<library:libraries xmlns:library="http://openoffice.org/2000/library" xmlns:xlink="http://www.w3.org/1999/xlink">\n <library:library library:name="Standard" library:link="false"/>\n</library:libraries>\n')
-          (std / "script.xlb").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE library:library PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "library.dtd">\n<library:library xmlns:library="http://openoffice.org/2000/library" library:name="Standard" library:readonly="false" library:passwordprotected="false">\n <library:element library:name="Module1"/>\n</library:library>\n')
-          (std / "dialog.xlb").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE library:library PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "library.dtd">\n<library:library xmlns:library="http://openoffice.org/2000/library" library:name="Standard" library:readonly="false" library:passwordprotected="false"/>\n')
-          (std / "Module1.xba").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">\n<script:module xmlns:script="http://openoffice.org/2000/script" script:name="Module1" script:language="StarBasic">\nSub Hello()\n  Open "/tmp/lo_probe_basic.txt" For Output As #1\n  Print #1, "hi"\n  Close #1\nEnd Sub\n</script:module>\n')
-          cmd = ["soffice", "--headless", "--norestore", "--nologo", "--nodefault",
-                 f"-env:UserInstallation={profile.as_uri()}", "macro:///Standard.Module1.Hello()"]
-          r = subprocess.run(cmd, env=scrubbed(), capture_output=True, text=True, timeout=120)
-          print(f"===== C. Basic macro: rc={r.returncode}, marker={os.path.exists('/tmp/lo_probe_basic.txt')}")
-          for l in (r.stderr or "").splitlines()[:8]: print("   ", l)
+          cur = os.environ["PATH"].split(os.pathsep)
+          no_py_dirs = os.pathsep.join(d for d in cur if not has_python(d))
+          probe("A. PATH sans repertoires contenant python3*", no_py_dirs)
+          probe("B. PATH systeme minimal", "/usr/bin:/bin")
+          probe("C. PATH intact + PYTHONHOME=/usr", None, {"PYTHONHOME": "/usr"})
           PY
 
       - name: Run the test suite (LibreOffice consistency tests active)
