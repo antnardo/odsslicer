@@ -130,6 +130,14 @@ def recalculate(path, timeout=120):
         subprocess.run(base + ["--terminate_after_init"], capture_output=True, timeout=timeout)
         cmd = base + ["vnd.sun.star.script:odsslicer_recalc.py$recalculate?language=Python&location=user"]
         env = dict(os.environ, ODSSLICER_RECALC_FILE=str(path))
+        # LibreOffice embeds its own Python and its own shared libraries -
+        # the calling process's Python environment must not leak into it.
+        # (Concretely: GitHub's setup-python exports LD_LIBRARY_PATH to its
+        # toolcache libs, and soffice inheriting it crashes with
+        # std::bad_alloc; a pytest venv's PYTHONPATH/PYTHONHOME would
+        # similarly poison the scripting framework's interpreter.)
+        for var in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "PYTHONPATH", "PYTHONHOME"):
+            env.pop(var, None)
         mtime_before = path.stat().st_mtime_ns
         try:
             result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)

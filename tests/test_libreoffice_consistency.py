@@ -292,15 +292,22 @@ def test_libreoffice_reads_back_a_comment_without_corrupting_the_value(
 ):
     s = writable_reader.sheet("Sheet1")
     s["A1"].comment = "Une note\nSur deux lignes"
-    out = tmp_path / "out.ods"
+    src_dir = tmp_path / "src"  # the ods->ods conversion below outputs into
+    src_dir.mkdir()             # tmp_path, so the source must live elsewhere
+    out = src_dir / "out.ods"
     writable_reader.save(out)
 
-    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
-    assert "<office:annotation" in xml
-    assert "<text:p>Une note</text:p>" in xml
-    assert "<text:p>Sur deux lignes</text:p>" in xml
-    # LibreOffice itself reads A1's actual value separately from the note
-    assert "<text:p>texte simple</text:p>" in xml
+    # round-trip through LibreOffice itself: it re-reads our file and
+    # re-writes it as .ods, and odsslicer reads the annotation back from
+    # LibreOffice's own output. (Not asserted on the fods export: LibreOffice
+    # 24.2 drops annotations from Flat ODF output - an export quirk of that
+    # filter, the .ods round-trip is the behavior users actually rely on.)
+    roundtripped = libreoffice_export(out, "ods")
+    reread = ODSReader(roundtripped).sheet("Sheet1")
+    assert reread["A1"].comment is not None
+    assert reread["A1"].comment.text == "Une note\nSur deux lignes"
+    # and the cell's own value stayed separate from the note
+    assert reread["A1"].value == "texte simple"
 
 
 @requires_soffice
