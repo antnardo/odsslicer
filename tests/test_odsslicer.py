@@ -2,7 +2,7 @@
 """
 Suite de tests pytest pour le module `odsslicer`.
 
-Basée sur les scripts manuels historiques (tests.py, tests2.py, example.py),
+Basée à l'origine sur les scripts manuels historiques du module interne,
 étendue avec des cas de régression pour les bugs corrigés :
 - Sheet.string_address sur les colonnes multi-lettres (>= Z)
 - Sheet.get_col sur les colonnes hors bornes
