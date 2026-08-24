@@ -61,6 +61,34 @@ jobs:
       - name: Install the package with test dependencies
         run: pip install -e ".[test]"
 
+      - name: Diagnostics (what this LibreOffice makes of a comment file)
+        # temporary probe while stabilizing the job on Ubuntu's LibreOffice:
+        # shows whether the annotation odsslicer writes survives a fods
+        # round-trip on this version, and full stderr of a recalculate run
+        run: |
+          python - <<'PY'
+          import re, subprocess, sys
+          from odsslicer import ODSReader, recalculate
+          r = ODSReader("tests/TEST.ods")
+          r.sheet("Sheet1")["A1"].comment = "probe note"
+          r.save("/tmp/probe.ods")
+          out = subprocess.run(["soffice", "--headless", "--convert-to", "fods", "--outdir", "/tmp", "/tmp/probe.ods"],
+                               capture_output=True, text=True, timeout=120)
+          print("convert rc:", out.returncode, out.stderr[-500:] if out.stderr else "")
+          xml = open("/tmp/probe.fods", encoding="utf-8").read()
+          i = xml.find("office:annotation")
+          print("annotation present in fods:", i != -1)
+          print(xml[max(0, i-200):i+400] if i != -1 else "--- A1 region ---\n" + xml[xml.find("<table:table "):][:1200])
+          r2 = ODSReader("tests/TEST.ods")
+          r2.sheet("Sheet1")["C1"].formula = "A2*2"
+          r2.save("/tmp/probe2.ods")
+          try:
+              recalculate("/tmp/probe2.ods")
+              print("recalculate OK, C1 =", ODSReader("/tmp/probe2.ods").sheet("Sheet1")["C1"].value)
+          except Exception as e:
+              print("recalculate FAILED:", e)
+          PY
+
       - name: Run the test suite (LibreOffice consistency tests active)
         run: |
           pytest -v tests/test_libreoffice_consistency.py

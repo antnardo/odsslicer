@@ -121,12 +121,14 @@ def recalculate(path, timeout=120):
         scripts = profile / "user" / "Scripts" / "python"
         scripts.mkdir(parents=True)
         (scripts / "odsslicer_recalc.py").write_text(_LIBREOFFICE_RECALC_SCRIPT, encoding="utf-8")
-        cmd = [
-            exe,
-            *LIBREOFFICE_COMMAND[1:],
-            f"-env:UserInstallation={profile.as_uri()}",
-            "vnd.sun.star.script:odsslicer_recalc.py$recalculate?language=Python&location=user",
-        ]
+        base = [exe, *LIBREOFFICE_COMMAND[1:], f"-env:UserInstallation={profile.as_uri()}"]
+        # Warm the brand-new profile up with a plain start-and-exit first:
+        # older LibreOffice builds (e.g. Ubuntu 24.04's 24.2) can crash with
+        # std::bad_alloc when profile initialization and a script-URL
+        # execution happen in the same very first launch. Best-effort - the
+        # real run below reports any actual failure.
+        subprocess.run(base + ["--terminate_after_init"], capture_output=True, timeout=timeout)
+        cmd = base + ["vnd.sun.star.script:odsslicer_recalc.py$recalculate?language=Python&location=user"]
         env = dict(os.environ, ODSSLICER_RECALC_FILE=str(path))
         mtime_before = path.stat().st_mtime_ns
         try:

@@ -126,8 +126,11 @@ def test_libreoffice_reads_back_row_column_table_styles(writable_reader, tmp_pat
     writable_reader.save(out)
 
     xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
-    assert re.search(r'style:row-height="2(\.\d+)?cm"', xml)
-    assert re.search(r'style:column-width="5(\.\d+)?cm"', xml)
+    # LibreOffice re-serializes lengths in its profile's measurement unit -
+    # cm on an fr-locale machine, inches on the en-US CI runner (2cm =
+    # 0.7874in, 5cm = 1.9685in) - so accept either representation
+    assert re.search(r'style:row-height="(2(\.\d+)?cm|0\.78\d*in)"', xml)
+    assert re.search(r'style:column-width="(5(\.\d+)?cm|1\.9[67]\d*in)"', xml)
     assert 'table:tab-color="#123456"' in xml
 
 
