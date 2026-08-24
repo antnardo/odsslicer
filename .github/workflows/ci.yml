@@ -48,12 +48,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install LibreOffice
-        # libreoffice-script-provider-python is Ubuntu's separate package for
-        # LibreOffice's Python scripting framework, which recalculate() runs
-        # its script through - without it the vnd.sun.star.script: URL is
-        # silently ignored and the recalculation tests fail.
+      - name: Install LibreOffice (current, from the official PPA)
+        # Two Ubuntu specifics:
+        # - libreoffice-script-provider-python is Ubuntu's separate package
+        #   for LibreOffice's Python scripting framework, which recalculate()
+        #   runs its script through.
+        # - Ubuntu 24.04's stock LibreOffice 24.2 crashes with std::bad_alloc
+        #   in that scripting framework before user code even runs (verified
+        #   with a minimal no-op script under several environments), so the
+        #   job installs the current LibreOffice from the official PPA
+        #   instead - the line the library is developed against.
         run: |
+          sudo add-apt-repository -y ppa:libreoffice/ppa
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libreoffice-calc libreoffice-script-provider-python
           soffice --version
