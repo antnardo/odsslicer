@@ -3345,11 +3345,11 @@ def test_recalculate_explicit_nonexistent_executable_raises(writable_reader, tmp
 
 def test_recalculate_bare_name_not_found_anywhere_raises(writable_reader, tmp_path, monkeypatch):
     import odsslicer
-    from odsslicer import classes, recalculate
+    from odsslicer import libreoffice, recalculate
 
     out = tmp_path / "out.ods"
     writable_reader.save(out)
-    monkeypatch.setattr(classes, "_LIBREOFFICE_FALLBACKS", [])
+    monkeypatch.setattr(libreoffice, "_LIBREOFFICE_FALLBACKS", [])
     saved = odsslicer.LIBREOFFICE_COMMAND[0]
     odsslicer.LIBREOFFICE_COMMAND[0] = "definitely-not-a-real-binary-name"
     try:

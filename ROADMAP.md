@@ -67,6 +67,39 @@
 - Les références 3D (une plage sur plusieurs feuilles, `Sheet1:Sheet3.A1`) ne sont pas non plus
   traduites.
 
+## Vers 1.0 — consolidation (bilan post-0.9, par ordre de priorité)
+
+Le constat général au moment de la 0.9 : les fonctionnalités voulues sont là et fiables pour
+l'usage qui a motivé le module ; ce qui le sépare d'un 1.0 serein est de la consolidation, pas
+des features.
+
+1. ~~**Restructuration de `classes.py`**~~ **Fait** : les ~3 850 lignes sont découpées en 10
+   modules thématiques (`addresses`, `constants`, `xmlutils`, `formulas`, `styles`, `cell`,
+   `sheet`, `properties`, `libreoffice`, `reader` — le plus gros fait ~1 000 lignes), code
+   déplacé verbatim (zéro changement de comportement), `classes.py` conservé en shim de
+   compatibilité (`from odsslicer.classes import Sheet` marche toujours), pyflakes propre.
+   Reste de ce point : le nettoyage des lignes répétées dans `Sheet.load()` (commentaire
+   `works but nasty` de 2021) a été déplacé tel quel — toujours la partie la plus fragile du
+   code, à réécrire un jour avec des tests dédiés.
+2. **Suite LibreOffice en CI** : les tests les plus forts (round-trip par un vrai LibreOffice)
+   ne tournent aujourd'hui que localement, sur macOS. Un job ubuntu avec
+   `apt-get install libreoffice-calc` les ferait tourner à chaque push, sur un autre OS et une
+   autre version de LibreOffice.
+3. **Performance : zéro donnée aujourd'hui.** Chaque cellule est un objet Python matérialisé à
+   l'ouverture ; `delete_row` rescanne toutes les formules du document à chaque appel (en
+   supprimer 100 = 100 balayages) ; `sort` réécrit cellule par cellule via les setters XML.
+   Invisible sur des petits fichiers, limite inconnue sur un classeur de 100 000 lignes. À
+   faire : un test de charge simple, documenter les limites constatées, optimiser si besoin.
+4. **Scories d'API à trancher avant 1.0** (dernier moment indolore) : `ODSReader` est un faux
+   nom (c'est un lecteur-écrivain-créateur — un alias `ODS = ODSReader` ?) ; `sheet(name)`
+   lève `IndexError` là où `KeyError` serait naturel ; `verbose` et le `[WARNING]` de `load()`
+   passent par `print` au lieu de `logging` ; pas de marqueur `py.typed` ni d'annotations
+   complètes.
+5. **Maturité d'écosystème** : pas de `CHANGELOG.md` dans le repo (seulement les release
+   notes GitHub) ; bus factor de 1 ; l'API n'a jamais été confrontée à des fichiers ODS
+   "sauvages" produits par Excel, un export Google Sheets ou de vieux OpenOffice — en
+   collectionner quelques-uns comme fixtures serait un bon investissement.
+
 ## Gaps identifiés — utiles mais plus de niche
 
 - Validation de données / listes déroulantes (`table:content-validations`).

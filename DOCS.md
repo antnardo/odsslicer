@@ -896,7 +896,7 @@ props.custom               # a dict snapshot of every custom property
 
 ## 13. Appendix: notable bug fixes
 
-Bugs found and fixed in `src/odsslicer/classes.py` while developing the module — all covered
+Bugs found and fixed while developing the module — all covered
 by regression tests.
 
 1. **Reading boolean cells**: the `"boolean"` format looked up `office:value` instead of
