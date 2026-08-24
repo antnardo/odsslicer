@@ -608,6 +608,9 @@ seconds (LibreOffice start-up).
 temporary directory (`-env:UserInstallation=…`), so your own LibreOffice profile is never
 touched, and it runs a small script through LibreOffice's *own* embedded Python via the
 scripting framework — no system-side `python-uno` is required, only the `soffice` executable.
+The subprocess environment is shielded automatically: your Python's `PYTHONPATH`/`PYTHONHOME`/
+`LD_LIBRARY_PATH` — and any foreign interpreter on `PATH`, e.g. an active venv — are kept away
+from LibreOffice's embedded interpreter, which would otherwise crash on some builds.
 LibreOffice re-saves the whole file in its own serialization, exactly as if you had opened it
 and hit Save, so expect it to grow and be normalized.
 

@@ -81,10 +81,19 @@ des features.
    Reste de ce point : le nettoyage des lignes répétées dans `Sheet.load()` (commentaire
    `works but nasty` de 2021) a été déplacé tel quel — toujours la partie la plus fragile du
    code, à réécrire un jour avec des tests dédiés.
-2. **Suite LibreOffice en CI** : les tests les plus forts (round-trip par un vrai LibreOffice)
-   ne tournent aujourd'hui que localement, sur macOS. Un job ubuntu avec
-   `apt-get install libreoffice-calc` les ferait tourner à chaque push, sur un autre OS et une
-   autre version de LibreOffice.
+2. ~~**Suite LibreOffice en CI**~~ **Fait** : job `test-libreoffice` sur ubuntu-latest
+   (LibreOffice du PPA officiel + `libreoffice-script-provider-python`), qui exécute la suite
+   de cohérence puis toute la suite à chaque push. La stabilisation a rapporté gros — deux
+   vrais problèmes de portabilité découverts et corrigés :
+   - le Python embarqué de LibreOffice (builds Ubuntu) découvre son préfixe en cherchant
+     `python3` dans le `PATH` — un interpréteur étranger en tête (venv actif, toolcache CI)
+     lui faisait charger une stdlib incompatible et crasher pyuno en `std::bad_alloc` avant
+     même notre code. `recalculate()` blinde désormais l'environnement du sous-processus
+     (purge `PYTHONPATH`/`PYTHONHOME`/`LD_LIBRARY_PATH` + PATH filtré des interpréteurs
+     étrangers) — correctif utile à tout utilisateur Ubuntu sous venv, pas juste à la CI ;
+   - l'export Flat ODF (fods) de LibreOffice 24.2 perd les annotations (bizarrerie du filtre,
+     le round-trip .ods les préserve) — le test des commentaires passe maintenant par un
+     round-trip .ods relu par odsslicer, plus robuste et plus probant.
 3. **Performance : zéro donnée aujourd'hui.** Chaque cellule est un objet Python matérialisé à
    l'ouverture ; `delete_row` rescanne toutes les formules du document à chaque appel (en
    supprimer 100 = 100 balayages) ; `sort` réécrit cellule par cellule via les setters XML.
