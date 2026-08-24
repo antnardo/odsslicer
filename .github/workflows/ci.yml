@@ -30,6 +30,20 @@ jobs:
       - name: Run the test suite
         run: pytest
 
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the package with the type-checking tools
+        run: pip install -e ".[typecheck]"
+      - name: mypy (all signatures annotated, no type errors)
+        run: mypy
+
   # The strongest tests in the repo hand files odsslicer wrote to a real
   # LibreOffice and inspect what it made of them (tests/
   # test_libreoffice_consistency.py) - they skip automatically when soffice

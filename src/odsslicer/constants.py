@@ -3,6 +3,7 @@
 
 import datetime as dt
 import re
+from typing import Any, Callable
 
 from bs4 import BeautifulSoup
 
@@ -21,7 +22,7 @@ MAX_SHEETS = 10_000
 MAX_REPEAT_ROWS = 1_000  # Above this : if row contains one ampty cell : discarded
 MAX_REPEAT_COLS = 10  # idem but for every row (much more complicated to detect)
 
-FORMATS = {
+FORMATS: "dict[str | None, Callable[[Any], Any]]" = {
     "string": str,
     "float": float,
     "percentage": float,

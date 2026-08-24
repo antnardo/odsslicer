@@ -4,6 +4,7 @@ shifting for fills/copies/deletions/renames, {r}/{c} templating."""
 
 import ast
 import re
+from typing import Callable
 
 from .addresses import string_address, string_to_col
 
@@ -28,7 +29,7 @@ _FRIENDLY_REF_RE = re.compile(
 _STRING_LITERAL_RE = re.compile(r'("(?:[^"]|"")*")')
 
 
-def _translate_friendly_formula(body):
+def _translate_friendly_formula(body: str) -> str:
     """Translate Excel/Calc-style formula text into ODF's own syntax: bare
     references (`A2`, `$A$2`) and ranges (`A1:B3`) become `[.A2]`/`[.$A$2]`/
     `[.A1:.B3]`, sheet-qualified references (`Sheet2.A1`, `'My Sheet'.A1:B3`)
@@ -43,7 +44,7 @@ def _translate_friendly_formula(body):
     the token outright - e.g. "LOG10(" would wrongly become "[.LOG1]0(".
     """
 
-    def translate_refs(segment):
+    def translate_refs(segment: str) -> str:
         out = []
         pos = 0
         for m in _FRIENDLY_REF_RE.finditer(segment):
@@ -68,14 +69,14 @@ def _translate_friendly_formula(body):
 _ODF_BRACKET_RE = re.compile(r"\[([^\[\]]*)\]")
 
 
-def _odf_ref_to_friendly(inner):
+def _odf_ref_to_friendly(inner: str) -> str:
     """`.A1` -> `A1`, `.$A$1` -> `$A$1`, `Sheet2.A1` -> `Sheet2.A1` (already
     friendly) - the reverse of the single-reference half of
     `_translate_friendly_formula`."""
     return inner[1:] if inner.startswith(".") else inner
 
 
-def _translate_odf_formula_to_friendly(body):
+def _translate_odf_formula_to_friendly(body: str) -> str:
     """Reverse of `_translate_friendly_formula`: turn ODF bracket references
     (`[.A1]`, `[.A1:.B3]`, `[Sheet2.A1]`) back into ordinary `A1`-style
     syntax, and `;` argument separators back into `,` (outside quoted string
@@ -83,8 +84,8 @@ def _translate_odf_formula_to_friendly(body):
     or range (a named range, an unusual construct) is passed through as-is.
     """
 
-    def translate_refs(segment):
-        def replace(m):
+    def translate_refs(segment: str) -> str:
+        def replace(m: re.Match[str]) -> str:
             inner = m.group(1)
             if ":" in inner:
                 start, end = inner.split(":", 1)
@@ -103,7 +104,7 @@ _ODF_CELL_ADDRESS_RE = re.compile(r"^(\$?)([A-Za-z]+)(\$?)([0-9]+)$")
 _SHEET_QUALIFIED_RE = re.compile(rf"^(?:(?P<sheet>{_SHEET_NAME})\.)?(?P<addr>.+)$")
 
 
-def _shift_cell_address(addr, drow, dcol):
+def _shift_cell_address(addr: str, drow: int, dcol: int) -> str:
     """Shift a single ODF cell address (e.g. `.A1`, `.$A$1`, or `A1`/`$A$1`
     without the leading dot) by `(drow, dcol)`, honoring `$` locks on each
     axis independently - the way a spreadsheet's fill handle adjusts
@@ -132,12 +133,13 @@ def _shift_cell_address(addr, drow, dcol):
     return f".{shifted}" if dotted else shifted
 
 
-def _shift_odf_reference(inner, drow, dcol):
+def _shift_odf_reference(inner: str, drow: int, dcol: int) -> str:
     """Shift the address part(s) of one bracket's content (`.A1`, `.A1:.B3`,
     `Sheet2.A1`, `Sheet2.A1:.B3`), leaving any sheet-name prefix untouched."""
 
-    def shift_one(part):
+    def shift_one(part: str) -> str:
         m = _SHEET_QUALIFIED_RE.match(part)
+        assert m is not None  # the pattern matches any non-empty reference part
         sheet, addr = m.group("sheet"), m.group("addr")
         shifted_addr = _shift_cell_address(addr, drow, dcol)
         return f"{sheet}.{shifted_addr}" if sheet else shifted_addr
@@ -148,7 +150,7 @@ def _shift_odf_reference(inner, drow, dcol):
     return shift_one(inner)
 
 
-def _shift_odf_formula(formula, drow, dcol):
+def _shift_odf_formula(formula: str, drow: int, dcol: int) -> str:
     """Shift every reference in an already ODF-syntax formula (as stored by
     `Cell.formula`) by `(drow, dcol)`. Used by `Cell.fill_formula` to
     replicate a formula across a range the way a spreadsheet's fill handle
@@ -158,7 +160,7 @@ def _shift_odf_formula(formula, drow, dcol):
     )
 
 
-def _unquote_odf_sheet_name(raw):
+def _unquote_odf_sheet_name(raw: str) -> str:
     """`'My Sheet'` -> `My Sheet` (undoing the doubled-`''` escape), or
     `Sheet2` unchanged - the reverse of the quoting `_SHEET_NAME` matches."""
     if raw.startswith("'") and raw.endswith("'"):
@@ -166,7 +168,7 @@ def _unquote_odf_sheet_name(raw):
     return raw
 
 
-def _delete_shift_cell_address(addr, deleted_row=None, deleted_col=None):
+def _delete_shift_cell_address(addr: str, deleted_row: "int | None" = None, deleted_col: "int | None" = None) -> str:
     """Adjust a single ODF cell address (`.A1`, `.$A$1`, or bare `A1`) for
     row `deleted_row` (or column `deleted_col`) having been physically
     removed from the sheet: shifts the index down by one if it was
@@ -193,15 +195,22 @@ def _delete_shift_cell_address(addr, deleted_row=None, deleted_col=None):
     return f".{shifted}" if dotted else shifted
 
 
-def _adjust_odf_reference_for_deletion(inner, target_sheet, containing_sheet, deleted_row, deleted_col):
+def _adjust_odf_reference_for_deletion(
+    inner: str,
+    target_sheet: str,
+    containing_sheet: str,
+    deleted_row: "int | None",
+    deleted_col: "int | None",
+) -> str:
     """Adjust the address part(s) of one bracket's content for a row/
     column deletion in `target_sheet` - only references that actually
     resolve to `target_sheet` (explicitly sheet-qualified, or bare and
     `containing_sheet is target_sheet`) are touched; anything pointing
     elsewhere is returned as-is."""
 
-    def adjust_one(part):
+    def adjust_one(part: str) -> str:
         m = _SHEET_QUALIFIED_RE.match(part)
+        assert m is not None  # the pattern matches any non-empty reference part
         ref_sheet, addr = m.group("sheet"), m.group("addr")
         effective_sheet = _unquote_odf_sheet_name(ref_sheet) if ref_sheet else containing_sheet
         if effective_sheet != target_sheet:
@@ -215,7 +224,13 @@ def _adjust_odf_reference_for_deletion(inner, target_sheet, containing_sheet, de
     return adjust_one(inner)
 
 
-def _adjust_odf_formula_for_deletion(formula, target_sheet, containing_sheet, deleted_row=None, deleted_col=None):
+def _adjust_odf_formula_for_deletion(
+    formula: str,
+    target_sheet: str,
+    containing_sheet: str,
+    deleted_row: "int | None" = None,
+    deleted_col: "int | None" = None,
+) -> str:
     """Adjust every reference in an already ODF-syntax formula that
     resolves to `target_sheet`, for a row/column deletion there - used by
     `Sheet.delete_row`/`.delete_column` to keep formulas (in this sheet or
@@ -229,7 +244,7 @@ def _adjust_odf_formula_for_deletion(formula, target_sheet, containing_sheet, de
 _SIMPLE_SHEET_NAME_RE = re.compile(r"^[A-Za-z_]\w*$")
 
 
-def _quote_odf_sheet_name(name):
+def _quote_odf_sheet_name(name: str) -> str:
     """The ODF bracket-syntax form of a sheet name: unquoted if it's a
     plain identifier, else single-quoted with any embedded `'` doubled -
     the reverse of `_unquote_odf_sheet_name`."""
@@ -238,15 +253,16 @@ def _quote_odf_sheet_name(name):
     return "'" + name.replace("'", "''") + "'"
 
 
-def _rename_odf_reference_sheet(inner, old_name, new_name):
+def _rename_odf_reference_sheet(inner: str, old_name: str, new_name: str) -> str:
     """Rewrite the sheet-name portion of one bracket's content for a
     sheet rename - only a reference *explicitly* qualified with
     `old_name` is touched; a bare reference (`.A1`, no sheet prefix)
     means "this same sheet" regardless of what it's named, so it's
     already correct and left alone."""
 
-    def rename_one(part):
+    def rename_one(part: str) -> str:
         m = _SHEET_QUALIFIED_RE.match(part)
+        assert m is not None  # the pattern matches any non-empty reference part
         ref_sheet, addr = m.group("sheet"), m.group("addr")
         if ref_sheet is None or _unquote_odf_sheet_name(ref_sheet) != old_name:
             return part
@@ -258,7 +274,7 @@ def _rename_odf_reference_sheet(inner, old_name, new_name):
     return rename_one(inner)
 
 
-def _rename_odf_formula_sheet(formula, old_name, new_name):
+def _rename_odf_formula_sheet(formula: str, old_name: str, new_name: str) -> str:
     """Rewrite every explicitly-qualified reference to `old_name` in an
     already ODF-syntax formula to `new_name` instead - used by
     `ODSReader.rename_sheet` to keep cross-sheet formulas (in any sheet)
@@ -293,7 +309,7 @@ _TEMPLATE_ALLOWED_NODES = (
 )
 
 
-def _eval_template_expr(expr, context):
+def _eval_template_expr(expr: str, context: dict[str, int]) -> int:
     tree = ast.parse(expr, mode="eval")
     for node in ast.walk(tree):
         if not isinstance(node, _TEMPLATE_ALLOWED_NODES):
@@ -314,7 +330,7 @@ _ESCAPED_BRACES_RE = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
 _ESCAPE_PLACEHOLDER = "\x00{}\x00"
 
 
-def _expand_formula_template(pattern, row, col):
+def _expand_formula_template(pattern: str, row: int, col: int) -> "tuple[str, Callable[[str], str]]":
     """Expand `{...}` placeholders in a formula pattern using the target
     cell's own 1-indexed row (`r`) and column (`c`) — e.g. writing the pattern
     `"$A{r-1}+1"` across A2:A10 makes A2 reference A1, A3 reference A2, etc.
@@ -331,7 +347,7 @@ def _expand_formula_template(pattern, row, col):
     """
     escaped = []
 
-    def stash(m):
+    def stash(m: re.Match[str]) -> str:
         escaped.append(m.group(1))
         return _ESCAPE_PLACEHOLDER.format(len(escaped) - 1)
 
@@ -343,7 +359,7 @@ def _expand_formula_template(pattern, row, col):
             lambda m: str(_eval_template_expr(m.group(1), context)), pattern
         )
 
-    def restore(formula):
+    def restore(formula: str) -> str:
         for i, content in enumerate(escaped):
             formula = formula.replace(_ESCAPE_PLACEHOLDER.format(i), "{" + content + "}")
         return formula
@@ -351,7 +367,7 @@ def _expand_formula_template(pattern, row, col):
     return pattern, restore
 
 
-def _normalize_odf_formula(formula):
+def _normalize_odf_formula(formula: str) -> str:
     """Turn a user-supplied formula string into ODF's `table:formula` syntax.
 
     ODF formulas are stored as `<language-prefix>:=<expression>`, e.g.
@@ -377,7 +393,7 @@ def _normalize_odf_formula(formula):
     return f"of:={body}"
 
 
-def _friendly_formula(formula):
+def _friendly_formula(formula: "str | None") -> "str | None":
     """The reverse of `_normalize_odf_formula`, for display: strip the
     `<language>:=` prefix and translate ODF references/separators back into
     ordinary `A1`-style syntax, e.g. `"of:=[.A2]+[.A3]"` -> `"=A2+A3"`."""

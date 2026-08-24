@@ -3,8 +3,9 @@
 
 import copy
 import re
+from typing import cast
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 
 # Standard OASIS namespace URIs, used as a last-resort fallback to build a
@@ -23,7 +24,7 @@ _ODF_NAMESPACES = {
 }
 
 
-def _new_qualified_tag(tag_name):
+def _new_qualified_tag(tag_name: str) -> Tag:
     """Build a detached `<tag_name/>` from scratch, with its own `xmlns:`
     declaration so the "table:"/"text:" prefix resolves correctly - safe to
     insert anywhere in an ODF document even though the declaration is then
@@ -32,10 +33,10 @@ def _new_qualified_tag(tag_name):
     prefix = tag_name.split(":", 1)[0]
     uri = _ODF_NAMESPACES[prefix]
     fragment = BeautifulSoup(f'<{tag_name} xmlns:{prefix}="{uri}"/>', "xml")
-    return fragment.find(tag_name)
+    return cast(Tag, fragment.find(tag_name))
 
 
-def _blank_template(root, tag_name):
+def _blank_template(root: Tag, tag_name: str) -> Tag:
     """A detached, blank copy of an existing `tag_name` tag reachable from
     `root`, or a freshly built one (see `_new_qualified_tag`) if the document
     has none to copy from.
@@ -53,27 +54,30 @@ def _blank_template(root, tag_name):
     )
     if template is None:
         return _new_qualified_tag(tag_name)
-    new_tag = copy.deepcopy(template)
+    new_tag = cast(Tag, copy.deepcopy(template))
     new_tag.attrs.clear()
     for child in list(new_tag.children):
         child.extract()
     return new_tag
 
 
-def _ensure_style_child(style_tag, tag_name):
+def _ensure_style_child(style_tag: Tag, tag_name: str) -> Tag:
     """The `tag_name` properties child of `style_tag` (e.g.
     `<style:table-cell-properties>` under a `<style:style>`), creating a
     blank one (see `_blank_template`) if it isn't there yet."""
     child = style_tag.find(tag_name)
     if child is None:
-        child = _blank_template(style_tag, tag_name)
-        style_tag.append(child)
-    return child
+        new_child = _blank_template(style_tag, tag_name)
+        style_tag.append(new_child)
+        return new_child
+    return cast(Tag, child)
 
 
-def _is_forked_style_name(name, prefix):
+def _is_forked_style_name(name: "str | None", prefix: str) -> bool:
     """True if `name` looks like one odsslicer itself generated for a
     single owner (a specific cell/row/column/sheet) via `prefix` - safe to
     mutate in place rather than fork again. Real documents don't use these
     reserved prefixes in practice."""
-    return bool(name) and re.match(rf"^{re.escape(prefix)}\d+$", name) is not None
+    if not name:
+        return False
+    return re.match(rf"^{re.escape(prefix)}\d+$", name) is not None

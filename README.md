@@ -124,8 +124,10 @@ no `soffice`/`libreoffice` binary is on `PATH`.
 
 Version numbers are derived automatically from git tags (via `setuptools-scm`) and follow
 [Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
-still change between minor versions. See the
-[Releases](https://github.com/antnardo/odsslicer/releases) page for the changelog.
+still change between minor versions. See
+[CHANGELOG.md](https://github.com/antnardo/odsslicer/blob/master/CHANGELOG.md) (and the
+[Releases](https://github.com/antnardo/odsslicer/releases) page) for what changed in each
+version.
 
 ## License
 

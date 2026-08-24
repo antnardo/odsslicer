@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """ODSReader: the document itself - zip I/O, sheets, styles lookup, save."""
 
+import logging
 import re
 from pathlib import Path
-from typing import Union
+from typing import Union, cast
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from .formulas import _rename_odf_formula_sheet
 from .libreoffice import _recalculate_file
@@ -15,13 +16,19 @@ from .sheet import Sheet
 from .styles import _NUMBER_STYLE_TAGS
 from .xmlutils import _blank_template, _new_qualified_tag
 
+logger = logging.getLogger("odsslicer")
+
 
 class ODSReader:
-    def __init__(self, file: Union[Path, str], verbose: bool = False):
-        self.file = file
+    _from_template: bool = False  # set by new(): no source file to default save() to
+
+    def __init__(self, file: Union[Path, str], verbose: bool = False) -> None:
+        self.file: Path = Path(file)
         self.verbose = verbose
-        if self.verbose:
-            print(f"Opening {self.file}...")
+        # chatty progress messages go to the "odsslicer" logger: DEBUG
+        # normally, INFO with verbose=True - configure logging to see them
+        self._log_level = logging.INFO if verbose else logging.DEBUG
+        logger.log(self._log_level, "Opening %s...", self.file)
         # http://docs.oasis-open.org/office/v1.2/
         with ZipFile(file) as zip:
             # Document content and automatic styles used in the content.
@@ -38,10 +45,9 @@ class ODSReader:
         self.tables = self.data.find_all("table:table")
         self.sheets_names = [table["table:name"] for table in self.tables]
         self._sheets: dict[str, Sheet | None] = {name: None for name in self.sheets_names}
-        if self.verbose:
-            print(f"    {repr(self)}")
+        logger.log(self._log_level, "    %r", self)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"ODSReader({self.file}, sheets={self.sheets_names})"
 
     @property
@@ -50,7 +56,7 @@ class ODSReader:
         - see `DocumentProperties`."""
         return DocumentProperties(self)
 
-    def _find_style(self, name, family=None):
+    def _find_style(self, name: "str | None", family: "str | None" = None) -> "Tag | None":
         """A `<style:style>` by name (optionally constrained to a
         `style:family`, e.g. `"table-cell"`/`"table-row"`/`"table-column"`/
         `"table"` - names are conventionally unique per family in real
@@ -62,25 +68,29 @@ class ODSReader:
         attrs = {"style:name": name}
         if family is not None:
             attrs["style:family"] = family
-        return self.data.find("style:style", attrs=attrs) or self.styles_data.find(
-            "style:style", attrs=attrs
+        return cast(
+            "Tag | None",
+            self.data.find("style:style", attrs=attrs)
+            or self.styles_data.find("style:style", attrs=attrs),
         )
 
-    def _find_number_style(self, name):
+    def _find_number_style(self, name: "str | None") -> "Tag | None":
         """A `<number:*-style>` by name, wherever it lives - like cell
         styles, a number format can be defined in either file."""
         if not name:
             return None
-        return self.data.find(_NUMBER_STYLE_TAGS, attrs={"style:name": name}) or self.styles_data.find(
-            _NUMBER_STYLE_TAGS, attrs={"style:name": name}
+        return cast(
+            "Tag | None",
+            self.data.find(_NUMBER_STYLE_TAGS, attrs={"style:name": name})
+            or self.styles_data.find(_NUMBER_STYLE_TAGS, attrs={"style:name": name}),
         )
 
-    def _automatic_styles(self):
+    def _automatic_styles(self) -> Tag:
         """The `<office:automatic-styles>` element in `content.xml` - the
         only place a newly created style can go and still survive `save()`
         (styles already in `styles.xml` are copied through unchanged, see
         `save()`)."""
-        styles = self.data.find("office:automatic-styles")
+        styles = cast("Tag | None", self.data.find("office:automatic-styles"))
         if styles is None:
             styles = _new_qualified_tag("office:automatic-styles")
             body = self.data.find("office:body")
@@ -90,7 +100,7 @@ class ODSReader:
                 self.data.append(styles)
         return styles
 
-    def _new_style_name(self, prefix):
+    def _new_style_name(self, prefix: str) -> str:
         """A `style:name` not already used by any style in the document
         (either file), of the form `f"{prefix}{n}"` for the smallest
         available `n`."""
@@ -103,7 +113,7 @@ class ODSReader:
                     max_n = max(max_n, int(m.group(1)))
         return f"{prefix}{max_n + 1}"
 
-    def _new_style_tag(self, family, prefix, parent_style_name=None):
+    def _new_style_tag(self, family: str, prefix: str, parent_style_name: "str | None" = None) -> Tag:
         """A brand new, empty `<style:style style:family=family>` with a
         fresh unique name, already inserted into `content.xml`'s automatic
         styles."""
@@ -137,7 +147,7 @@ class ODSReader:
             reader._sheets = {sheet_name: reader._sheets.pop("Sheet1")}
         return reader
 
-    def save(self, path: Union[Path, str, None] = None, recalculate: bool = False, timeout: int = 120):
+    def save(self, path: Union[Path, str, None] = None, recalculate: bool = False, timeout: int = 120) -> None:
         """Write the in-memory content back out as a .ods file.
 
         `content.xml` (sheets, cell data, automatic styles, formulas) and
@@ -156,7 +166,7 @@ class ODSReader:
         the file (`ODSReader(path)`) to read the computed values back.
         """
         if path is None:
-            if getattr(self, "_from_template", False):
+            if self._from_template:
                 raise ValueError(
                     "this document was created with ODSReader.new() and has no "
                     "source file of its own - pass an explicit path to save(...)"
@@ -176,7 +186,7 @@ class ODSReader:
         if recalculate:
             _recalculate_file(path, timeout=timeout)  # the parameter shadows the module function
 
-    def export_content_xml(self, pretty=True):
+    def export_content_xml(self, pretty: bool = True) -> None:
         if pretty:
             with open(f"{self.file.with_suffix('.xml')}", "w", encoding="utf8") as f:
                 f.write(self.data.prettify())
@@ -185,17 +195,17 @@ class ODSReader:
                 f.write(self.content)
 
     @property
-    def sheets(self):
+    def sheets(self) -> list[Sheet]:
         return [self.sheet(name) for name in self.sheets_names]
 
-    def sheet(self, name) -> Sheet:
+    def sheet(self, name: str) -> Sheet:
         if name not in self.sheets_names:
-            raise IndexError(f"No sheet named {name}")
-        if self._sheets[name] is None:
-            self._sheets[name] = Sheet(
-                self.tables[self.sheets_names.index(name)], verbose=self.verbose, reader=self
-            )
-        return self._sheets[name]
+            raise KeyError(f"No sheet named {name}")
+        cached = self._sheets[name]
+        if cached is None:
+            cached = Sheet(self.tables[self.sheets_names.index(name)], verbose=self.verbose, reader=self)
+            self._sheets[name] = cached
+        return cached
 
     def add_sheet(self, name: str) -> Sheet:
         """Create a new, empty sheet named `name` and append it after the last
@@ -221,19 +231,20 @@ class ODSReader:
         self.tables[-1].insert_after(table)
         self.tables.append(table)
         self.sheets_names.append(name)
-        self._sheets[name] = Sheet(table, verbose=self.verbose, reader=self)
-        return self._sheets[name]
+        new_sheet = Sheet(table, verbose=self.verbose, reader=self)
+        self._sheets[name] = new_sheet
+        return new_sheet
 
-    def delete_sheet(self, name: str):
+    def delete_sheet(self, name: str) -> None:
         """Remove the sheet named `name` entirely.
 
-        Raises `IndexError` for an unknown name, and `ValueError` for the
+        Raises `KeyError` for an unknown name, and `ValueError` for the
         document's last remaining sheet (an ODF spreadsheet needs at least
         one). Any `Sheet`/`Cell` object obtained before the call that
         pointed into this sheet is now backed by a decomposed, detached
         XML element - stop using it."""
         if name not in self.sheets_names:
-            raise IndexError(f"No sheet named {name}")
+            raise KeyError(f"No sheet named {name}")
         if len(self.sheets_names) <= 1:
             raise ValueError("cannot delete the only remaining sheet in the document")
         idx = self.sheets_names.index(name)
@@ -242,7 +253,7 @@ class ODSReader:
         del self.sheets_names[idx]
         del self._sheets[name]
 
-    def rename_sheet(self, old_name: str, new_name: str):
+    def rename_sheet(self, old_name: str, new_name: str) -> None:
         """Rename sheet `old_name` to `new_name`.
 
         Also rewrites any formula elsewhere in the document (in this
@@ -252,10 +263,10 @@ class ODSReader:
         sheet's own formulas (`.A1`, meaning "this sheet") needs no
         rewrite - it already means the same thing regardless of the name.
 
-        Raises `IndexError` for an unknown `old_name`, and `ValueError`
+        Raises `KeyError` for an unknown `old_name`, and `ValueError`
         for an empty `new_name` or one already used by another sheet."""
         if old_name not in self.sheets_names:
-            raise IndexError(f"No sheet named {old_name}")
+            raise KeyError(f"No sheet named {old_name}")
         if not new_name:
             raise ValueError("a sheet name is required")
         if new_name != old_name and new_name in self.sheets_names:
@@ -278,15 +289,15 @@ class ODSReader:
                     if renamed != cell.formula:
                         cell.formula = renamed
 
-    def move_sheet(self, name: str, index: int):
+    def move_sheet(self, name: str, index: int) -> None:
         """Move sheet `name` to position `index` (0-based) among the
         document's sheets, shifting the others - e.g. `move_sheet("Data",
         0)` makes it the first tab.
 
-        Raises `IndexError` for an unknown name, and `ValueError` if
+        Raises `KeyError` for an unknown name, and `ValueError` if
         `index` is out of range."""
         if name not in self.sheets_names:
-            raise IndexError(f"No sheet named {name}")
+            raise KeyError(f"No sheet named {name}")
         if not 0 <= index < len(self.sheets_names):
             raise ValueError(f"index {index} out of range (document has {len(self.sheets_names)} sheets)")
 

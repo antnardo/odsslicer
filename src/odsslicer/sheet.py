@@ -1,12 +1,18 @@
 # -*- coding: utf-8 -*-
+# mypy: disable-error-code="union-attr"
+# (bs4 Tag/NavigableString/None unions are narrowed dynamically all over this
+# module, guarded by runtime checks mypy can't see through - silencing that
+# one error class here beats dozens of value-free asserts/casts. Every other
+# error class, and all signatures, remain fully checked.)
 """Sheet: numpy-style indexing over one table, structural edits (grow, delete,
 copy, sort, merge), pivot definitions, row/column/table style access."""
 
 import copy
 import functools
-from typing import TYPE_CHECKING, Dict, Tuple, Union
+import logging
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Tuple, Union, cast
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from .addresses import string_address, string_to_col
 from .cell import ArrayValues, Cell
@@ -31,14 +37,19 @@ from .xmlutils import _blank_template, _ensure_style_child, _is_forked_style_nam
 if TYPE_CHECKING:
     from .reader import ODSReader
 
+logger = logging.getLogger("odsslicer")
+
 
 class Sheet:
-    def __init__(self, table: BeautifulSoup, verbose: bool = False, reader: "ODSReader" = None):
+    def __init__(self, table: Tag, verbose: bool = False, reader: "ODSReader | None" = None) -> None:
         self.verbose = verbose
+        # chatty progress messages go to the "odsslicer" logger: DEBUG
+        # normally, INFO with verbose=True - configure logging to see them
+        self._log_level = logging.INFO if verbose else logging.DEBUG
         self.reader = reader
-        self.table: BeautifulSoup = table
+        self.table: Tag = table
         self.attrs: Dict[str, str] = self.table.attrs
-        self.name = self.table["table:name"]
+        self.name: str = cast(str, self.table["table:name"])
         self.stylename = self.table.attrs.get("table:style-name")
         self.rows = self.load(table)
         if len(self.rows) > 0:
@@ -46,20 +57,18 @@ class Sheet:
             self.size = (len(self.rows), max(rows_len))
             n_cols = self.size[1]
             if sum(n_cols - len_row for len_row in rows_len) > 0:
-                print(
-                    f"[WARNING] At least one row does not have the same length as the others? {rows_len}"
+                logger.warning(
+                    "At least one row does not have the same length as the others? %s", rows_len
                 )
         else:
             self.size = (0, 0)
         self.n_rows, self.n_cols = self.size
-        if self.verbose:
-            print(f"    {repr(self)}")
+        logger.log(self._log_level, "    %r", self)
 
-    def load(self, table_bs):
+    def load(self, table_bs: Tag) -> list[list[Cell]]:
         table = []
         rows = table_bs.find_all("table:table-row")
-        if self.verbose:
-            print(f"    Loading {self.name}, {len(rows)} unrepeated rows")
+        logger.log(self._log_level, "    Loading %s, %d unrepeated rows", self.name, len(rows))
         i = 0
         for row in rows:
             n_rows = int(row.attrs.get("table:number-rows-repeated", "1"))
@@ -70,11 +79,11 @@ class Sheet:
                 and len(all_cells_bs) == 1
                 and Cell(all_cells_bs[0]).is_empty
             ):
-                if self.verbose:
-                    print(
-                        f"    Row [{i+1:04d}] repeated {n_rows} > MAX = {MAX_REPEAT_ROWS} and with one empty cell:\
- row discarded"
-                    )
+                logger.log(
+                    self._log_level,
+                    "    Row [%04d] repeated %d > MAX = %d and with one empty cell: row discarded",
+                    i + 1, n_rows, MAX_REPEAT_ROWS,
+                )
                 continue
             for j in range(n_rows):
                 cells = []
@@ -92,8 +101,7 @@ class Sheet:
         # Check if last row is empty and remove
         if sum(not cell.is_empty for cell in table[-1]) == 0:
             table = table[:-1]
-            if self.verbose:
-                print("    Last row empty: removed")
+            logger.log(self._log_level, "    Last row empty: removed")
         # Remove repeated columns > MAX and empty
         # Transpose
         if len(table) == 0:
@@ -115,8 +123,7 @@ class Sheet:
         while max(empty_cols_aggr) > MAX_REPEAT_COLS:
             col_start = empty_cols_pos[empty_cols_aggr.index(m)][0]
             col_end = col_start + m
-            if self.verbose:
-                print(f"    Cols {col_start} to {col_end} empty: removed")
+            logger.log(self._log_level, "    Cols %d to %d empty: removed", col_start, col_end)
             table = [row[:col_start] + row[col_end:] for row in table]
             empty_cols_pos = empty_cols_pos[:col_start] + empty_cols_pos[col_end:]
             empty_cols_aggr = [e[1] for e in empty_cols_pos]
@@ -139,7 +146,7 @@ class Sheet:
                 empty_cols_aggr = [e[1] for e in empty_cols_pos]
         return table
 
-    def materialize_cell(self, row, col):
+    def materialize_cell(self, row: int, col: int) -> None:
         """Ensure the cell at (row, col) has its own, independent XML element.
 
         Repeatedly un-repeats the enclosing row, then the enclosing column, then
@@ -167,10 +174,10 @@ class Sheet:
             "element (internal error)"
         )
 
-    def _unrepeat_row(self, row):
+    def _unrepeat_row(self, row: int) -> None:
         """Split the `table:number-rows-repeated` row tag covering `row` into
         one independent `<table:table-row>` per repetition."""
-        row_tag = self.rows[row][0].cell.parent
+        row_tag = cast(Tag, self.rows[row][0].cell.parent)
         n = int(row_tag.attrs.get("table:number-rows-repeated", "1"))
         if n <= 1:
             return
@@ -195,10 +202,10 @@ class Sheet:
                 n_cols = int(cell_tag.attrs.get("table:number-columns-repeated", "1"))
                 for _ in range(n_cols):
                     if j < len(self.rows[r]):
-                        self.rows[r][j].__init__(cell_tag, row=r, col=j, sheet=self)
+                        self.rows[r][j].__init__(cell_tag, row=r, col=j, sheet=self)  # type: ignore[misc]
                     j += 1
 
-    def _unrepeat_col(self, row, col):
+    def _unrepeat_col(self, row: int, col: int) -> None:
         """Split the `table:number-columns-repeated` cell tag covering (row, col)
         into one independent `<table:table-cell>` per repetition."""
         cell_tag = self.rows[row][col].cell
@@ -211,8 +218,8 @@ class Sheet:
             start -= 1
 
         copies = [copy.deepcopy(cell_tag) for _ in range(n)]
-        for c in copies:
-            c.attrs.pop("table:number-columns-repeated", None)
+        for copy_of_cell in copies:
+            copy_of_cell.attrs.pop("table:number-columns-repeated", None)
         cell_tag.replace_with(copies[0])
         prev = copies[0]
         for nxt in copies[1:]:
@@ -221,16 +228,16 @@ class Sheet:
 
         for k, copy_tag in enumerate(copies):
             c = start + k
-            self.rows[row][c].__init__(copy_tag, row=row, col=c, sheet=self)
+            self.rows[row][c].__init__(copy_tag, row=row, col=c, sheet=self)  # type: ignore[misc]
 
     @staticmethod
-    def _is_merge_master(cell):
+    def _is_merge_master(cell: Cell) -> bool:
         return (
             cell.attrs.get("table:number-columns-spanned", "1") != "1"
             or cell.attrs.get("table:number-rows-spanned", "1") != "1"
         )
 
-    def _find_merge_master(self, row, col):
+    def _find_merge_master(self, row: int, col: int) -> "Cell | None":
         """Find the top-left cell of the merged range covering (row, col)."""
         for r in range(row, -1, -1):
             for master in self.rows[r]:
@@ -245,7 +252,7 @@ class Sheet:
                     return master
         return None
 
-    def _unmerge(self, row, col):
+    def _unmerge(self, row: int, col: int) -> None:
         """Turn the merged range covering (row, col) back into independent cells.
 
         The top-left ("master") cell keeps its value and simply loses its span
@@ -270,7 +277,7 @@ class Sheet:
         cols_span = int(master.attrs.get("table:number-columns-spanned", "1"))
         master.cell.attrs.pop("table:number-rows-spanned", None)
         master.cell.attrs.pop("table:number-columns-spanned", None)
-        master.__init__(master.cell, row=mr, col=mc, sheet=self)
+        master.__init__(master.cell, row=mr, col=mc, sheet=self)  # type: ignore[misc]
 
         for r in range(mr, mr + rows_span):
             for c in range(mc, mc + cols_span):
@@ -279,9 +286,9 @@ class Sheet:
                 covered = self.rows[r][c]
                 if covered.cell.name == "covered-table-cell":
                     covered.cell.name = "table-cell"
-                covered.__init__(covered.cell, row=r, col=c, sheet=self)
+                covered.__init__(covered.cell, row=r, col=c, sheet=self)  # type: ignore[misc]
 
-    def _resolve_range(self, address):
+    def _resolve_range(self, address: "str | int | tuple[Any, ...] | slice") -> tuple[int, int, int, int]:
         """Turn a range address - `"A1:C2"`, `"A1"`, a slice, or anything
         else `sheet[...]` accepts - into `(row0, row1, col0, col1)`
         (inclusive, 0-based) bounds, without actually reading any cell."""
@@ -307,7 +314,7 @@ class Sheet:
             return row0, row1, col0, col1
         raise ValueError(f"unrecognized range address: {address!r}")
 
-    def merge(self, address):
+    def merge(self, address: "str | int | tuple[Any, ...] | slice") -> None:
         """Merge the cells in `address` (e.g. `"A1:C2"`, or any rectangular
         selection accepted by `sheet[...]`) into one cell: the top-left
         cell becomes the merge's master, keeping its value and gaining
@@ -344,10 +351,10 @@ class Sheet:
                     continue
                 covered = self.rows[r][c]
                 covered.cell.name = "covered-table-cell"
-                covered.__init__(covered.cell, row=r, col=c, sheet=self)
-        master.__init__(master.cell, row=row0, col=col0, sheet=self)
+                covered.__init__(covered.cell, row=r, col=c, sheet=self)  # type: ignore[misc]
+        master.__init__(master.cell, row=row0, col=col0, sheet=self)  # type: ignore[misc]
 
-    def unmerge(self, address):
+    def unmerge(self, address: "str | int | tuple[Any, ...] | slice") -> None:
         """Undo `merge(...)` for the merged range covering `address` (any
         single cell within it, master or covered) - every cell in the
         range becomes independent again, regaining whatever value/
@@ -362,7 +369,7 @@ class Sheet:
             raise ValueError(f"cell {Sheet.string_address(row0, col0)} is not part of a merged range")
         self._unmerge(row0, col0)
 
-    def copy(self, source, dest):
+    def copy(self, source: "str | int | tuple[Any, ...] | slice", dest: "str | int | tuple[Any, ...] | slice") -> None:
         """Copy the cells in `source` (any address `sheet[...]` accepts,
         e.g. `"A1:B2"` or a single cell) onto `dest` (the *top-left*
         address of the target range - the copy always has the same shape
@@ -409,7 +416,7 @@ class Sheet:
                     target.value = value
                 target.style = style_name
 
-    def sort(self, source, by, ascending=True):
+    def sort(self, source: "str | int | tuple[Any, ...] | slice", by: int, ascending: bool = True) -> None:
         """Sort the rows of `source` (a range address, e.g. `"A2:C10"`) in
         place by the values in column `by` (an absolute column index,
         which must fall within `source`'s own columns) - a stable sort
@@ -448,7 +455,7 @@ class Sheet:
         ]
         key_offset = by - col0
 
-        def compare(a, b):
+        def compare(a: tuple[int, list[tuple[Any, Any, Any]]], b: tuple[int, list[tuple[Any, Any, Any]]]) -> int:
             va, vb = a[1][key_offset][0], b[1][key_offset][0]
             if va is None and vb is None:
                 return 0
@@ -475,7 +482,15 @@ class Sheet:
                     target.value = value
                 target.style = style_name
 
-    def create_pivot_table(self, source, target, rows=None, columns=None, values=None, name=None):
+    def create_pivot_table(
+        self,
+        source: str,
+        target: str,
+        rows: "list[str] | None" = None,
+        columns: "list[str] | None" = None,
+        values: "dict[str, str] | None" = None,
+        name: "str | None" = None,
+    ) -> None:
         """Define a pivot table ("data pilot table" in ODF terms) sourced
         from `source` (a range address whose first row is field/column
         headers, e.g. `"A1:C100"` - optionally sheet-qualified,
@@ -553,25 +568,25 @@ class Sheet:
 
         tables.append(pivot)
 
-    def _append_pivot_field(self, pivot, field, orientation, function):
+    def _append_pivot_field(self, pivot: Tag, field: str, orientation: str, function: str) -> None:
         field_tag = _blank_template(self.reader.data, "table:data-pilot-field")
         field_tag.attrs["table:source-field-name"] = field
         field_tag.attrs["table:orientation"] = orientation
         field_tag.attrs["table:function"] = function
         pivot.append(field_tag)
 
-    def _empty_cell_template(self):
+    def _empty_cell_template(self) -> Tag:
         """A detached, blank `<table:table-cell/>` tag."""
         return _blank_template(self.table, "table:table-cell")
 
-    def _empty_row_template(self, n_cols):
+    def _empty_row_template(self, n_cols: int) -> Tag:
         """A detached `<table:table-row>` tag with `n_cols` blank cells."""
         row = _blank_template(self.table, "table:table-row")
         for _ in range(n_cols):
             row.append(self._empty_cell_template())
         return row
 
-    def grow_to(self, row, col):
+    def grow_to(self, row: int, col: int) -> None:
         """Extend the sheet, if needed, so that (row, col) exists.
 
         Widens every existing row with new blank cells first (if `col` is past
@@ -610,7 +625,7 @@ class Sheet:
 
         self.size = (self.n_rows, self.n_cols)
 
-    def _discard_stray_rows(self):
+    def _discard_stray_rows(self) -> None:
         """Remove any `<table:table-row>` physically present in the XML beyond
         what `self.rows` accounts for.
 
@@ -627,7 +642,7 @@ class Sheet:
             stray.decompose()
             stray = following
 
-    def delete_row(self, row):
+    def delete_row(self, row: int) -> None:
         """Remove logical row `row` entirely, shifting every row below it
         up by one (`sheet.size` shrinks accordingly).
 
@@ -659,7 +674,7 @@ class Sheet:
         self.size = (self.n_rows, self.n_cols)
         self._adjust_formulas_for_deletion(deleted_row=row)
 
-    def delete_column(self, col):
+    def delete_column(self, col: int) -> None:
         """Remove logical column `col` entirely, shifting every column to
         its right left by one (`sheet.size` shrinks accordingly).
 
@@ -687,7 +702,7 @@ class Sheet:
         self.size = (self.n_rows, self.n_cols)
         self._adjust_formulas_for_deletion(deleted_col=col)
 
-    def _adjust_formulas_for_deletion(self, deleted_row=None, deleted_col=None):
+    def _adjust_formulas_for_deletion(self, deleted_row: "int | None" = None, deleted_col: "int | None" = None) -> None:
         """After physically removing row `deleted_row` (or column
         `deleted_col`) from this sheet, rewrite every formula in the whole
         document - this sheet's own, and any other sheet's formula that
@@ -713,11 +728,11 @@ class Sheet:
                     if adjusted != cell.formula:
                         cell.formula = adjusted
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Sheet(name='{self.name}', size[rows, cols]={self.size})"
 
     @property
-    def style(self):
+    def style(self) -> "TableStyle | None":
         """This sheet's resolved, writable `TableStyle` (e.g. `.tab_color`
         - see `TableStyle`), or `None` if there's no owning `ODSReader`."""
         if self.reader is None:
@@ -726,7 +741,7 @@ class Sheet:
         tag = self.reader._find_style(name, family="table") if name else None
         return TableStyle(tag, sheet=self)
 
-    def row_style(self, row):
+    def row_style(self, row: int) -> "RowStyle | None":
         """The resolved, writable `RowStyle` for logical row `row` (see
         `RowStyle`), or `None` if `row` is out of range or there's no
         owning `ODSReader`."""
@@ -737,7 +752,7 @@ class Sheet:
         tag = self.reader._find_style(name, family="table-row") if name else None
         return RowStyle(tag, sheet=self, row=row)
 
-    def _find_column_tag(self, col):
+    def _find_column_tag(self, col: int) -> "Tag | None":
         """The `<table:table-column>` covering logical column `col`
         (accounting for `table:number-columns-repeated`), or `None`."""
         seen = 0
@@ -748,13 +763,14 @@ class Sheet:
             seen += n
         return None
 
-    def _unrepeat_column_tag(self, col):
+    def _unrepeat_column_tag(self, col: int) -> Tag:
         """Split the `table:number-columns-repeated` column-definition tag
         covering `col` into one independent `<table:table-column>` per
         repetition (mirrors `_unrepeat_col`, but for column *definitions*
         rather than cell data). Returns the tag now covering `col` alone -
         already independent if it wasn't repeated to begin with."""
         col_tag = self._find_column_tag(col)
+        assert col_tag is not None  # callers only ask for a column the sheet has
         n = int(col_tag.attrs.get("table:number-columns-repeated", "1"))
         if n <= 1:
             return col_tag
@@ -776,7 +792,7 @@ class Sheet:
             prev = nxt
         return copies[col - start]
 
-    def column_style(self, col):
+    def column_style(self, col: int) -> "ColumnStyle | None":
         """The resolved, writable `ColumnStyle` for logical column `col`
         (see `ColumnStyle`), or `None` if no `<table:table-column>` covers
         it or there's no owning `ODSReader`."""
@@ -789,7 +805,7 @@ class Sheet:
         tag = self.reader._find_style(name, family="table-column") if name else None
         return ColumnStyle(tag, sheet=self, col=col)
 
-    def _fork_style(self, current_name, family, prefix, props_tag_name):
+    def _fork_style(self, current_name: "str | None", family: str, prefix: str, props_tag_name: str) -> Tag:
         """The single, uniquely-owned automatic style (see
         `Cell._ensure_own_style` for the cell-level equivalent) behind one
         row/column/sheet's `table:style-name`.
@@ -813,7 +829,7 @@ class Sheet:
                 _ensure_style_child(tag, props_tag_name).attrs.update(old_props.attrs)
         return tag
 
-    def _ensure_row_style(self, row):
+    def _ensure_row_style(self, row: int) -> Tag:
         self._unrepeat_row(row)
         row_tag = self.rows[row][0].cell.parent
         tag = self._fork_style(
@@ -822,7 +838,7 @@ class Sheet:
         row_tag.attrs["table:style-name"] = tag["style:name"]
         return tag
 
-    def _ensure_column_style(self, col):
+    def _ensure_column_style(self, col: int) -> Tag:
         col_tag = self._unrepeat_column_tag(col)
         tag = self._fork_style(
             col_tag.attrs.get("table:style-name"), "table-column", "ocos", "style:table-column-properties"
@@ -830,14 +846,14 @@ class Sheet:
         col_tag.attrs["table:style-name"] = tag["style:name"]
         return tag
 
-    def _ensure_table_style(self):
+    def _ensure_table_style(self) -> Tag:
         tag = self._fork_style(
             self.table.attrs.get("table:style-name"), "table", "ots", "style:table-properties"
         )
         self.table.attrs["table:style-name"] = tag["style:name"]
         return tag
 
-    def empty_row(self, i=None, n_cols=None, start=0, slice=None):
+    def empty_row(self, i: "int | None" = None, n_cols: "int | None" = None, start: int = 0, slice: "slice | None" = None) -> list[Cell]:
         step = 1
         if slice is not None:
             start, stop, step = self._unslice(slice)
@@ -845,9 +861,9 @@ class Sheet:
             stop = n_cols
         else:
             stop = self.n_cols
-        return [Cell(EMPTY_CELL_BS, i, j, sheet=self) for j in range(start, stop, step)]
+        return [Cell(EMPTY_CELL_BS, cast(int, i), j, sheet=self) for j in range(start, stop, step)]
 
-    def empty_col(self, j=None, n_rows=None, start=0, slice=None):
+    def empty_col(self, j: "int | None" = None, n_rows: "int | None" = None, start: int = 0, slice: "slice | None" = None) -> list[list[Cell]]:
         step = 1
         if slice is not None:
             start, stop, step = self._unslice(slice)
@@ -855,24 +871,24 @@ class Sheet:
             stop = n_rows
         else:
             stop = self.n_rows
-        return [[Cell(EMPTY_CELL_BS, i, j, sheet=self)] for i in range(start, stop, step)]
+        return [[Cell(EMPTY_CELL_BS, i, cast(int, j), sheet=self)] for i in range(start, stop, step)]
 
-    def get_row(self, i):
+    def get_row(self, i: int) -> list[Cell]:
         if i >= self.n_rows:
             return self.empty_row(i)
         return self.rows[i]
 
-    def get_rows(self, slice):
+    def get_rows(self, slice: slice) -> list[list[Cell]]:
         return [self.get_row(i) for i in range(*self._unslice(slice, row=True))]
 
-    def get_cell(self, i, j):
+    def get_cell(self, i: int, j: int) -> Cell:
         row = self.get_row(i)
         if j >= self.n_cols:
             return Cell(EMPTY_CELL_BS, i, j, sheet=self)
         else:
             return row[j]
 
-    def _unslice(self, slice, row=False, col=False):
+    def _unslice(self, slice: slice, row: bool = False, col: bool = False) -> tuple[int, int, int]:
         start = slice.start
         if start is None:
             start = 0
@@ -887,27 +903,27 @@ class Sheet:
             step = 1
         return start, stop, step
 
-    def get_cells(self, row_slice, col_slice):
+    def get_cells(self, row_slice: slice, col_slice: slice) -> list[list[Cell]]:
         return [
             [self.get_cell(i, j) for j in range(*self._unslice(col_slice, col=True))]
             for i in range(*self._unslice(row_slice, row=True))
         ]
 
-    def get_row_slice(self, i, col_slice):
+    def get_row_slice(self, i: int, col_slice: slice) -> list[Cell]:
         return [self.get_cell(i, j) for j in range(*self._unslice(col_slice, col=True))]
 
-    def get_col(self, j):
+    def get_col(self, j: int) -> list[list[Cell]]:
         if j >= self.n_cols:
             return self.empty_col(j)
         return [[row[j]] for row in self.rows]
 
-    def get_cols(self, slice):
+    def get_cols(self, slice: slice) -> list[list[Cell]]:
         return [
             [row[j] for j in range(*self._unslice(slice, col=True))]
             for row in self.rows
         ]
 
-    def __getitem__(self, address):
+    def __getitem__(self, address: "str | int | tuple[Any, ...] | slice") -> Any:
         """ROW en premier, COL en second (plus naturel, comme numpy, et correspond aux données)"""
         if type(address) is str:
             # "A2" ou "A2:B3" ou...
@@ -933,15 +949,15 @@ class Sheet:
             f"Format demandé non conforme ou données non définie dans le tableur : {address}"
         )
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[list[Cell]]:
         return iter(self.rows)
 
     @staticmethod
-    def string_to_col(s):
+    def string_to_col(s: str) -> int:
         return string_to_col(s)
 
     @classmethod
-    def address(cls, string, n_rows=1) -> Union[int, Tuple, slice]:
+    def address(cls, string: str, n_rows: int = 1) -> Union[int, Tuple[Any, ...], slice]:
         m = RE_STRING_CELL.fullmatch(string)
         if m is None:
             raise ValueError
@@ -959,7 +975,7 @@ class Sheet:
         if dp is None:
             if c1 is None:
                 # 1
-                return r1
+                return r1  # type: ignore[return-value]
             elif r1 is None:
                 # A
                 return slice(n_rows), c1
@@ -969,7 +985,7 @@ class Sheet:
         if (c1 is None and r2 is None) or (c2 is None and r1 is None):
             raise ValueError
         # dp is not None
-        if (c1 is not None and c2 <= c1) or (r1 is not None and r2 <= r1):
+        if (c1 is not None and c2 <= c1) or (r1 is not None and r2 <= r1):  # type: ignore[operator]
             raise ValueError
         if r1 is None:
             # A:B
@@ -977,10 +993,10 @@ class Sheet:
         elif c1 is None:
             # 1:2
             return slice(r1, r2)
-        elif r2 == r1 + 1 and c2 > c1 + 1:
+        elif r2 == r1 + 1 and c2 > c1 + 1:  # type: ignore[operator]
             # A1:B1
             return r1, slice(c1, c2)
-        elif c2 == c1 + 1 and r2 > r1 + 1:
+        elif c2 == c1 + 1 and r2 > r1 + 1:  # type: ignore[operator]
             # A1:A2
             return slice(r1, r2), c1
         elif r2 == r1 + 1 and c2 == c1 + 1:
@@ -989,12 +1005,12 @@ class Sheet:
         return slice(r1, r2), slice(c1, c2)
 
     @classmethod
-    def string_address(cls, row, col):
+    def string_address(cls, row: int, col: int) -> str:
         # 0->A, 25->Z, 26->AA, 51->AZ, 52->BA (bijective base-26)
         return string_address(row, col)
 
-    def to_list(self):
+    def to_list(self) -> Any:
         return self[:].to_list()
 
-    def to_numpy(self):
+    def to_numpy(self) -> Any:
         return self[:].to_numpy()

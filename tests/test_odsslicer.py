@@ -139,7 +139,7 @@ def test_sheets_property_returns_a_reusable_list(reader):
 
 
 def test_sheet_unknown_name_raises(reader):
-    with pytest.raises(IndexError):
+    with pytest.raises(KeyError):
         reader.sheet("DoesNotExist")
 
 
@@ -338,14 +338,17 @@ class _FakeTag(dict):
         return {"table:name": "Fake", "table:style-name": "st"}[key]
 
 
-def test_ragged_rows_trigger_warning(monkeypatch, capsys):
+def test_ragged_rows_trigger_warning(monkeypatch, caplog):
     # regression: rows_len was a `map` object consumed twice (once by max(),
     # once by the warning check), so the warning never actually fired.
+    # (The message goes through the "odsslicer" logger at WARNING level.)
+    import logging
+
     monkeypatch.setattr(Sheet, "load", lambda self, table_bs: [[1, 2, 3], [1, 2]])
-    sheet = Sheet(_FakeTag())
+    with caplog.at_level(logging.WARNING, logger="odsslicer"):
+        sheet = Sheet(_FakeTag())
     assert sheet.size == (2, 3)
-    captured = capsys.readouterr()
-    assert "WARNING" in captured.out
+    assert any("same length" in r.message for r in caplog.records)
 
 
 def test_uniform_rows_do_not_trigger_warning(monkeypatch, capsys):
@@ -2597,12 +2600,12 @@ def test_delete_sheet(writable_reader):
     r.add_sheet("Extra")
     r.delete_sheet("Extra")
     assert "Extra" not in r.sheets_names
-    with pytest.raises(IndexError):
+    with pytest.raises(KeyError):
         r.sheet("Extra")
 
 
 def test_delete_unknown_sheet_raises(writable_reader):
-    with pytest.raises(IndexError):
+    with pytest.raises(KeyError):
         writable_reader.delete_sheet("NoSuchSheet")
 
 
@@ -3048,7 +3051,7 @@ def test_rename_sheet_does_not_touch_an_unqualified_reference_in_its_own_formula
 
 
 def test_rename_unknown_sheet_raises(writable_reader):
-    with pytest.raises(IndexError):
+    with pytest.raises(KeyError):
         writable_reader.rename_sheet("NoSuchSheet", "x")
 
 
@@ -3108,7 +3111,7 @@ def test_move_sheet_to_its_own_position_is_a_no_op(writable_reader):
 
 
 def test_move_unknown_sheet_raises(writable_reader):
-    with pytest.raises(IndexError):
+    with pytest.raises(KeyError):
         writable_reader.move_sheet("NoSuchSheet", 0)
 
 

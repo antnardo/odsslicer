@@ -1,14 +1,19 @@
 # -*- coding: utf-8 -*-
+# mypy: disable-error-code="union-attr"
+# (bs4 Tag/NavigableString/None unions are narrowed dynamically all over this
+# module, guarded by runtime checks mypy can't see through - silencing that
+# one error class here beats dozens of value-free asserts/casts. Every other
+# error class, and all signatures, remain fully checked.)
 """ArrayValues (multi-cell selections), Comment (cell notes) and Cell itself."""
 
 import copy
 import datetime as dt
 import math
 import re
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, cast
 
 import numpy as np
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from .addresses import string_address
 from .constants import EMPTY_CELL_BS, FORMATS
@@ -23,9 +28,10 @@ from .xmlutils import _ODF_NAMESPACES, _blank_template, _new_qualified_tag
 
 if TYPE_CHECKING:
     from .sheet import Sheet
+    from .styles import NumberFormat
 
 
-def _is_broadcastable_scalar(value):
+def _is_broadcastable_scalar(value: object) -> bool:
     """True for a value that should be written as-is to every cell of a
     multi-cell selection, rather than unpacked element-wise (a `str` is
     iterable but clearly meant as one value, not one cell per character)."""
@@ -33,12 +39,12 @@ def _is_broadcastable_scalar(value):
 
 
 class ArrayValues:
-    def __init__(self, array):
+    def __init__(self, array: Any) -> None:
         self.array = array
         self.dimension = self._get_dimension(array)
         self.size = self._get_size()
 
-    def _get_size(self):
+    def _get_size(self) -> tuple[int, ...]:
         size = []
         cut = self.array
         for d in range(self.dimension):
@@ -47,13 +53,13 @@ class ArrayValues:
         return tuple(size)
 
     @classmethod
-    def _get_dimension(cls, array):
+    def _get_dimension(cls, array: object) -> int:
         try:
-            return cls._get_dimension(array[0]) + 1
+            return cls._get_dimension(array[0]) + 1  # type: ignore[index]
         except (TypeError, IndexError):
             return 0
 
-    def _iter_cells(self):
+    def _iter_cells(self) -> "Iterator[Cell]":
         """Yield every underlying `Cell`, regardless of this selection's
         dimension (a single cell, a row/column, or a 2D block)."""
         if self.dimension == 0:
@@ -62,24 +68,24 @@ class ArrayValues:
             for item in self.array:
                 yield from ArrayValues(item)._iter_cells()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"ArrayValue({self.array})"
 
-    def __getitem__(self, i):
+    def __getitem__(self, i: int) -> Any:
         return self.array[i]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.array)
 
-    def to_numpy(self):
+    def to_numpy(self) -> Any:
         return np.array(self.to_list())
 
     @property
-    def value(self):
+    def value(self) -> Any:
         return self.cell.value
 
     @value.setter
-    def value(self, new_value):
+    def value(self, new_value: Any) -> None:
         if self.dimension == 0:
             self.cell.value = new_value
             return
@@ -96,15 +102,11 @@ class ArrayValues:
             ArrayValues(item).value = v
 
     @property
-    def formula(self):
+    def formula(self) -> Any:
         return self.cell.formula
 
-    @property
-    def formula_friendly(self):
-        return self.cell.formula_friendly
-
     @formula.setter
-    def formula(self, new_formula):
+    def formula(self, new_formula: "str | None") -> None:
         """Write a formula to every cell in this selection.
 
         For a multi-cell selection, the same pattern is applied to each cell -
@@ -120,11 +122,15 @@ class ArrayValues:
             ArrayValues(item).formula = new_formula
 
     @property
+    def formula_friendly(self) -> Any:
+        return self.cell.formula_friendly
+
+    @property
     def cell(self) -> "Cell":
         assert self.dimension == 0
         return self.array
 
-    def to_list(self):
+    def to_list(self) -> Any:
         if self.dimension == 0:
             return self.value
         elif self.dimension == 1:
@@ -132,11 +138,11 @@ class ArrayValues:
         elif self.dimension == 2:
             return [[cell.value for cell in row] for row in self.array]
 
-    def to_vector(self):
+    def to_vector(self) -> "ArrayValues":
         assert self.dimension == 2 and self.size[1] == 1
         return ArrayValues([row[0] for row in self.array])
 
-    def __eq__(self, array):
+    def __eq__(self, array: Any) -> bool:
         return array.to_list() == self.to_list()
 
 
@@ -149,10 +155,10 @@ class Comment:
     to update it in place, once the comment itself exists (see
     `Cell.comment`'s setter to create one)."""
 
-    def __init__(self, tag):
+    def __init__(self, tag: Tag) -> None:
         self._tag = tag
 
-    def _insert_before_text(self, child):
+    def _insert_before_text(self, child: Tag) -> None:
         # keeps dc:creator/dc:date ahead of the text:p paragraphs, matching
         # real ODF layout, regardless of which property gets set first
         first_p = self._tag.find("text:p")
@@ -162,12 +168,12 @@ class Comment:
             self._tag.append(child)
 
     @property
-    def text(self):
+    def text(self) -> "str | None":
         paragraphs = [p.get_text() for p in self._tag.find_all("text:p")]
         return "\n".join(paragraphs) if paragraphs else None
 
     @text.setter
-    def text(self, value):
+    def text(self, value: "str | None") -> None:
         for p in self._tag.find_all("text:p"):
             p.decompose()
         for line in (value or "").split("\n"):
@@ -176,12 +182,12 @@ class Comment:
             self._tag.append(p)
 
     @property
-    def author(self):
+    def author(self) -> "str | None":
         tag = self._tag.find("dc:creator")
         return tag.get_text() if tag is not None else None
 
     @author.setter
-    def author(self, value):
+    def author(self, value: "str | None") -> None:
         tag = self._tag.find("dc:creator")
         if value is None:
             if tag is not None:
@@ -193,7 +199,7 @@ class Comment:
         tag.string = value
 
     @property
-    def date(self):
+    def date(self) -> "dt.datetime | None":
         tag = self._tag.find("dc:date")
         if tag is None:
             return None
@@ -203,7 +209,7 @@ class Comment:
             return None
 
     @date.setter
-    def date(self, value):
+    def date(self, value: "dt.datetime | None") -> None:
         tag = self._tag.find("dc:date")
         if value is None:
             if tag is not None:
@@ -217,14 +223,14 @@ class Comment:
         tag.string = value.isoformat()
 
     @property
-    def visible(self):
+    def visible(self) -> bool:
         return self._tag.get("office:display") == "true"
 
     @visible.setter
-    def visible(self, value):
+    def visible(self, value: bool) -> None:
         self._tag.attrs["office:display"] = "true" if value else "false"
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Comment(author={self.author!r}, text={self.text!r})"
 
 
@@ -237,10 +243,10 @@ class Cell:
         "office:boolean-value",
     )
 
-    def __init__(self, cell: BeautifulSoup, row: int = 0, col: int = 0, sheet: "Sheet" = None):
+    def __init__(self, cell: Tag, row: int = 0, col: int = 0, sheet: "Sheet | None" = None) -> None:
         self.row = row
         self.col = col
-        self.cell: BeautifulSoup = cell
+        self.cell: Tag = cell
         self.sheet = sheet
         self.attrs: Dict[str, str] = self.cell.attrs
         self.format = self.attrs.get("office:value-type", None)
@@ -262,7 +268,7 @@ class Cell:
             # whose cached result is "") and for one with several children (spans,
             # line breaks...) - `str(None)` would then wrongly become the literal
             # string "None" instead of the cell's actual (possibly empty) text.
-            self.text = p.get_text()
+            self.text: "str | None" = p.get_text()
         else:
             self.text = None
         if self.format == "string":
@@ -278,14 +284,14 @@ class Cell:
         # `table:style-name`, since `cell.style = other_cell.style`/`Sheet.copy`
         # can legitimately point two different cells at the very same forked
         # style name, and a name-based check can't tell those apart.
-        self._own_style_name = None
+        self._own_style_name: "str | None" = None
 
     @property
-    def value(self):
+    def value(self) -> Any:
         return self._value
 
     @value.setter
-    def value(self, new_value):
+    def value(self, new_value: Any) -> None:
         self._prepare_for_write()
         tag = self.cell
 
@@ -356,22 +362,11 @@ class Cell:
         self.is_empty = self._compute_is_empty()
 
     @property
-    def formula(self):
+    def formula(self) -> "str | None":
         return self._formula
 
-    @property
-    def formula_friendly(self):
-        """`.formula` translated back into ordinary `A1`-style syntax for
-        readability, e.g. `"of:=[.A2]+[.A3]"` reads as `"=A2+A3"` — the
-        reverse of what `.formula = "A2+A3"` accepts on write. `None` if the
-        cell has no formula. Best-effort: a construct the write-side
-        translation doesn't cover either (a named range, an unusual
-        reference shape) is passed through untranslated rather than guessed
-        at."""
-        return _friendly_formula(self._formula)
-
     @formula.setter
-    def formula(self, new_formula):
+    def formula(self, new_formula: "str | None") -> None:
         self._prepare_for_write()
         tag = self.cell
 
@@ -395,7 +390,18 @@ class Cell:
         self._value = None
         self.is_empty = self._compute_is_empty()
 
-    def fill_formula(self, target):
+    @property
+    def formula_friendly(self) -> "str | None":
+        """`.formula` translated back into ordinary `A1`-style syntax for
+        readability, e.g. `"of:=[.A2]+[.A3]"` reads as `"=A2+A3"` — the
+        reverse of what `.formula = "A2+A3"` accepts on write. `None` if the
+        cell has no formula. Best-effort: a construct the write-side
+        translation doesn't cover either (a named range, an unusual
+        reference shape) is passed through untranslated rather than guessed
+        at."""
+        return _friendly_formula(self._formula)
+
+    def fill_formula(self, target: "str | Cell | ArrayValues") -> None:
         """Copy this cell's formula into every cell of `target`, shifting
         relative references the way a spreadsheet's fill handle does when a
         formula is dragged across a range: if this cell's formula is
@@ -424,7 +430,7 @@ class Cell:
             drow, dcol = cell.row - self.row, cell.col - self.col
             cell.formula = _shift_odf_formula(self._formula, drow, dcol)
 
-    def _compute_is_empty(self):
+    def _compute_is_empty(self) -> bool:
         return (
             self.raw_value is None
             and self._value is None
@@ -433,7 +439,7 @@ class Cell:
             and self._formula is None
         )
 
-    def _prepare_for_write(self):
+    def _prepare_for_write(self) -> None:
         """Make sure this cell is safe to mutate on its own.
 
         Cells inside a compressed repeated row/column, or inside a merged range,
@@ -456,7 +462,7 @@ class Cell:
         if self.cell is EMPTY_CELL_BS:
             self.sheet.grow_to(self.row, self.col)
             new_cell = self.sheet.rows[self.row][self.col]
-            self.__init__(new_cell.cell, row=self.row, col=self.col, sheet=self.sheet)
+            self.__init__(new_cell.cell, row=self.row, col=self.col, sheet=self.sheet)  # type: ignore[misc]
             self.sheet.rows[self.row][self.col] = self
             return
         self.sheet.materialize_cell(self.row, self.col)
@@ -467,7 +473,7 @@ class Cell:
     )
     _TIME_PATTERNS = ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p")
 
-    def _format_template_candidates(self, fmt, raw_attr):
+    def _format_template_candidates(self, fmt: "str | None", raw_attr: str) -> list[tuple[str, str]]:
         """Other cells with the same ODF format (this cell's own pre-write state
         first, then the rest of the document) to learn a display pattern from,
         as (raw attribute value, displayed text) pairs."""
@@ -475,7 +481,7 @@ class Cell:
         if self.format == fmt and self.raw_value is not None and self.text is not None:
             candidates.append((self.raw_value, self.text))
 
-        def matches(tag):
+        def matches(tag: Any) -> bool:
             return (
                 getattr(tag, "name", None) == "table-cell"
                 and tag.attrs.get("office:value-type") == fmt
@@ -487,18 +493,18 @@ class Cell:
             match = finder(matches)
             if match is None:
                 continue
-            p = match.find("text:p", recursive=False)
+            p = cast("Tag | None", cast(Tag, match).find("text:p", recursive=False))
             if p is not None and p.string is not None:
-                candidates.append((match.attrs.get(raw_attr), str(p.string)))
+                candidates.append((cast(str, match.attrs.get(raw_attr)), str(p.string)))
         return candidates
 
-    def _infer_number_display(self, fmt, new_value):
+    def _infer_number_display(self, fmt: str, new_value: float) -> "str | None":
         """Render `new_value` the way another float/percentage/currency cell in
         this document renders its own value (decimal separator, decimal count,
         prefix/suffix such as " %" or " €"), or None if no example is usable."""
         for template_raw, template_text in self._format_template_candidates(fmt, "office:value"):
             try:
-                template_raw = float(template_raw)
+                template_value = float(template_raw)
             except (TypeError, ValueError):
                 continue
             m = re.search(r"-?\d+(?:[.,]\d+)?", template_text)
@@ -507,25 +513,37 @@ class Cell:
             prefix, numeric, suffix = template_text[: m.start()], m.group(), template_text[m.end() :]
             decimal_sep = "," if "," in numeric else "."
 
+            render: Callable[[float], str]
             if fmt == "float":
                 # plain "General"-style cells show as many digits as the value
                 # needs: rounding to the template's own decimal count would lose
                 # precision (e.g. "3.4" as template -> only borrow the separator)
-                def render(value, _sep=decimal_sep, _prefix=prefix, _suffix=suffix):
+                def render_general(value: float, _sep: str = decimal_sep, _prefix: str = prefix, _suffix: str = suffix) -> str:
                     return f"{_prefix}{str(value).replace('.', _sep)}{_suffix}"
+
+                render = render_general
             else:
                 decimals = len(numeric.split(decimal_sep)[1]) if decimal_sep in numeric else 0
                 scale = 100 if fmt == "percentage" else 1
 
-                def render(value, _dec=decimals, _scale=scale, _sep=decimal_sep, _prefix=prefix, _suffix=suffix):
+                def render_fixed(
+                    value: float,
+                    _dec: int = decimals,
+                    _scale: int = scale,
+                    _sep: str = decimal_sep,
+                    _prefix: str = prefix,
+                    _suffix: str = suffix,
+                ) -> str:
                     rendered = f"{value * _scale:.{_dec}f}".replace(".", _sep)
                     return f"{_prefix}{rendered}{_suffix}"
 
-            if render(template_raw) == template_text:  # sanity check before trusting the pattern
+                render = render_fixed
+
+            if render(template_value) == template_text:  # sanity check before trusting the pattern
                 return render(new_value)
         return None
 
-    def _infer_date_display(self, new_value):
+    def _infer_date_display(self, new_value: dt.date) -> "str | None":
         for template_raw, template_text in self._format_template_candidates("date", "office:date-value"):
             try:
                 template_value = dt.datetime.strptime(template_raw, "%Y-%m-%d").date()
@@ -536,7 +554,7 @@ class Cell:
                     return new_value.strftime(pattern)
         return None
 
-    def _infer_time_display(self, new_value):
+    def _infer_time_display(self, new_value: dt.time) -> "str | None":
         for template_raw, template_text in self._format_template_candidates("time", "office:time-value"):
             try:
                 template_value = dt.datetime.strptime(template_raw, "PT%HH%MM%SS").time()
@@ -547,14 +565,14 @@ class Cell:
                     return new_value.strftime(pattern)
         return None
 
-    def _infer_boolean_display(self, new_value):
+    def _infer_boolean_display(self, new_value: bool) -> "str | None":
         target_raw = "true" if new_value else "false"
         for template_raw, template_text in self._format_template_candidates("boolean", "office:boolean-value"):
             if template_raw == target_raw:
                 return template_text
         return None
 
-    def _resolved_number_format(self, value):
+    def _resolved_number_format(self, value: object) -> "NumberFormat | None":
         """This cell's real `NumberFormat`, resolved against `value` (for
         a conditional format, e.g. red-negative-currency) - unlike the
         `.style` property, this always resolves against `value` directly
@@ -566,7 +584,7 @@ class Cell:
         style = CellStyle(self.sheet.reader, self.attrs.get("table:style-name"), value=value, cell=self)
         return style.number_format
 
-    def _render_display_from_number_format(self, new_value):
+    def _render_display_from_number_format(self, new_value: object) -> "str | None":
         """The display text `new_value` should have per this cell's own
         real, resolved number format - decimal places, grouping, currency
         symbol, or a date/time layout - read directly from the document
@@ -585,7 +603,7 @@ class Cell:
             return _render_date_time_from_format(number_format, new_value, "time")
         return None
 
-    def _set_text(self, text):
+    def _set_text(self, text: "str | None") -> None:
         p = self.cell.find("text:p", recursive=False)  # see __init__'s note on scoping
         if text is None:
             if p is not None:
@@ -607,66 +625,66 @@ class Cell:
         p.string = text
         self.text = text
 
-    def __call__(self):
+    def __call__(self) -> Any:
         return self.value
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         text = None if self.text is None else f"'{self.text}'"
         return f"Cell(address={self.address}, value={self.value}, format={self.format}, text={text})"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.text if self.text is not None else str(None)
 
-    def __eq__(self, cell):
+    def __eq__(self, cell: Any) -> bool:
         if type(cell) is Cell:
             return cell.value == self.value
         return cell == self.value
 
-    def __gt__(self, cell):
+    def __gt__(self, cell: Any) -> bool:
         return cell.value < self.value
 
-    def __lt__(self, cell):
+    def __lt__(self, cell: Any) -> bool:
         return cell.value > self.value
 
-    def __ge__(self, cell):
+    def __ge__(self, cell: Any) -> bool:
         return cell.value <= self.value
 
-    def __le__(self, cell):
+    def __le__(self, cell: Any) -> bool:
         return cell.value >= self.value
 
-    def __int__(self):
+    def __int__(self) -> int:
         return int(self.value)
 
-    def __float__(self):
+    def __float__(self) -> float:
         return float(self.value)
 
-    def __abs__(self):
+    def __abs__(self) -> Any:
         return abs(self.value)
 
-    def __neg__(self):
+    def __neg__(self) -> Any:
         return -self.value
 
-    def __pos__(self):
+    def __pos__(self) -> Any:
         return self.value
 
-    def __round__(self, ndigits=None):
+    def __round__(self, ndigits: "int | None" = None) -> Any:
         return round(self.value, ndigits)
 
-    def __trunc__(self):
+    def __trunc__(self) -> int:
         return math.trunc(self.value)
 
-    def __ceil__(self):
+    def __ceil__(self) -> int:
         return math.ceil(self.value)
 
-    def __floor__(self):
+    def __floor__(self) -> int:
         return math.floor(self.value)
 
     @property
-    def address(self):
+    def address(self) -> str:
         return string_address(self.row, self.col)
 
     @property
-    def style(self):
+    def style(self) -> "CellStyle | None":
         """This cell's resolved `CellStyle` (visual formatting + real number
         format) - writable, see `CellStyle`. `None` only if the cell has no
         owning `ODSReader` at all (nothing to resolve or create styles
@@ -685,7 +703,7 @@ class Cell:
         return CellStyle(self.sheet.reader, name, value=self._value, cell=self)
 
     @style.setter
-    def style(self, other):
+    def style(self, other: "CellStyle | Cell | str | None") -> None:
         """Copy another cell's whole style onto this one in one shot -
         `cell.style = other_cell.style`, `= other_cell`, or `= "ce9"` (a
         raw style name) all work; `= None` clears this cell's style.
@@ -714,7 +732,7 @@ class Cell:
 
     _OWN_STYLE_PREFIX = "ocs"
 
-    def _ensure_own_style(self):
+    def _ensure_own_style(self) -> Tag:
         """This cell's own, uniquely-owned automatic style tag - safe to
         mutate in place without affecting any other cell, even one that
         currently points at the very same style name (e.g. right after
@@ -739,12 +757,13 @@ class Cell:
             if tag is not None:
                 return tag
         tag = reader._new_style_tag("table-cell", self._OWN_STYLE_PREFIX, parent_style_name=current_name)
-        self.attrs["table:style-name"] = tag["style:name"]
-        self._own_style_name = tag["style:name"]
+        new_name = cast(str, tag["style:name"])
+        self.attrs["table:style-name"] = new_name
+        self._own_style_name = new_name
         return tag
 
     @property
-    def is_merge_master(self):
+    def is_merge_master(self) -> bool:
         """True if this cell is the top-left cell of a merged range (it
         carries `table:number-rows-spanned`/`table:number-columns-spanned`
         greater than 1)."""
@@ -754,7 +773,7 @@ class Cell:
         )
 
     @property
-    def is_covered(self):
+    def is_covered(self) -> bool:
         """True if this cell is hidden inside another cell's merged range
         (a `table:covered-table-cell`) - its own value/formatting is still
         there in the XML, just not shown, until `Sheet.unmerge(...)`
@@ -762,13 +781,13 @@ class Cell:
         return self.cell.name == "covered-table-cell"
 
     @property
-    def is_merged(self):
+    def is_merged(self) -> bool:
         """True if this cell participates in a merged range at all -
         either as the master or as one of the covered cells."""
         return self.is_merge_master or self.is_covered
 
     @property
-    def merge_master(self):
+    def merge_master(self) -> "Cell | None":
         """The top-left `Cell` of this cell's merged range - `self` if this
         cell already is the master, or `None` if it isn't part of any merge
         (or has no owning sheet to look the master up on)."""
@@ -779,7 +798,7 @@ class Cell:
         return self.sheet._find_merge_master(self.row, self.col)
 
     @property
-    def merge_span(self):
+    def merge_span(self) -> "tuple[int, int] | None":
         """`(n_rows, n_cols)` spanned by this cell's merged range (from its
         master's point of view), or `None` if this cell isn't merged."""
         master = self.merge_master
@@ -791,14 +810,16 @@ class Cell:
         )
 
     @property
-    def merge_range(self):
+    def merge_range(self) -> "str | None":
         """This cell's merged range as an `"A1:B2"`-style address string
         (resolvable from any cell in the range, not just the master), or
         `None` if it isn't merged."""
         master = self.merge_master
         if master is None:
             return None
-        n_rows, n_cols = self.merge_span
+        span = self.merge_span
+        assert span is not None  # a master exists, so the span resolves
+        n_rows, n_cols = span
         start = string_address(master.row, master.col)
         if n_rows == 1 and n_cols == 1:
             return start
@@ -806,20 +827,20 @@ class Cell:
         return f"{start}:{end}"
 
     @property
-    def comment(self):
+    def comment(self) -> "Comment | None":
         """This cell's `Comment` (note/`office:annotation`) - `None` if it
         has none. Writable: `cell.comment = "some text"` creates one (or
         updates an existing one's `.text`); `cell.comment = None` removes
         it entirely. Once a comment exists, set its other properties
         directly - `cell.comment.author = "Jane"`, `.date = datetime.now()`,
         `.visible = True`."""
-        tag = self.cell.find("office:annotation", recursive=False)
+        tag = cast("Tag | None", self.cell.find("office:annotation", recursive=False))
         return Comment(tag) if tag is not None else None
 
     @comment.setter
-    def comment(self, value):
+    def comment(self, value: "str | None") -> None:
         self._prepare_for_write()
-        tag = self.cell.find("office:annotation", recursive=False)
+        tag = cast("Tag | None", self.cell.find("office:annotation", recursive=False))
         if value is None:
             if tag is not None:
                 tag.decompose()
@@ -832,7 +853,7 @@ class Cell:
         Comment(tag).text = value
 
     @property
-    def hyperlink(self):
+    def hyperlink(self) -> "str | None":
         """This cell's hyperlink URL (`xlink:href` on a `<text:a>`
         wrapping the cell's whole text), or `None` if it has none.
         Writable: `cell.hyperlink = "https://..."` wraps the cell's
@@ -844,19 +865,19 @@ class Cell:
         Writing a new `.value` afterwards replaces the cell's text (link
         included) same as it always does - the link isn't carried over,
         since it was tied to that specific text."""
-        p = self.cell.find("text:p", recursive=False)
+        p = cast("Tag | None", self.cell.find("text:p", recursive=False))
         if p is None:
             return None
-        a = p.find("text:a", recursive=False)
-        return a.get("xlink:href") if a is not None else None
+        a = cast("Tag | None", p.find("text:a", recursive=False))
+        return cast("str | None", a.get("xlink:href")) if a is not None else None
 
     @hyperlink.setter
-    def hyperlink(self, url):
+    def hyperlink(self, url: "str | None") -> None:
         self._prepare_for_write()
-        p = self.cell.find("text:p", recursive=False)
+        p = cast("Tag | None", self.cell.find("text:p", recursive=False))
         if url is None:
             if p is not None:
-                a = p.find("text:a", recursive=False)
+                a = cast("Tag | None", p.find("text:a", recursive=False))
                 if a is not None:
                     a.unwrap()
             return
@@ -864,8 +885,8 @@ class Cell:
             raise TypeError(f"cell.hyperlink must be a str or None, got {type(url)!r}")
         if p is None:
             self._set_text(self.text or "")
-            p = self.cell.find("text:p", recursive=False)
-        a = p.find("text:a", recursive=False)
+            p = cast(Tag, self.cell.find("text:p", recursive=False))
+        a = cast("Tag | None", p.find("text:a", recursive=False))
         if a is None:
             a = _blank_template(self.cell, "text:a")
             a.attrs["xmlns:xlink"] = _ODF_NAMESPACES["xlink"]

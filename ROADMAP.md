@@ -99,15 +99,18 @@ des features.
    supprimer 100 = 100 balayages) ; `sort` réécrit cellule par cellule via les setters XML.
    Invisible sur des petits fichiers, limite inconnue sur un classeur de 100 000 lignes. À
    faire : un test de charge simple, documenter les limites constatées, optimiser si besoin.
-4. **Scories d'API à trancher avant 1.0** (dernier moment indolore) : `ODSReader` est un faux
-   nom (c'est un lecteur-écrivain-créateur — un alias `ODS = ODSReader` ?) ; `sheet(name)`
-   lève `IndexError` là où `KeyError` serait naturel ; `verbose` et le `[WARNING]` de `load()`
-   passent par `print` au lieu de `logging` ; pas de marqueur `py.typed` ni d'annotations
-   complètes.
-5. **Maturité d'écosystème** : pas de `CHANGELOG.md` dans le repo (seulement les release
-   notes GitHub) ; bus factor de 1 ; l'API n'a jamais été confrontée à des fichiers ODS
-   "sauvages" produits par Excel, un export Google Sheets ou de vieux OpenOffice — en
-   collectionner quelques-uns comme fixtures serait un bon investissement.
+4. ~~**Scories d'API à trancher avant 1.0**~~ **Fait** (décisions : on garde le nom
+   `ODSReader`) : `sheet(name)`/`delete_sheet`/`rename_sheet`/`move_sheet` lèvent maintenant
+   `KeyError` pour un nom de feuille inconnu (`IndexError` reste pour les indices hors bornes) ;
+   plus aucun `print` — tout passe par le logger `"odsslicer"` (DEBUG, INFO si `verbose=True`,
+   WARNING pour les anomalies) ; annotations de type complètes sur toute l'API, vérifiées par
+   mypy en CI (`disallow_untyped_defs`, job `typecheck`), marqueur `py.typed` embarqué. Au
+   passage : correction d'un crash latent d'`export_content_xml()` avec un chemin `str`
+   (normalisation de `self.file` en `Path`), et deux réusages de variables douteux nettoyés.
+5. **Maturité d'écosystème** : ~~pas de `CHANGELOG.md`~~ (fait — `CHANGELOG.md` au format
+   Keep a Changelog, lié depuis le README) ; bus factor de 1 ; l'API n'a jamais été confrontée
+   à des fichiers ODS "sauvages" produits par Excel, un export Google Sheets ou de vieux
+   OpenOffice — en collectionner quelques-uns comme fixtures serait un bon investissement.
 
 ## Gaps identifiés — utiles mais plus de niche
 

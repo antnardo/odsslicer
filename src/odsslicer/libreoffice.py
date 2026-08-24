@@ -72,7 +72,7 @@ g_exportedScripts = (recalculate,)
 '''
 
 
-def _find_libreoffice():
+def _find_libreoffice() -> str:
     """The LibreOffice executable to run: `LIBREOFFICE_COMMAND[0]` as-is if
     it's a path that exists or a name found on PATH, else the first usual
     install location that exists. Raises `FileNotFoundError` otherwise."""
@@ -97,7 +97,7 @@ def _find_libreoffice():
 _SYSTEM_BIN_DIRS = ("/usr/local/bin", "/usr/bin", "/bin")
 
 
-def _path_without_foreign_pythons(path_value):
+def _path_without_foreign_pythons(path_value: str) -> str:
     """`path_value` with every directory that ships a `python`/`python3`
     executable removed, and (on POSIX) the standard system directories
     guaranteed present at the end - so the only interpreter LibreOffice's
@@ -115,7 +115,7 @@ def _path_without_foreign_pythons(path_value):
     return os.pathsep.join(keep)
 
 
-def recalculate(path, timeout=120):
+def recalculate(path: "str | Path", timeout: int = 120) -> None:
     """Have a local LibreOffice open the `.ods` at `path`, recalculate every
     formula (`calculateAll()` - including ones whose cached value is stale),
     refresh every pivot table (materializing its output), and save the file

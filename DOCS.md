@@ -80,7 +80,14 @@ sheet.name                  # "Sheet1"
 ```
 
 `ODSReader` parses `content.xml`, `styles.xml` and `meta.xml` (via BeautifulSoup/lxml) into
-in-memory trees. `ODSReader.sheet(name)` raises `IndexError` for an unknown name.
+in-memory trees. `ODSReader.sheet(name)` raises `KeyError` for an unknown name.
+
+Progress and warnings go through the standard `logging` module (logger name `"odsslicer"`):
+load-time details are logged at `DEBUG` (`INFO` when a reader/sheet is created with
+`verbose=True`), and anomalies — like rows of inconsistent lengths — at `WARNING`. Configure
+logging (`logging.basicConfig(level=logging.INFO)`) to see them; nothing is ever printed
+directly. The package also ships a `py.typed` marker: the whole public API is type-annotated
+and mypy-checked, so your own type checker can verify code that uses it.
 
 ### Indexing and slicing
 
@@ -337,11 +344,11 @@ table.delete_sheet("Data")
 - `rename_sheet` also rewrites any formula elsewhere in the document that references the
   sheet by name — `OldName.A1` becomes `NewName.A1` (quoted, `'New Name'.A1`, if needed).
   An unqualified reference within the renamed sheet's own formulas (`.A1`, meaning "this
-  sheet") needs no rewrite. Raises `IndexError` for an unknown `old_name`, `ValueError` for an
+  sheet") needs no rewrite. Raises `KeyError` for an unknown `old_name`, `ValueError` for an
   empty `new_name` or one already in use.
-- `move_sheet(name, index)` raises `IndexError` for an unknown name, `ValueError` if `index`
+- `move_sheet(name, index)` raises `KeyError` for an unknown name, `ValueError` if `index`
   is out of range.
-- `delete_sheet` raises `IndexError` for an unknown name and `ValueError` for the document's
+- `delete_sheet` raises `KeyError` for an unknown name and `ValueError` for the document's
   last remaining sheet (an ODF spreadsheet needs at least one).
 
 ---
