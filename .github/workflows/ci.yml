@@ -29,3 +29,39 @@ jobs:
 
       - name: Run the test suite
         run: pytest
+
+  # The strongest tests in the repo hand files odsslicer wrote to a real
+  # LibreOffice and inspect what it made of them (tests/
+  # test_libreoffice_consistency.py) - they skip automatically when soffice
+  # isn't installed, so the matrix job above never exercises them. This job
+  # installs LibreOffice and runs the whole suite with them active, on a
+  # different OS and LibreOffice version than the development machine.
+  test-libreoffice:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so setuptools-scm can see tags
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install LibreOffice
+        # libreoffice-script-provider-python is Ubuntu's separate package for
+        # LibreOffice's Python scripting framework, which recalculate() runs
+        # its script through - without it the vnd.sun.star.script: URL is
+        # silently ignored and the recalculation tests fail.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-calc libreoffice-script-provider-python
+          soffice --version
+
+      - name: Install the package with test dependencies
+        run: pip install -e ".[test]"
+
+      - name: Run the test suite (LibreOffice consistency tests active)
+        run: |
+          pytest -v tests/test_libreoffice_consistency.py
+          pytest -q
