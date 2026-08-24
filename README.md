@@ -60,7 +60,7 @@ Each line links to the detailed section (with examples) in [DOCS.md](https://git
 | | [Displayed text](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#displayed-text-how-text-is-produced-on-write) inferred from the document's own formats | `"50,00 %"`, `"05/01/30"` |
 | **Files & sheets** | [New file from scratch](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#creating-a-new-file-from-scratch) | `ODSReader.new()` |
 | | [Add / rename / reorder / delete sheets](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#adding-renaming-reordering-deleting-sheets) — renaming fixes cross-sheet formulas | `table.rename_sheet("Sheet1", "Q4")` |
-| **Structure** | [Delete rows/columns](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#deleting-rows-and-columns) — formula references follow | `sheet.delete_row(3)` |
+| **Structure** | [Delete rows/columns](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#deleting-rows-and-columns) — formula references follow, batchable | `sheet.delete_rows([3, 7, 20])` |
 | | [Copy cells/ranges](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#copying-cells-and-ranges) — value + formula + style, overlap-safe | `sheet.copy("A1:B2", "D5")` |
 | | [Sort a range](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#sorting-a-range) — stable, `None` last, formulas follow their row | `sheet.sort("A2:C10", by=1)` |
 | | [Merge / unmerge](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#merged-cells) + read merge state | `sheet.merge("A1:C2")`, `cell.merge_range` |
