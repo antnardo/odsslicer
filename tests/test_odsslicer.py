@@ -2465,6 +2465,55 @@ def test_delete_column_shifts_everything_left(writable_reader):
     assert s[0, 0].value == "seconde colonne"
 
 
+def test_delete_rows_batch_matches_sequential_deletes(writable_reader, test_ods_path):
+    from odsslicer import ODSReader
+
+    s = writable_reader.sheet("Sheet1")
+    s["C5"].formula = "A6+A8"
+    s.delete_rows([1, 3, 6])
+
+    sequential = ODSReader(test_ods_path)
+    s2 = sequential.sheet("Sheet1")
+    s2["C5"].formula = "A6+A8"
+    for row in [6, 3, 1]:  # same set, one by one, bottom-up
+        s2.delete_row(row)
+
+    assert s.size == s2.size
+    assert [c.value for c in s[0]] == [c.value for c in s2[0]]
+    assert s["C3"].formula_friendly == s2["C3"].formula_friendly == "=A4+A5"
+
+
+def test_delete_rows_ignores_duplicates(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    n = s.n_rows
+    s.delete_rows([2, 2, 2])
+    assert s.n_rows == n - 1
+
+
+def test_delete_rows_empty_iterable_is_a_no_op(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    n = s.n_rows
+    s.delete_rows([])
+    assert s.n_rows == n
+
+
+def test_delete_rows_out_of_range_removes_nothing(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    n = s.n_rows
+    with pytest.raises(IndexError):
+        s.delete_rows([1, 999])
+    assert s.n_rows == n  # atomic: the valid index was not removed either
+
+
+def test_delete_rows_through_merges(writable_reader):
+    s = writable_reader.sheet("SheetFusion")
+    s.delete_rows([0, 3])  # intersects the A1:C1 and A3:A5 merges
+    for row in s.rows:
+        for cell in row:
+            if cell.is_merged:
+                assert cell.merge_master is not None  # any surviving merge is coherent
+
+
 def test_delete_row_out_of_range_raises(writable_reader):
     s = writable_reader.sheet("Sheet1")
     with pytest.raises(IndexError):

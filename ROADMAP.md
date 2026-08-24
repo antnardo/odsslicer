@@ -94,11 +94,18 @@ des features.
    - l'export Flat ODF (fods) de LibreOffice 24.2 perd les annotations (bizarrerie du filtre,
      le round-trip .ods les préserve) — le test des commentaires passe maintenant par un
      round-trip .ods relu par odsslicer, plus robuste et plus probant.
-3. **Performance : zéro donnée aujourd'hui.** Chaque cellule est un objet Python matérialisé à
-   l'ouverture ; `delete_row` rescanne toutes les formules du document à chaque appel (en
-   supprimer 100 = 100 balayages) ; `sort` réécrit cellule par cellule via les setters XML.
-   Invisible sur des petits fichiers, limite inconnue sur un classeur de 100 000 lignes. À
-   faire : un test de charge simple, documenter les limites constatées, optimiser si besoin.
+3. ~~**Performance**~~ **Fait** : banc de mesure `benchmarks/bench.py` (1k/10k/100k lignes ×
+   5 colonnes), profilage cProfile des points chauds, résultats documentés dans DOCS
+   (section Performance). Constats : tout est linéaire, la vraie limite est la **mémoire**
+   (~4,5 Ko/cellule → ~2,3 Go de pic à 100k×5 ; au-delà, `python-calamine` pour la lecture
+   pure). Deux optimisations mesurées :
+   - l'inférence du texte affiché construisait ses candidats avidement — le `find_next`
+     balayait tout le document à chaque écriture d'un format sans exemple (33 ms/cellule à
+     10k lignes) ; générateur paresseux → **×32** (6,6 s → 0,2 s pour 200 dates), et bonus
+     sur les chemins normaux (`sort` −40 %, écriture de plage −50 %) ;
+   - nouvelle API `Sheet.delete_rows([...])` : un seul balayage d'ajustement des formules
+     pour N lignes au lieu d'un par ligne (**×15** pour 100 lignes à 10k, davantage sur les
+     gros documents), sémantique vérifiée identique aux suppressions séquentielles.
 4. ~~**Scories d'API à trancher avant 1.0**~~ **Fait** (décisions : on garde le nom
    `ODSReader`) : `sheet(name)`/`delete_sheet`/`rename_sheet`/`move_sheet` lèvent maintenant
    `KeyError` pour un nom de feuille inconnu (`IndexError` reste pour les indices hors bornes) ;

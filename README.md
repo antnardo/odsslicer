@@ -79,7 +79,7 @@ Each line links to the detailed section (with examples) in [DOCS.md](https://git
 | | [Hyperlinks](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#10-cell-hyperlinks) | `cell.hyperlink = "https://…"` |
 | **Document** | [Properties](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#11-document-properties) — title, author, keywords, typed custom properties | `table.properties.title = "Q4"` |
 
-See [Known limitations](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#12-known-limitations) for what's deliberately out of scope
+See [Known limitations](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#13-known-limitations) for what's deliberately out of scope
 (no calculation engine, no charts/images, no partial rich text…).
 
 ## Are there already equivalent PyPI modules?

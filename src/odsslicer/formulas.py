@@ -3,6 +3,7 @@
 shifting for fills/copies/deletions/renames, {r}/{c} templating."""
 
 import ast
+import bisect
 import re
 from typing import Callable
 
@@ -168,14 +169,18 @@ def _unquote_odf_sheet_name(raw: str) -> str:
     return raw
 
 
-def _delete_shift_cell_address(addr: str, deleted_row: "int | None" = None, deleted_col: "int | None" = None) -> str:
+def _delete_shift_cell_address(
+    addr: str,
+    deleted_rows: "list[int] | None" = None,
+    deleted_cols: "list[int] | None" = None,
+) -> str:
     """Adjust a single ODF cell address (`.A1`, `.$A$1`, or bare `A1`) for
-    row `deleted_row` (or column `deleted_col`) having been physically
-    removed from the sheet: shifts the index down by one if it was
-    strictly past the deleted position, *regardless* of any `$` lock -
-    unlike `_shift_cell_address`'s fill/copy semantics, `$` is irrelevant
-    here, since the referenced cell itself moved rather than the formula.
-    A reference that pointed exactly at the removed row/column is left
+    the (sorted) `deleted_rows` (or `deleted_cols`) having been physically
+    removed from the sheet: shifts the index down by the number of removed
+    positions strictly before it, *regardless* of any `$` lock - unlike
+    `_shift_cell_address`'s fill/copy semantics, `$` is irrelevant here,
+    since the referenced cell itself moved rather than the formula. A
+    reference that pointed exactly at a removed row/column is left
     unchanged (there's no `#REF!`-style error value to represent "this
     reference is now broken" - see the README's known limitations)."""
     dotted = addr.startswith(".")
@@ -186,10 +191,10 @@ def _delete_shift_cell_address(addr: str, deleted_row: "int | None" = None, dele
     col_abs, col_letters, row_abs, row_digits = m.groups()
     col = string_to_col(col_letters)
     row = int(row_digits) - 1
-    if deleted_row is not None and row > deleted_row:
-        row -= 1
-    if deleted_col is not None and col > deleted_col:
-        col -= 1
+    if deleted_rows and row not in deleted_rows:
+        row -= bisect.bisect_left(deleted_rows, row)
+    if deleted_cols and col not in deleted_cols:
+        col -= bisect.bisect_left(deleted_cols, col)
     new_letters = string_address(0, col)[:-1]
     shifted = f"{col_abs}{new_letters}{row_abs}{row + 1}"
     return f".{shifted}" if dotted else shifted
@@ -199,8 +204,8 @@ def _adjust_odf_reference_for_deletion(
     inner: str,
     target_sheet: str,
     containing_sheet: str,
-    deleted_row: "int | None",
-    deleted_col: "int | None",
+    deleted_rows: "list[int] | None",
+    deleted_cols: "list[int] | None",
 ) -> str:
     """Adjust the address part(s) of one bracket's content for a row/
     column deletion in `target_sheet` - only references that actually
@@ -215,7 +220,7 @@ def _adjust_odf_reference_for_deletion(
         effective_sheet = _unquote_odf_sheet_name(ref_sheet) if ref_sheet else containing_sheet
         if effective_sheet != target_sheet:
             return part
-        shifted_addr = _delete_shift_cell_address(addr, deleted_row, deleted_col)
+        shifted_addr = _delete_shift_cell_address(addr, deleted_rows, deleted_cols)
         return f"{ref_sheet}.{shifted_addr}" if ref_sheet else shifted_addr
 
     if ":" in inner:
@@ -228,15 +233,15 @@ def _adjust_odf_formula_for_deletion(
     formula: str,
     target_sheet: str,
     containing_sheet: str,
-    deleted_row: "int | None" = None,
-    deleted_col: "int | None" = None,
+    deleted_rows: "list[int] | None" = None,
+    deleted_cols: "list[int] | None" = None,
 ) -> str:
     """Adjust every reference in an already ODF-syntax formula that
     resolves to `target_sheet`, for a row/column deletion there - used by
     `Sheet.delete_row`/`.delete_column` to keep formulas (in this sheet or
     any other) pointing at the same cells they did before."""
     return _ODF_BRACKET_RE.sub(
-        lambda m: f"[{_adjust_odf_reference_for_deletion(m.group(1), target_sheet, containing_sheet, deleted_row, deleted_col)}]",
+        lambda m: f"[{_adjust_odf_reference_for_deletion(m.group(1), target_sheet, containing_sheet, deleted_rows, deleted_cols)}]",
         formula,
     )
 

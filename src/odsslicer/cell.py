@@ -473,13 +473,22 @@ class Cell:
     )
     _TIME_PATTERNS = ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p")
 
-    def _format_template_candidates(self, fmt: "str | None", raw_attr: str) -> list[tuple[str, str]]:
+    def _format_template_candidates(self, fmt: "str | None", raw_attr: str) -> Iterator[tuple[str, str]]:
         """Other cells with the same ODF format (this cell's own pre-write state
         first, then the rest of the document) to learn a display pattern from,
-        as (raw attribute value, displayed text) pairs."""
-        candidates = []
+        as (raw attribute value, displayed text) pairs.
+
+        A *lazy* generator, and that matters a lot: each `find_previous`/
+        `find_next` probe traverses the document until it hits a matching
+        cell - which means a full document scan when there is none in that
+        direction. Consumers stop at the first candidate whose pattern
+        checks out (usually the cell's own prior state, or a neighbour
+        found backwards), so yielding lazily keeps the forward scan from
+        running at all in the common case. Building the list eagerly made
+        every write of a format with no example anywhere in the document
+        cost two full scans - ~33 ms per cell on a 10,000-row sheet."""
         if self.format == fmt and self.raw_value is not None and self.text is not None:
-            candidates.append((self.raw_value, self.text))
+            yield (self.raw_value, self.text)
 
         def matches(tag: Any) -> bool:
             return (
@@ -495,8 +504,7 @@ class Cell:
                 continue
             p = cast("Tag | None", cast(Tag, match).find("text:p", recursive=False))
             if p is not None and p.string is not None:
-                candidates.append((cast(str, match.attrs.get(raw_attr)), str(p.string)))
-        return candidates
+                yield (cast(str, match.attrs.get(raw_attr)), str(p.string))
 
     def _infer_number_display(self, fmt: str, new_value: float) -> "str | None":
         """Render `new_value` the way another float/percentage/currency cell in

@@ -10,7 +10,7 @@ copy, sort, merge), pivot definitions, row/column/table style access."""
 import copy
 import functools
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Iterator, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, Tuple, Union, cast
 
 from bs4 import BeautifulSoup, Tag
 
@@ -644,35 +644,52 @@ class Sheet:
 
     def delete_row(self, row: int) -> None:
         """Remove logical row `row` entirely, shifting every row below it
-        up by one (`sheet.size` shrinks accordingly).
-
-        Any merge intersecting `row` (master, covered, or entirely on
-        another row but spanning through it) is undone first (see
-        `unmerge`) rather than left with a now-wrong span - there's no
-        general way to "shrink" a span by one row instead. Formula
-        references elsewhere in the document that point at this sheet
-        (this sheet's own formulas, and any other sheet's formula
-        explicitly qualified with this sheet's name) are shifted to keep
-        pointing at the same cell - see `_adjust_formulas_for_deletion`
-        for what that does and doesn't cover.
+        up by one (`sheet.size` shrinks accordingly). Equivalent to
+        `delete_rows([row])` - see there for the merge and formula
+        semantics; when removing many rows, prefer one `delete_rows`
+        call, which does the (document-wide) formula-reference
+        adjustment once instead of once per row.
         """
-        if row < 0 or row >= self.n_rows:
-            raise IndexError(f"row {row} out of range (sheet has {self.n_rows} rows)")
-        c = 0
-        while c < self.n_cols:
-            if self.rows[row][c].is_merged:
-                self._unmerge(row, c)
-            c += 1
+        self.delete_rows([row])
 
-        self._unrepeat_row(row)
-        self.rows[row][0].cell.parent.decompose()
-        del self.rows[row]
-        for r in range(row, len(self.rows)):
+    def delete_rows(self, rows: "Iterable[int]") -> None:
+        """Remove every logical row in `rows` (0-based indexes as they
+        currently are, duplicates ignored) in one operation, shifting the
+        remaining rows up (`sheet.size` shrinks accordingly).
+
+        Any merge intersecting a removed row (master, covered, or entirely
+        on another row but spanning through it) is undone first (see
+        `unmerge`) rather than left with a now-wrong span - there's no
+        general way to "shrink" a span instead. Formula references
+        elsewhere in the document that point at this sheet (this sheet's
+        own formulas, and any other sheet's formula explicitly qualified
+        with this sheet's name) are shifted in a single pass so they keep
+        pointing at the same cells - see `_adjust_formulas_for_deletion`
+        for what that does and doesn't cover. Raises `IndexError` if any
+        index is out of range (nothing is removed in that case)."""
+        targets = sorted(set(rows))
+        if not targets:
+            return
+        for row in targets:
+            if row < 0 or row >= self.n_rows:
+                raise IndexError(f"row {row} out of range (sheet has {self.n_rows} rows)")
+        for row in targets:
+            c = 0
+            while c < self.n_cols:
+                if self.rows[row][c].is_merged:
+                    self._unmerge(row, c)
+                c += 1
+
+        for row in reversed(targets):  # bottom-up: earlier indexes stay valid
+            self._unrepeat_row(row)
+            self.rows[row][0].cell.parent.decompose()
+            del self.rows[row]
+        for r in range(targets[0], len(self.rows)):
             for cell in self.rows[r]:
                 cell.row = r
         self.n_rows = len(self.rows)
         self.size = (self.n_rows, self.n_cols)
-        self._adjust_formulas_for_deletion(deleted_row=row)
+        self._adjust_formulas_for_deletion(deleted_rows=targets)
 
     def delete_column(self, col: int) -> None:
         """Remove logical column `col` entirely, shifting every column to
@@ -700,32 +717,36 @@ class Sheet:
                 self.rows[r][c].col = c
         self.n_cols -= 1
         self.size = (self.n_rows, self.n_cols)
-        self._adjust_formulas_for_deletion(deleted_col=col)
+        self._adjust_formulas_for_deletion(deleted_cols=[col])
 
-    def _adjust_formulas_for_deletion(self, deleted_row: "int | None" = None, deleted_col: "int | None" = None) -> None:
-        """After physically removing row `deleted_row` (or column
-        `deleted_col`) from this sheet, rewrite every formula in the whole
+    def _adjust_formulas_for_deletion(
+        self, deleted_rows: "list[int] | None" = None, deleted_cols: "list[int] | None" = None
+    ) -> None:
+        """After physically removing the (sorted) `deleted_rows` (or
+        `deleted_cols`) from this sheet, rewrite every formula in the whole
         document - this sheet's own, and any other sheet's formula that
         references into this sheet by name - so a reference past the
-        removed position still points at the same cell it did before
-        (exactly one of `deleted_row`/`deleted_col` is given, matching
-        `delete_row`/`delete_column`).
+        removed positions still points at the same cell it did before
+        (exactly one of the two is given, matching
+        `delete_rows`/`delete_column`).
 
-        A reference that pointed *exactly* at the removed row/column is
+        A reference that pointed *exactly* at a removed row/column is
         left unchanged rather than modeled as a `#REF!`-style error - see
         the README's known limitations. No-op if this sheet has no owning
-        `ODSReader` (nothing else to scan)."""
+        `ODSReader` (nothing else to scan). One full-document sweep per
+        call - which is why `delete_rows` batches N rows into one call.
+        """
         if self.reader is None:
             return
         for sheet in self.reader.sheets:
             for row in sheet.rows:
                 for cell in row:
-                    if cell.formula is None:
+                    if cell._formula is None:
                         continue
                     adjusted = _adjust_odf_formula_for_deletion(
-                        cell.formula, self.name, sheet.name, deleted_row, deleted_col
+                        cell._formula, self.name, sheet.name, deleted_rows, deleted_cols
                     )
-                    if adjusted != cell.formula:
+                    if adjusted != cell._formula:
                         cell.formula = adjusted
 
     def __repr__(self) -> str:

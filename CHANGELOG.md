@@ -18,10 +18,21 @@ still change between minor versions.
   logging to see them; nothing is printed directly anymore.
 
 ### Added
+- **`Sheet.delete_rows([...])`** — remove many rows in one operation: the document-wide
+  formula-reference adjustment runs once instead of once per row (10-15× faster for 100 rows,
+  more on big documents). `delete_row` is now a thin wrapper over it.
 - **Complete type annotations** across the whole API, checked by mypy in CI
   (`disallow_untyped_defs`), and a **`py.typed` marker** so downstream type checkers can
   verify code using the package.
+- A benchmark harness (`benchmarks/bench.py`) and a measured **Performance** section in
+  DOCS.md (timings and memory at 1k/10k/100k rows, practical limits, usage advice).
 - This changelog.
+
+### Performance
+- Writing values of a format with no example anywhere in the document used to scan the whole
+  document per cell (~33 ms each on a 10k-row sheet): the display-inference candidate lookup
+  is now lazy — ×32 on the measured case, and the always-running forward scan is gone from
+  every write path (range writes and `sort` got ~40-50% faster too).
 
 ### Fixed
 - `export_content_xml()` crashed when the reader had been opened with a `str` path rather
