@@ -133,7 +133,9 @@ des features.
      aucune donnée ne bouge) → ouverture en quelques millisecondes ;
    - les lignes de largeurs inégales (fichiers Excel) faisaient planter la lecture de plage
      en `IndexError` — résolu par la même normalisation (lignes courtes complétées).
-   Manque encore à la collection : un export Google Sheets (nécessite un compte).
+   La collection inclut aussi un export Google Sheets — révélateur en soi : Google convertit
+   côté serveur via un LibreOfficeDev 6.0 headless (`meta:generator` :
+   `LibreOfficeDev/6.0.5.2$Linux_X86_64`), donc de l'ODF très classique.
 
 ## Gaps identifiés — utiles mais plus de niche
 

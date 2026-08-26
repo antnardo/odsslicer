@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """Confront the API with real-world "wild" .ods files written by other
 generators (Excel 16, LibreOffice 3.5 from 2012, recent LibreOffice on Linux
-and Windows) - see tests/wild/README.md for provenance and licenses.
+and Windows, a Google Sheets export) - see tests/wild/README.md for
+provenance and licenses.
 
 These files exercise what our own writer never produces: grid-filler rows and
 cells declaring the sheet's full 16,384 x 1,048,576 extent, a missing
@@ -9,6 +10,8 @@ cells declaring the sheet's full 16,384 x 1,048,576 extent, a missing
 decade-old ODF dialects. The expected sheet sizes below are exact on purpose:
 they pin down the filler-clamping behaviour of `Sheet.load`.
 """
+
+import datetime as dt
 
 import pytest
 from conftest import FIXTURES_DIR, requires_soffice
@@ -46,6 +49,15 @@ EXPECTED = {
         [
             ("S67_05", (4, 0), "Hammersmith and Fulham"),
             ("S67_05", (4, 1), 23.0),
+        ],
+    ),
+    "googlesheets_libreofficedev6.ods": (
+        {"Feuille 1": (5, 4)},
+        [
+            ("Feuille 1", (0, 0), "teste avec accènts"),
+            ("Feuille 1", (2, 0), 2.0),  # =1+1, cached value
+            ("Feuille 1", (2, 3), 0.012),  # 1.20%
+            ("Feuille 1", (3, 3), dt.date(2029, 9, 2)),
         ],
     ),
     "libreoffice35_casinos_2015.ods": (
@@ -139,6 +151,16 @@ def test_write_into_wild_file(tmp_path, name):
     reopened_sheet = ODSReader(out).sheets[-1]
     assert reopened_sheet[0, 0].value == "odsslicer was here"
     assert reopened_sheet[grown_row, 1].value == 42.5
+
+
+def test_googlesheets_formulas_read_back_friendly(wild_readers):
+    """Google Sheets' .ods export (converted server-side by a headless
+    LibreOfficeDev) writes ordinary ODF formulas - they must come back in
+    friendly syntax like everyone else's."""
+    sheet = wild_readers["googlesheets_libreofficedev6.ods"].sheet("Feuille 1")
+    assert sheet[2, 0].formula_friendly == "=1+1"
+    assert sheet[2, 2].formula_friendly == "=SUM(A3:A4)"
+    assert sheet[3, 0].formula_friendly == "=A3*2"
 
 
 @requires_soffice

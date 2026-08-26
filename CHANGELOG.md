@@ -8,9 +8,11 @@ still change between minor versions.
 ## [Unreleased]
 
 ### Added
-- **"Wild" fixture suite** (`tests/wild/` + `tests/test_wild_files.py`): five real-world
-  open-data `.ods` files written by other generators — Excel 16 (two builds), LibreOffice 3.5
-  from 2012, LibreOffice 26.2 on Linux and Windows — exercised end to end: open, exact sheet
+- **"Wild" fixture suite** (`tests/wild/` + `tests/test_wild_files.py`): six real-world
+  `.ods` files written by other generators — Excel 16 (two builds), LibreOffice 3.5
+  from 2012, LibreOffice 26.2 on Linux and Windows (open data), plus a Google Sheets export
+  (which turns out to be converted server-side by a headless LibreOfficeDev 6.0) —
+  exercised end to end: open, exact sheet
   sizes, full read, write, save round-trip, and (opt-in) reopening by a real LibreOffice.
   Person names present in the published originals were redacted before inclusion; sources and
   licenses in `tests/wild/README.md`.

@@ -1,7 +1,8 @@
 # Wild ODS fixtures
 
 Real-world `.ods` files produced by *other* generators than the LibreOffice-on-macOS used to
-develop this library — Excel, an old LibreOffice 3.5, recent LibreOffice on Linux and Windows.
+develop this library — Excel, an old LibreOffice 3.5, recent LibreOffice on Linux and Windows,
+a Google Sheets export.
 They exist to confront the API with the format as it is actually written in the wild (grid
 fillers spanning the full 16,384 × 1,048,576 grid, missing optional package parts, ragged row
 widths…), not as our own writer produces it. Exercised by `tests/test_wild_files.py`.
@@ -19,6 +20,4 @@ byte-identical to the published originals, and the zip structure (member order, 
 | `libreoffice35_casinos_2015.ods` | `LibreOffice/3.5$Windows_x86` (2012-era) | [data.gouv.fr — Liste des casinos autorisés en France](https://www.data.gouv.fr/fr/datasets/liste-des-casinos-de-france/) | [Licence Ouverte](https://www.etalab.gouv.fr/licence-ouverte-open-licence/) |
 | `libreoffice26_linux_streets.ods` | `LibreOffice/26.2.3.2$Linux_X86_64` | [data.gouv.fr — périmètres scolaires (liste de voies)](https://www.data.gouv.fr/) | [Licence Ouverte](https://www.etalab.gouv.fr/licence-ouverte-open-licence/) |
 | `libreoffice26_windows_procurement.ods` | `LibreOffice/26.2.1.2$Windows_X86_64` (created by openpyxl, resaved) | [data.gouv.fr — données essentielles de la commande publique (DECP)](https://www.data.gouv.fr/) | [Licence Ouverte](https://www.etalab.gouv.fr/licence-ouverte-open-licence/) |
-
-Still missing from the collection: a Google Sheets export (needs a Google account to produce
-one — contributions welcome).
+| `googlesheets_libreofficedev6.ods` | `LibreOfficeDev/6.0.5.2$Linux_X86_64` — Google Sheets converts server-side through a headless LibreOfficeDev build | File → Download → OpenDocument from a Google Sheets workbook created for this suite (text, numbers, %, €, date, formulas) | made for this repository, no license concerns |
