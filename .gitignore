@@ -7,6 +7,7 @@ __pycache__/
 /build/
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
 
 # scratch folder used during development to inspect raw ODS/XML internals,
 # duplicates ods/tests/TEST.ods
