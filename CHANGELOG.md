@@ -5,6 +5,14 @@ All notable changes to `odsslicer` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
 still change between minor versions.
 
+## [Unreleased]
+
+### Added
+- `benchmarks/compare_readers.py` and a "How it compares to other readers" table in DOCS.md:
+  measured read-speed/memory comparison against `odfdo` and `python-calamine` on a purely
+  numeric matrix — quantifying the README's advice that pure bulk reading is
+  `python-calamine`'s territory, not ours.
+
 ## [0.11.0] — 2026-08-26
 
 ### Added

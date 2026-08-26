@@ -930,6 +930,40 @@ What the numbers mean in practice:
   scan per cell (~33 ms each on a 10k-row sheet). The display-inference lookups are now lazy;
   the same writes cost ~1 ms each.
 
+### How it compares to other readers
+
+Measured with `benchmarks/compare_readers.py` on the competitors' home turf: a purely
+numeric matrix (N rows × 5 float columns, one sheet) read in full into Python values.
+Contenders: [`odfdo`](https://pypi.org/project/odfdo/) 3.24 (the other maintained full
+read/write library) and [`python-calamine`](https://pypi.org/project/python-calamine/) 0.8
+(the Rust streaming reader). Fresh subprocess per measurement, median of 3 runs, library
+import excluded; same Apple Silicon laptop as above.
+
+Read time:
+
+| Rows (×5 float columns) | odsslicer 0.11 | odfdo | python-calamine |
+|---|---|---|---|
+| 100 | 25 ms | 4 ms | < 1 ms |
+| 1,000 | 150 ms | 30 ms | 2 ms |
+| 10,000 | 1.6 s | 0.30 s | 13 ms |
+| 100,000 | 25 s | 9.2 s | 0.27 s |
+
+Peak memory (RSS):
+
+| Rows (×5 float columns) | odsslicer 0.11 | odfdo | python-calamine |
+|---|---|---|---|
+| 1,000 | 68 MB | 43 MB | 17 MB |
+| 10,000 | 304 MB | 120 MB | 25 MB |
+| 100,000 | 2.1 GB | 644 MB | 109 MB |
+
+The honest conclusion: **for reading values in bulk, odsslicer is the slowest of the
+three** — about 5-6× odfdo and ~100× python-calamine, which streams from compiled Rust
+without building any DOM and stays nearly flat on memory. That is the structural price of
+odsslicer's editable model (a full XML tree plus a `Cell` object per cell carrying formats,
+styles, formulas and write support), not an accident — and it is why the README says to use
+`python-calamine` when all you need is to read values fast. odsslicer's sweet spot is
+reading *and rewriting* documents whose formatting must survive.
+
 ## 13. Known limitations
 
 - **No calculation engine of its own.** Formulas are written and translated but not
