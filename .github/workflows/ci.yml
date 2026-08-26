@@ -23,6 +23,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install the package with test dependencies
         run: pip install -e ".[test]"
@@ -39,6 +41,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - name: Install the package with the type-checking tools
         run: pip install -e ".[typecheck]"
       - name: mypy (all signatures annotated, no type errors)
@@ -61,6 +65,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install LibreOffice (current, from the official PPA)
         # Two Ubuntu specifics:
