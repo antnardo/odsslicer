@@ -114,6 +114,11 @@ The main suite (`tests/test_odsslicer.py`) covers every feature above plus regre
 for the bugs fixed along the way; it runs on every push/PR via
 [GitHub Actions](https://github.com/antnardo/odsslicer/blob/master/.github/workflows/ci.yml) across Python 3.10 to 3.13.
 
+`tests/test_wild_files.py` confronts the API with real-world files written by *other*
+generators — Excel 16, a 2012-era LibreOffice 3.5, recent LibreOffice on Linux and Windows
+(open-data files, see [tests/wild/README.md](https://github.com/antnardo/odsslicer/blob/master/tests/wild/README.md)
+for provenance) — reading, writing and round-tripping each one.
+
 `tests/test_libreoffice_consistency.py` is an opt-in suite that hands files `odsslicer` wrote
 to a real, local LibreOffice (`soffice --headless --convert-to fods`) and inspects what
 LibreOffice itself made of them — the strongest available signal that a write is genuinely

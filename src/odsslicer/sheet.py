@@ -69,22 +69,57 @@ class Sheet:
         table = []
         rows = table_bs.find_all("table:table-row")
         logger.log(self._log_level, "    Loading %s, %d unrepeated rows", self.name, len(rows))
+        # Grid-filler guard, column direction: Excel and LibreOffice pad rows
+        # up to the sheet's full width (16,384 columns) with trailing empty
+        # repeated cells - unrolling those would create millions of Cell
+        # objects. First pass: measure each row's *content width*, i.e. its
+        # width up to the first huge (> MAX_REPEAT_ROWS) empty cell of its
+        # trailing run of empty cells; the widest row is the sheet's real
+        # width. Second pass (_normalize_row_width): rewrite each row's XML so
+        # it is exactly that wide - huge fillers clamped, short rows padded -
+        # keeping the XML and the in-memory model in agreement (the rest of
+        # the library assumes rectangular rows). Only trailing *empty* cells
+        # are ever touched, so no data moves and nothing visible is lost.
+        def content_width(cells_bs: "list[Tag]") -> "tuple[int, Tag | None]":
+            """(width up to the first huge trailing empty cell, that cell)."""
+            suffix_start = len(cells_bs)
+            while suffix_start > 0 and Cell(cells_bs[suffix_start - 1]).is_empty:
+                suffix_start -= 1
+            width, first_big = 0, None
+            for k, cell in enumerate(cells_bs):
+                n_cols = int(cell.attrs.get("table:number-columns-repeated", "1"))
+                if k >= suffix_start and n_cols > MAX_REPEAT_ROWS:
+                    first_big = cell
+                    break
+                width += n_cols
+            return width, first_big
+
+        # Its row-direction counterpart: a row repeated absurdly many times
+        # whose cells are all empty is grid filler too (Excel and LibreOffice
+        # both write one to declare the sheet's full 1,048,576-row height).
+        def is_filler_row(row: Tag, cells_bs: "list[Tag]") -> bool:
+            n_rows = int(row.attrs.get("table:number-rows-repeated", "1"))
+            return n_rows > MAX_REPEAT_ROWS and all(Cell(c).is_empty for c in cells_bs)
+
+        real_width = 0
+        for row in rows:
+            cells_bs = row.find_all(TAG_CELL)
+            if is_filler_row(row, cells_bs):
+                continue  # discarded by the row-direction guard below
+            real_width = max(real_width, content_width(cells_bs)[0])
         i = 0
         for row in rows:
             n_rows = int(row.attrs.get("table:number-rows-repeated", "1"))
             # ATTENTION : if some style is applied to a whole column : you get the max length 2**20
             all_cells_bs = row.find_all(TAG_CELL)
-            if (
-                n_rows > MAX_REPEAT_ROWS
-                and len(all_cells_bs) == 1
-                and Cell(all_cells_bs[0]).is_empty
-            ):
+            if is_filler_row(row, all_cells_bs):
                 logger.log(
                     self._log_level,
-                    "    Row [%04d] repeated %d > MAX = %d and with one empty cell: row discarded",
+                    "    Row [%04d] repeated %d > MAX = %d and all-empty: row discarded",
                     i + 1, n_rows, MAX_REPEAT_ROWS,
                 )
                 continue
+            all_cells_bs = self._normalize_row_width(row, all_cells_bs, real_width, i)
             for j in range(n_rows):
                 cells = []
                 j = 0
@@ -145,6 +180,50 @@ class Sheet:
                         empty_cols_pos[i] = (jp, vp + 1)
                 empty_cols_aggr = [e[1] for e in empty_cols_pos]
         return table
+
+    def _normalize_row_width(self, row_tag: Tag, cells_bs: "list[Tag]", real_width: int, row_index: int) -> "list[Tag]":
+        """Rewrite one row's XML so its total width is exactly `real_width`
+        cells, touching only its trailing run of *empty* cells: a huge grid
+        filler (see `load`) has its repeat count reduced (cells beyond it
+        removed), and a row that falls short is padded with a blank repeated
+        cell. Rows already the right width come back untouched. Returns the
+        row's cell tags after the rewrite."""
+        suffix_start = len(cells_bs)
+        while suffix_start > 0 and Cell(cells_bs[suffix_start - 1]).is_empty:
+            suffix_start -= 1
+        width = 0
+        for k, cell in enumerate(cells_bs):
+            n_cols = int(cell.attrs.get("table:number-columns-repeated", "1"))
+            # only the trailing run of empty cells is ever clamped - a huge
+            # repeat *before* real data is real (and counted in `real_width`)
+            if k < suffix_start or (width + n_cols <= real_width and n_cols <= MAX_REPEAT_ROWS):
+                width += n_cols
+                continue
+            # a huge filler, or a cell crossing the real width: clamp it to
+            # exactly fill the row, and drop everything after it
+            missing = real_width - width
+            logger.log(
+                self._log_level,
+                "    Row [%04d]: trailing empty cells repeated %d clamped to the sheet's real width (%d)",
+                row_index + 1, n_cols, real_width,
+            )
+            keep = cells_bs[:k]
+            if missing > 0:
+                if missing == 1:
+                    cell.attrs.pop("table:number-columns-repeated", None)
+                else:
+                    cell.attrs["table:number-columns-repeated"] = str(missing)
+                keep.append(cell)
+            for extra in cells_bs[k if missing <= 0 else k + 1:]:
+                extra.decompose()
+            return keep
+        if width < real_width:
+            pad = self._empty_cell_template()
+            if real_width - width > 1:
+                pad.attrs["table:number-columns-repeated"] = str(real_width - width)
+            row_tag.append(pad)
+            return [*cells_bs, pad]
+        return cells_bs
 
     def materialize_cell(self, row: int, col: int) -> None:
         """Ensure the cell at (row, col) has its own, independent XML element.

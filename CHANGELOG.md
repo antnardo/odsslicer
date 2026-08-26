@@ -5,6 +5,30 @@ All notable changes to `odsslicer` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
 still change between minor versions.
 
+## [Unreleased]
+
+### Added
+- **"Wild" fixture suite** (`tests/wild/` + `tests/test_wild_files.py`): five real-world
+  open-data `.ods` files written by other generators — Excel 16 (two builds), LibreOffice 3.5
+  from 2012, LibreOffice 26.2 on Linux and Windows — exercised end to end: open, exact sheet
+  sizes, full read, write, save round-trip, and (opt-in) reopening by a real LibreOffice.
+  Person names present in the published originals were redacted before inclusion; sources and
+  licenses in `tests/wild/README.md`.
+
+### Fixed
+- **Files without `settings.xml` no longer fail to open.** Excel omits it (it is optional in
+  ODF, as are `styles.xml` and `meta.xml`, both now optional too with minimal stand-ins), and
+  `save()` now writes the regenerated parts even when the source package lacked them.
+- **Grid fillers no longer blow up `Sheet.load`**: Excel and LibreOffice declare the sheet's
+  full extent with an empty cell repeated 16,384 times at the end of each row (and an
+  all-empty row block repeated ~1,048,000 times), which used to materialize millions of
+  `Cell` objects — opening a 50 KB file took minutes. Rows are now normalized to the sheet's
+  real width at load time (only trailing *empty* runs are clamped; no data moves), bringing
+  those opens down to milliseconds.
+- **Ragged rows (Excel files) crashed range reads** with `IndexError`: the same
+  normalization pads short rows, so every sheet is rectangular as the rest of the API
+  assumes.
+
 ## [0.10.0] — 2026-08-24
 
 ### Changed

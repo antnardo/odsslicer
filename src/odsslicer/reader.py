@@ -5,7 +5,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Union, cast
-from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from bs4 import BeautifulSoup, Tag
 
@@ -17,6 +17,30 @@ from .styles import _NUMBER_STYLE_TAGS
 from .xmlutils import _blank_template, _new_qualified_tag
 
 logger = logging.getLogger("odsslicer")
+
+# Minimal stand-ins for the optional package parts (ODF 1.2 part 3 makes
+# everything but `content.xml` and the mimetype optional, and e.g. Excel
+# really does omit `settings.xml`): enough structure for the rest of the
+# library - style lookup, `.properties` - to work unchanged.
+_BLANK_STYLES_XML = (
+    b'<?xml version="1.0" encoding="UTF-8"?>\n'
+    b'<office:document-styles'
+    b' xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"'
+    b' xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"'
+    b' office:version="1.2">'
+    b"<office:styles/><office:automatic-styles/><office:master-styles/>"
+    b"</office:document-styles>"
+)
+_BLANK_META_XML = (
+    b'<?xml version="1.0" encoding="UTF-8"?>\n'
+    b'<office:document-meta'
+    b' xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"'
+    b' xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0"'
+    b' xmlns:dc="http://purl.org/dc/elements/1.1/"'
+    b' office:version="1.2">'
+    b"<office:meta/>"
+    b"</office:document-meta>"
+)
 
 
 class ODSReader:
@@ -30,15 +54,22 @@ class ODSReader:
         self._log_level = logging.INFO if verbose else logging.DEBUG
         logger.log(self._log_level, "Opening %s...", self.file)
         # http://docs.oasis-open.org/office/v1.2/
+        # Only `content.xml` (and the mimetype) is guaranteed: real-world
+        # generators omit the rest - Excel ships no `settings.xml` at all.
         with ZipFile(file) as zip:
+            members = set(zip.namelist())
+
+            def read_optional(name: str, fallback: bytes) -> bytes:
+                return zip.read(name) if name in members else fallback
+
             # Document content and automatic styles used in the content.
             self.content = zip.read("content.xml")
             # Styles used in the document content and automatic styles used in the styles themselves.
-            self.styles = zip.read("styles.xml")
+            self.styles = read_optional("styles.xml", _BLANK_STYLES_XML)
             # Document meta information, such as the author or the time of the last save action.
-            self.meta = zip.read("meta.xml")
+            self.meta = read_optional("meta.xml", _BLANK_META_XML)
             # Application-specific settings, such as the window size or printer information.
-            self.settings = zip.read("settings.xml")
+            self.settings = read_optional("settings.xml", b"")
         self.data = BeautifulSoup(self.content, "xml")
         self.styles_data = BeautifulSoup(self.styles, "xml")
         self.meta_data = BeautifulSoup(self.meta, "xml")
@@ -178,6 +209,11 @@ class ODSReader:
         }
         with ZipFile(self.file) as src:
             entries = [(item, regenerated.get(item.filename, src.read(item.filename))) for item in src.infolist()]
+        # a regenerated part absent from the source package (every part but
+        # `content.xml` is optional in ODF, see __init__) still has to be
+        # written, or the in-memory edits to it would be dropped
+        present = {item.filename for item, _ in entries}
+        entries += [(ZipInfo(name), data) for name, data in regenerated.items() if name not in present]
         with ZipFile(path, "w") as dst:
             for item, data in entries:
                 # the ODF spec requires `mimetype` to be the first entry and stored uncompressed

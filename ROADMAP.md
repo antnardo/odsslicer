@@ -115,9 +115,25 @@ des features.
    passage : correction d'un crash latent d'`export_content_xml()` avec un chemin `str`
    (normalisation de `self.file` en `Path`), et deux réusages de variables douteux nettoyés.
 5. **Maturité d'écosystème** : ~~pas de `CHANGELOG.md`~~ (fait — `CHANGELOG.md` au format
-   Keep a Changelog, lié depuis le README) ; bus factor de 1 ; l'API n'a jamais été confrontée
-   à des fichiers ODS "sauvages" produits par Excel, un export Google Sheets ou de vieux
-   OpenOffice — en collectionner quelques-uns comme fixtures serait un bon investissement.
+   Keep a Changelog, lié depuis le README) ; bus factor de 1 ; ~~l'API n'a jamais été
+   confrontée à des fichiers ODS "sauvages"~~ **Fait** : cinq fichiers réels d'open data
+   (Excel 16 ×2, LibreOffice 3.5 de 2012, LibreOffice 26.2 Linux et Windows — noms de
+   personnes caviardés avant inclusion, sources et licences dans `tests/wild/README.md`)
+   servent de fixtures à `tests/test_wild_files.py` : ouverture, dimensions exactes, lecture
+   intégrale, écriture, round-trip par odsslicer et par un vrai LibreOffice. L'investissement
+   a payé immédiatement — trois vrais problèmes trouvés et corrigés :
+   - Excel n'embarque pas de `settings.xml` (optionnel dans ODF) → l'ouverture plantait ;
+     `styles.xml`/`meta.xml`/`settings.xml` sont maintenant optionnels, et `save()` écrit les
+     parties régénérées même absentes du zip source ;
+   - les « remplissages de grille » (cellule vide répétée 16 384 fois en fin de chaque ligne,
+     bloc de lignes vides répété ~1 048 000 fois — Excel et LibreOffice déclarent ainsi la
+     grille entière) faisaient construire des millions d'objets `Cell` : ouverture d'un
+     fichier de 50 Ko en plusieurs minutes, voire blocage. `Sheet.load` normalise désormais
+     chaque ligne à la largeur réelle de la feuille (seuls les suffixes *vides* sont bornés,
+     aucune donnée ne bouge) → ouverture en quelques millisecondes ;
+   - les lignes de largeurs inégales (fichiers Excel) faisaient planter la lecture de plage
+     en `IndexError` — résolu par la même normalisation (lignes courtes complétées).
+   Manque encore à la collection : un export Google Sheets (nécessite un compte).
 
 ## Gaps identifiés — utiles mais plus de niche
 
