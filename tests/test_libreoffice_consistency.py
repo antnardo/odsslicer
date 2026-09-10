@@ -101,6 +101,39 @@ def test_libreoffice_reads_back_a_border_with_all_four_sides_explicit(
 
 
 @requires_soffice
+def test_libreoffice_keeps_every_property_across_repeated_style_forks(
+    writable_reader, tmp_path, libreoffice_export
+):
+    # regression (issue #1): forking a second time off an automatic style used
+    # to produce a file LibreOffice rendered with the last property only - the
+    # fork inherited through style:parent-style-name, which LibreOffice honours
+    # for named styles only. odsslicer's own read-back could not catch this
+    # (it resolves the chain itself), so the assertion has to be on what
+    # LibreOffice made of the file.
+    s = writable_reader.sheet("Sheet1")
+    a, b = s["A1"], s["B1"]
+    a.value = "styled"
+    b.value = "styled too"
+    a.style.bold = True
+    a.style.border_left = "2pt solid #000000"
+    b.style = a.style  # shared automatic style: writing to b forks off it
+    b.style.background_color = "#ffff00"
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    style_def = re.search(
+        rf'<style:style style:name="{b.attrs["table:style-name"]}"[^>]*>.*?</style:style>',
+        xml,
+        re.DOTALL,
+    )
+    assert style_def is not None, "LibreOffice dropped the forked style entirely"
+    assert 'fo:background-color="#ffff00"' in style_def.group(0)
+    assert 'fo:font-weight="bold"' in style_def.group(0)
+    assert re.search(r'fo:border-left="[^"]*solid #000000"', style_def.group(0))
+
+
+@requires_soffice
 def test_libreoffice_reads_back_a_merge(writable_reader, tmp_path, libreoffice_export):
     s = writable_reader.sheet("Sheet1")
     s["A1"].value = "master"

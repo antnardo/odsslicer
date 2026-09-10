@@ -144,15 +144,17 @@ class ODSReader:
                     max_n = max(max_n, int(m.group(1)))
         return f"{prefix}{max_n + 1}"
 
-    def _new_style_tag(self, family: str, prefix: str, parent_style_name: "str | None" = None) -> Tag:
+    def _new_style_tag(self, family: str, prefix: str) -> Tag:
         """A brand new, empty `<style:style style:family=family>` with a
         fresh unique name, already inserted into `content.xml`'s automatic
-        styles."""
+        styles.
+
+        Deliberately parentless: callers fill it in themselves (see
+        `Cell._copy_resolved_style_into`), because `style:parent-style-name`
+        only means anything when it names a style from `styles.xml`."""
         tag = _blank_template(self.data, "style:style")
         tag.attrs["style:name"] = self._new_style_name(prefix)
         tag.attrs["style:family"] = family
-        if parent_style_name:
-            tag.attrs["style:parent-style-name"] = parent_style_name
         self._automatic_styles().append(tag)
         return tag
 

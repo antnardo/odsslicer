@@ -7,6 +7,17 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Fixed
+- **Styling a cell twice no longer loses the first properties in the spreadsheet**
+  ([#1](https://github.com/antnardo/odsslicer/issues/1)). Forking a cell its own private
+  style linked back to the previous one through `style:parent-style-name` — but only a
+  *named* style (from `styles.xml`) is an addressable ancestor: LibreOffice ignores an
+  automatic parent and falls back to `Default`, so borders, bold, alignment and the rest
+  silently disappeared on screen, while `odsslicer` — resolving the chain itself — still read
+  them back. Forks now carry the resolved properties (and the number format) in their own
+  XML, and only link to a genuinely named ancestor. Files written by 0.9–0.11 are repaired
+  cell by cell as soon as a style is written to them again.
+
 ### Added
 - `benchmarks/compare_readers.py` and a "How it compares to other readers" table in DOCS.md:
   measured read-speed/memory comparison against `odfdo` and `python-calamine` on a purely

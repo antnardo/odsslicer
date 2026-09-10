@@ -24,7 +24,7 @@ from .formulas import (
     _shift_odf_formula,
 )
 from .styles import CellStyle, _render_date_time_from_format, _render_number_from_format
-from .xmlutils import _ODF_NAMESPACES, _blank_template, _new_qualified_tag
+from .xmlutils import _ODF_NAMESPACES, _blank_template, _ensure_style_child, _new_qualified_tag
 
 if TYPE_CHECKING:
     from .sheet import Sheet
@@ -746,9 +746,10 @@ class Cell:
         currently points at the very same style name (e.g. right after
         `cell.style = other_cell.style`, or `Sheet.copy`).
 
-        The first call forks one off the cell's current style (if any) as
-        `style:parent-style-name`, so every already-resolved property keeps
-        applying except the ones a later write explicitly overrides;
+        The first call forks one off the cell's current style (if any),
+        carrying over everything that style resolves to (see
+        `_copy_resolved_style_into`), so every already-resolved property
+        keeps applying except the ones a later write explicitly overrides;
         further calls on this same `Cell` (e.g. setting several properties
         one after another) reuse that same forked style instead of forking
         again - tracked via `self._own_style_name`, a Python-side flag
@@ -764,11 +765,66 @@ class Cell:
             tag = reader._find_style(current_name, family="table-cell")
             if tag is not None:
                 return tag
-        tag = reader._new_style_tag("table-cell", self._OWN_STYLE_PREFIX, parent_style_name=current_name)
+        tag = reader._new_style_tag("table-cell", self._OWN_STYLE_PREFIX)
+        self._copy_resolved_style_into(tag, current_name)
         new_name = cast(str, tag["style:name"])
         self.attrs["table:style-name"] = new_name
         self._own_style_name = new_name
         return tag
+
+    # `<style:style>` children whose attributes merge along the inheritance
+    # chain (a nearer style overriding one attribute must not drop the
+    # others); any other child - `style:map`, carrying conditional formats -
+    # is taken whole from the nearest style that has one.
+    _STYLE_PROPERTY_TAGS = (
+        "style:text-properties",
+        "style:table-cell-properties",
+        "style:paragraph-properties",
+    )
+
+    def _copy_resolved_style_into(self, tag: Tag, current_name: "str | None") -> None:
+        """Fill a freshly forked style tag with everything `current_name`
+        currently resolves to.
+
+        The obvious implementation - pointing the fork at the old style via
+        `style:parent-style-name` - writes a file no spreadsheet renders as
+        the library reads it back: only *named* styles (`styles.xml`) are
+        addressable ancestors, and LibreOffice silently falls back to
+        `Default` when `style:parent-style-name` names an automatic style
+        (issue #1). A cell's style is almost always an automatic one, so the
+        fork has to carry the properties itself: walk up to the nearest
+        named ancestor - which becomes the fork's real parent - and copy
+        every automatic style passed on the way, farthest first so a nearer
+        style wins, exactly as `CellStyle` resolves them on read.
+        """
+        reader = self.sheet.reader
+        automatic: "list[Tag]" = []
+        seen: "set[str | None]" = set()
+        current = reader._find_style(current_name, family="table-cell")
+        while current is not None:
+            name = cast("str | None", current.get("style:name"))
+            if name in seen:
+                break  # a malformed file could cycle; resolve what we have
+            seen.add(name)
+            if current.find_parent("office:styles") is not None:
+                # a named style: a parent link to it does hold, and keeping
+                # the link (rather than copying) preserves its own updates
+                tag.attrs["style:parent-style-name"] = cast(str, name)
+                break
+            automatic.append(current)
+            parent = cast("str | None", current.get("style:parent-style-name"))
+            current = reader._find_style(parent, family="table-cell") if parent else None
+        for source in reversed(automatic):
+            if "style:data-style-name" in source.attrs:  # the number format
+                tag.attrs["style:data-style-name"] = source.attrs["style:data-style-name"]
+            for child in source.find_all(True, recursive=False):
+                child_name = f"{child.prefix}:{child.name}" if child.prefix else child.name
+                if child_name in self._STYLE_PROPERTY_TAGS:
+                    _ensure_style_child(tag, child_name).attrs.update(child.attrs)
+                else:
+                    for previous in tag.find_all(child_name, recursive=False):
+                        previous.decompose()  # this nearer style replaces them
+                    tag.append(copy.deepcopy(child))
 
     @property
     def is_merge_master(self) -> bool:
