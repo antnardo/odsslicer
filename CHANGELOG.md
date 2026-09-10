@@ -5,7 +5,7 @@ All notable changes to `odsslicer` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
 still change between minor versions.
 
-## [Unreleased]
+## [0.11.1] — 2026-09-10
 
 ### Fixed
 - **Styling a cell twice no longer loses the first properties in the spreadsheet**
@@ -150,6 +150,7 @@ typed cell values (text, number, percentage, currency, date, time, boolean), for
 repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
+[0.11.1]: https://github.com/antnardo/odsslicer/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/antnardo/odsslicer/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/antnardo/odsslicer/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/antnardo/odsslicer/compare/v0.9.0...v0.9.1
