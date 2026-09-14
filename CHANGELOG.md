@@ -5,6 +5,21 @@ All notable changes to `odsslicer` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
 still change between minor versions.
 
+## [Unreleased]
+
+### Added
+- **`Sheet.insert_rows(row, count=1)` / `insert_row(row)` and `Sheet.insert_columns(col,
+  count=1)` / `insert_column(col)`** — insert blank rows or columns, like a spreadsheet's
+  "insert rows above": formula references anywhere in the document follow the cells they
+  point at (a range straddling the insertion point stretches), a merge straddling it grows,
+  and column widths stay with their columns. On files that declare the full application grid
+  through filler rows/columns (LibreOffice, Excel), the filler is given back so the document
+  never exceeds the maximum grid size.
+
+### Changed
+- The formula-reference rewriting behind `delete_rows`/`delete_column` now shares one
+  implementation with insertion (no behaviour change).
+
 ## [0.11.1] — 2026-09-10
 
 ### Fixed

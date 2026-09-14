@@ -35,6 +35,7 @@ sheet = table.sheet("Sheet1")
    - [Creating a new file from scratch](#creating-a-new-file-from-scratch)
    - [Adding, renaming, reordering, deleting sheets](#adding-renaming-reordering-deleting-sheets)
 4. [Rows, columns and ranges](#4-rows-columns-and-ranges)
+   - [Inserting rows and columns](#inserting-rows-and-columns)
    - [Deleting rows and columns](#deleting-rows-and-columns)
    - [Copying cells and ranges](#copying-cells-and-ranges)
    - [Sorting a range](#sorting-a-range)
@@ -356,6 +357,34 @@ table.delete_sheet("Data")
 
 ## 4. Rows, columns and ranges
 
+### Inserting rows and columns
+
+```python
+sheet.insert_row(2)              # one blank row before row 2 (0-based): row 2 moves to 3
+sheet.insert_rows(2, 5)          # five blank rows at once
+sheet.insert_rows(sheet.n_rows)  # the sheet's height as position: append at the bottom
+sheet.insert_column(1)           # one blank column before column B
+sheet.insert_columns(1, 3)
+```
+
+It behaves like a spreadsheet's "insert rows above" / "insert columns before":
+
+- **Formula references follow the cells**, anywhere in the document — see [Formula references
+  follow structural edits](#formula-references-follow-structural-edits). A range straddling
+  the insertion point stretches (`SUM(A2:A10)` with rows inserted before row 5 becomes
+  `SUM(A2:A12)`); a range starting at or below the insertion point moves whole.
+- **A merge straddling the insertion point grows** to include the new rows/columns; merges
+  above or below simply move.
+- **Column widths stay with their columns**: the column definitions shift too, the new
+  columns get the default width.
+- The new rows/columns are **blank** — no values, no styles. Use [`copy`](#copying-cells-and-ranges)
+  to bring formatting onto them.
+
+Raises `IndexError` for a position outside `0..n_rows` (or `0..n_cols`), `ValueError` for a
+`count` below 1. Files written by LibreOffice or Excel declare the whole 16,384 × 1,048,576
+grid through trailing filler rows and columns; insertions give that filler back, so the
+document never exceeds the application's maximum (which would make it drop data on open).
+
 ### Deleting rows and columns
 
 ```python
@@ -541,6 +570,15 @@ Several operations rewrite formulas so they keep pointing at the same cells:
   A reference pointing *exactly* at the removed row/column is left as-is rather than modeled
   as a `#REF!` error (there's no error-value concept) — deleting the first row of a
   `SUM(A2:A3)` range shrinks it to `SUM(A2:A2)`.
+
+- `insert_rows`/`insert_columns`: references at or past the insertion point move forward, `$`
+  locks included (the referenced cell moved, the formula wasn't filled):
+
+  ```python
+  sheet["C1"].formula = "SUM(A2:A3)+$A$7"
+  sheet.insert_rows(2, 3)         # inside A2:A3, above A7
+  sheet["C1"].formula_friendly    # "=SUM(A2:A6)+$A$10"
+  ```
 
 - `rename_sheet`: explicitly qualified references (`OldName.A1`) are rewritten to the new
   name; unqualified ones within the sheet itself need no change.
@@ -978,6 +1016,9 @@ reading *and rewriting* documents whose formatting must survive.
   actual locale (`number:language`/`number:country`); its layers may produce a different
   separator convention than the rest of the document. Real applications recompute display
   text on open.
+- **Structural edits only rewrite formulas.** Inserting or deleting rows/columns leaves
+  pivot-table source ranges, named ranges, and conditional-format or validation ranges as
+  they were.
 - **Partial rich text** (one bold word inside a sentence, a link on part of a cell's text) is
   flattened on read and not writable.
 - **Not covered:** data validation / drop-down lists, autofilters, frozen panes, sheet-level

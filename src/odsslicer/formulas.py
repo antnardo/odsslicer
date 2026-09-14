@@ -169,81 +169,101 @@ def _unquote_odf_sheet_name(raw: str) -> str:
     return raw
 
 
-def _delete_shift_cell_address(
-    addr: str,
-    deleted_rows: "list[int] | None" = None,
-    deleted_cols: "list[int] | None" = None,
-) -> str:
-    """Adjust a single ODF cell address (`.A1`, `.$A$1`, or bare `A1`) for
-    the (sorted) `deleted_rows` (or `deleted_cols`) having been physically
-    removed from the sheet: shifts the index down by the number of removed
-    positions strictly before it, *regardless* of any `$` lock - unlike
-    `_shift_cell_address`'s fill/copy semantics, `$` is irrelevant here,
-    since the referenced cell itself moved rather than the formula. A
-    reference that pointed exactly at a removed row/column is left
-    unchanged (there's no `#REF!`-style error value to represent "this
-    reference is now broken" - see the README's known limitations)."""
+def _remap_cell_address(addr: str, remap: "Callable[[int, int], tuple[int, int]]") -> str:
+    """Rewrite a single ODF cell address (`.A1`, `.$A$1`, or bare `A1`)
+    through `remap(row, col) -> (row, col)` (0-based), keeping its `$` locks
+    and leading dot. Meant for structural edits - deleting or inserting
+    rows/columns - where the referenced cell itself moves, so unlike
+    `_shift_cell_address`'s fill/copy semantics a `$` lock is irrelevant.
+    Anything that isn't a plain cell address is returned untouched."""
     dotted = addr.startswith(".")
     body = addr[1:] if dotted else addr
     m = _ODF_CELL_ADDRESS_RE.match(body)
     if m is None:
         return addr
     col_abs, col_letters, row_abs, row_digits = m.groups()
-    col = string_to_col(col_letters)
-    row = int(row_digits) - 1
-    if deleted_rows and row not in deleted_rows:
-        row -= bisect.bisect_left(deleted_rows, row)
-    if deleted_cols and col not in deleted_cols:
-        col -= bisect.bisect_left(deleted_cols, col)
+    row, col = remap(int(row_digits) - 1, string_to_col(col_letters))
     new_letters = string_address(0, col)[:-1]
     shifted = f"{col_abs}{new_letters}{row_abs}{row + 1}"
     return f".{shifted}" if dotted else shifted
 
 
-def _adjust_odf_reference_for_deletion(
-    inner: str,
+def _deletion_remap(
+    deleted_rows: "list[int] | None" = None,
+    deleted_cols: "list[int] | None" = None,
+) -> "Callable[[int, int], tuple[int, int]]":
+    """The `_remap_cell_address` rule for the (sorted) `deleted_rows` (or
+    `deleted_cols`) having been physically removed: an index moves back by
+    the number of removed positions strictly before it. A reference that
+    pointed exactly at a removed row/column is left unchanged (there's no
+    `#REF!`-style error value to represent "this reference is now broken" -
+    see the README's known limitations)."""
+
+    def remap(row: int, col: int) -> tuple[int, int]:
+        if deleted_rows and row not in deleted_rows:
+            row -= bisect.bisect_left(deleted_rows, row)
+        if deleted_cols and col not in deleted_cols:
+            col -= bisect.bisect_left(deleted_cols, col)
+        return row, col
+
+    return remap
+
+
+def _insertion_remap(
+    at_row: "int | None" = None,
+    at_col: "int | None" = None,
+    count: int = 1,
+) -> "Callable[[int, int], tuple[int, int]]":
+    """The `_remap_cell_address` rule for `count` rows (or columns) inserted
+    before index `at_row` (or `at_col`): every index at or past the
+    insertion point moves forward by `count`.
+
+    Applied to each end of a range independently, this reproduces what a
+    spreadsheet does with ranges too: inserting strictly inside `A2:A10`
+    stretches it (only the end moves), inserting at or above its first row
+    moves it whole, inserting just below its last row leaves it alone."""
+
+    def remap(row: int, col: int) -> tuple[int, int]:
+        if at_row is not None and row >= at_row:
+            row += count
+        if at_col is not None and col >= at_col:
+            col += count
+        return row, col
+
+    return remap
+
+
+def _remap_odf_formula_references(
+    formula: str,
     target_sheet: str,
     containing_sheet: str,
-    deleted_rows: "list[int] | None",
-    deleted_cols: "list[int] | None",
+    remap: "Callable[[int, int], tuple[int, int]]",
 ) -> str:
-    """Adjust the address part(s) of one bracket's content for a row/
-    column deletion in `target_sheet` - only references that actually
-    resolve to `target_sheet` (explicitly sheet-qualified, or bare and
-    `containing_sheet is target_sheet`) are touched; anything pointing
-    elsewhere is returned as-is."""
+    """Rewrite, through `remap` (see `_remap_cell_address`), every reference
+    in an already ODF-syntax formula that resolves to `target_sheet` -
+    explicitly sheet-qualified, or bare when `containing_sheet` is
+    `target_sheet`; references into any other sheet are left as they are.
+    Used by `Sheet.delete_rows`/`insert_rows` and their column equivalents
+    to keep formulas, in this sheet or any other, pointing at the same
+    cells they did before the structural edit."""
 
-    def adjust_one(part: str) -> str:
+    def remap_one(part: str) -> str:
         m = _SHEET_QUALIFIED_RE.match(part)
         assert m is not None  # the pattern matches any non-empty reference part
         ref_sheet, addr = m.group("sheet"), m.group("addr")
         effective_sheet = _unquote_odf_sheet_name(ref_sheet) if ref_sheet else containing_sheet
         if effective_sheet != target_sheet:
             return part
-        shifted_addr = _delete_shift_cell_address(addr, deleted_rows, deleted_cols)
-        return f"{ref_sheet}.{shifted_addr}" if ref_sheet else shifted_addr
+        remapped = _remap_cell_address(addr, remap)
+        return f"{ref_sheet}.{remapped}" if ref_sheet else remapped
 
-    if ":" in inner:
-        start, end = inner.split(":", 1)
-        return f"{adjust_one(start)}:{adjust_one(end)}"
-    return adjust_one(inner)
+    def remap_bracket(inner: str) -> str:
+        if ":" in inner:
+            start, end = inner.split(":", 1)
+            return f"{remap_one(start)}:{remap_one(end)}"
+        return remap_one(inner)
 
-
-def _adjust_odf_formula_for_deletion(
-    formula: str,
-    target_sheet: str,
-    containing_sheet: str,
-    deleted_rows: "list[int] | None" = None,
-    deleted_cols: "list[int] | None" = None,
-) -> str:
-    """Adjust every reference in an already ODF-syntax formula that
-    resolves to `target_sheet`, for a row/column deletion there - used by
-    `Sheet.delete_row`/`.delete_column` to keep formulas (in this sheet or
-    any other) pointing at the same cells they did before."""
-    return _ODF_BRACKET_RE.sub(
-        lambda m: f"[{_adjust_odf_reference_for_deletion(m.group(1), target_sheet, containing_sheet, deleted_rows, deleted_cols)}]",
-        formula,
-    )
+    return _ODF_BRACKET_RE.sub(lambda m: f"[{remap_bracket(m.group(1))}]", formula)
 
 
 _SIMPLE_SHEET_NAME_RE = re.compile(r"^[A-Za-z_]\w*$")

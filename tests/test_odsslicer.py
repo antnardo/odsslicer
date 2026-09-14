@@ -16,6 +16,7 @@ import datetime as dt
 import math
 
 import pytest
+from conftest import FIXTURES_DIR
 
 from odsslicer import ODSReader
 from odsslicer.classes import ArrayValues, Border, Cell, CellStyle, NumberFormat, Sheet
@@ -2723,6 +2724,230 @@ def test_save_round_trip_after_delete_row_adjusts_formulas(writable_reader, tmp_
     reread = ODSReader(out).sheet("Sheet1")
     assert reread["C4"].formula_friendly == "=A5+A6"
 
+
+# ---------------------------------------------------------------------------
+# Sheet.insert_rows / insert_columns (écriture)
+# ---------------------------------------------------------------------------
+
+def _defined_extent(sheet):
+    """(rows, columns) declared by the sheet's XML, repeats included - what
+    a spreadsheet application counts against its maximum grid size."""
+    rows = sum(int(t.get("table:number-rows-repeated", "1")) for t in sheet.table.find_all("table:table-row"))
+    cols = sum(
+        int(t.get("table:number-columns-repeated", "1"))
+        for t in sheet.table.find_all("table:table-column", recursive=False)
+    )
+    return rows, cols
+
+
+def test_insert_rows_shifts_everything_down(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    before = [s[i, 0].value for i in range(s.n_rows)]
+    n_rows, n_cols = s.size
+    # below A5's SUM(A2:A3), so no formula gets rewritten: this exercises the
+    # plain shift - see the formula tests below for the rest
+    s.insert_rows(5, 3)
+    assert s.size == (n_rows + 3, n_cols)
+    assert [s[i, 0].value for i in range(s.n_rows)] == before[:5] + [None] * 3 + before[5:]
+
+
+def test_insert_rows_clears_the_cached_value_of_a_rewritten_formula(writable_reader):
+    # a rewritten formula goes through the same path as any formula written by
+    # odsslicer: its cached result is dropped. Stretching a range can change
+    # what it computes (ROWS, COUNTBLANK...), and LibreOffice displays a cached
+    # value as-is on open - an empty cache is what makes it recompute.
+    s = writable_reader.sheet("Sheet1")
+    assert s["A5"].value == 6.4
+    s.insert_row(2)  # inside A2:A3
+    assert s["A6"].formula_friendly == "=SUM(A2:A4)"
+    assert s["A6"].value is None
+
+
+def test_insert_row_inserts_a_single_row(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    n_rows = s.n_rows
+    s.insert_row(0)
+    assert s.n_rows == n_rows + 1
+    assert s[0, 0].value is None
+    assert s[1, 0].value == "texte simple"
+
+
+def test_insert_rows_at_the_end_appends(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    n_rows = s.n_rows
+    s.insert_rows(n_rows, 2)
+    assert s.n_rows == n_rows + 2
+    s[n_rows + 1, 0].value = "appended"
+    assert s[n_rows + 1, 0].value == "appended"
+
+
+def test_insert_columns_shifts_everything_right(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    n_rows, n_cols = s.size
+    s.insert_columns(1, 2)
+    assert s.size == (n_rows, n_cols + 2)
+    assert s[0, :4].to_list() == ["texte simple", None, None, "seconde colonne"]
+    assert all(len(row) == n_cols + 2 for row in s.rows)
+
+
+def test_insert_column_at_the_end_appends(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    n_cols = s.n_cols
+    s.insert_column(n_cols)
+    assert s.n_cols == n_cols + 1
+    assert s[0, :3].to_list() == ["texte simple", "seconde colonne", None]
+
+
+@pytest.mark.parametrize("method", ["insert_rows", "insert_columns"])
+@pytest.mark.parametrize("position", [-1, 999])
+def test_insert_out_of_range_raises(writable_reader, method, position):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(IndexError):
+        getattr(s, method)(position)
+
+
+@pytest.mark.parametrize("method", ["insert_rows", "insert_columns"])
+def test_insert_count_below_one_raises(writable_reader, method):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(ValueError):
+        getattr(s, method)(0, 0)
+
+
+def test_insert_rows_between_repeated_rows_keeps_them_independent(writable_reader):
+    # rows 0 and 1 share one <table:table-row table:number-rows-repeated="2">
+    s = writable_reader.sheet("Sheet2Repeat")
+    s.insert_row(1)
+    assert s[0, :4].to_list() == [1.0] * 4
+    assert s[1, :4].to_list() == [None] * 4
+    assert s[2, :4].to_list() == [1.0] * 4
+    s[2, 0].value = 9.0
+    assert s[0, 0].value == 1.0
+
+
+def test_insert_columns_through_repeated_rows_and_cells(writable_reader, tmp_path):
+    # rows 0-1 are one repeated row of repeated cells: the new cells must go
+    # into each logical row exactly once, and stay independent
+    s = writable_reader.sheet("Sheet2Repeat")
+    s.insert_column(2)
+    assert s[0, :5].to_list() == [1.0, 1.0, None, 1.0, 1.0]
+    s[0, 2].value = "new"
+    assert s[1, 2].value is None
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+    reread = ODSReader(out).sheet("Sheet2Repeat")
+    assert reread[0, :5].to_list() == [1.0, 1.0, "new", 1.0, 1.0]
+    assert reread[1, :5].to_list() == [1.0, 1.0, None, 1.0, 1.0]
+
+
+@pytest.mark.parametrize(
+    ("at", "master_row", "span"),
+    [
+        (3, 2, (4, 1)),  # strictly inside A3:A5 (rows 2-4): the merge grows
+        (2, 3, (3, 1)),  # at its first row: the merge moves down whole
+        (5, 2, (3, 1)),  # just below its last row: untouched
+    ],
+)
+def test_insert_row_and_a_merge(writable_reader, at, master_row, span):
+    s = writable_reader.sheet("SheetFusion")
+    assert s["A3"].merge_span == (3, 1)
+    s.insert_row(at)
+    assert s[master_row, 0].merge_span == span
+    assert all(s[r, 0].is_covered for r in range(master_row + 1, master_row + span[0]))
+    assert not s[master_row + span[0], 0].is_covered
+
+
+def test_insert_columns_inside_a_merge_grows_it(writable_reader, tmp_path):
+    s = writable_reader.sheet("SheetFusion")
+    assert s["A1"].merge_span == (1, 3)
+    s.insert_columns(1, 2)
+    assert s["A1"].merge_span == (1, 5)
+    assert all(s[0, c].is_covered for c in range(1, 5))
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+    assert ODSReader(out).sheet("SheetFusion")["A1"].merge_span == (1, 5)
+
+
+@pytest.mark.parametrize(
+    ("at", "expected"),
+    [
+        (2, "=SUM(A2:A4)"),  # inside A2:A3: the range stretches
+        (1, "=SUM(A3:A4)"),  # at its start: the range moves whole
+        (3, "=SUM(A2:A3)"),  # just below its end: the range is untouched
+    ],
+)
+def test_insert_row_and_a_formula_range(writable_reader, at, expected):
+    s = writable_reader.sheet("Sheet1")
+    assert s["A5"].formula_friendly == "=SUM(A2:A3)"
+    s.insert_row(at)
+    assert s["A6"].formula_friendly == expected
+
+
+def test_insert_rows_shifts_locked_references_too(writable_reader):
+    # a $ lock pins a reference against fills, not against the cell moving
+    s = writable_reader.sheet("Sheet1")
+    s["C1"].formula = "$A$6+A$7+$A8"
+    s.insert_rows(3, 2)
+    assert s["C1"].formula_friendly == "=$A$8+A$9+$A10"
+
+
+def test_insert_columns_shifts_a_formula_reference(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].formula = "B2+$B$3"
+    s.insert_column(1)
+    assert s["A1"].formula_friendly == "=C2+$C$3"
+
+
+def test_insert_rows_adjusts_a_cross_sheet_reference_only(writable_reader):
+    r = writable_reader
+    s1, s2 = r.sheet("Sheet1"), r.sheet("Sheet2Repeat")
+    s2["A1"].formula = "Sheet1.A6+A6"  # the bare A6 is Sheet2Repeat's own
+    s1.insert_rows(3, 2)
+    assert s2["A1"].formula_friendly == "=Sheet1.A8+A6"
+
+
+def test_insert_columns_keeps_column_widths_with_their_columns(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s.column_style(1).width = "5cm"
+    s.insert_columns(1, 2)
+    assert s.column_style(3).width == "5cm"
+    assert s.column_style(1).width is None and s.column_style(2).width is None
+    assert _defined_extent(s)[1] == s.n_cols
+
+
+def test_insertions_stay_within_the_applications_grid(tmp_path):
+    # LibreOffice declares its full 16,384 x 1,048,576 grid through trailing
+    # filler rows/columns: insertions must not push the document past it
+    table = ODSReader(FIXTURES_DIR / "wild" / "libreoffice26_linux_streets.ods")
+    s = table.sheet("Feuille1")
+    rows_before, cols_before = _defined_extent(s)
+    assert (rows_before, cols_before) == (1048576, 16384)
+    first_values = [s[i, 0].value for i in range(2)]
+    s.insert_rows(1, 5)
+    s.insert_columns(1, 2)
+    rows_after, cols_after = _defined_extent(s)
+    assert rows_after <= rows_before
+    assert cols_after == cols_before
+    out = tmp_path / "out.ods"
+    table.save(out)
+    reread = ODSReader(out).sheet("Feuille1")
+    assert reread.size == s.size
+    assert reread[0, 0].value == first_values[0]
+    assert reread[6, 0].value == first_values[1]
+
+
+def test_save_round_trip_after_insertions(writable_reader, tmp_path):
+    s = writable_reader.sheet("Sheet1")
+    s.insert_rows(1, 2)
+    s.insert_column(0)
+    s[1, 0].value = "inserted"
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+    reread = ODSReader(out).sheet("Sheet1")
+    assert reread.size == s.size
+    assert reread[0, 1].value == "texte simple"
+    assert reread[1, 0].value == "inserted"
+    assert reread[3, 1].value == 3.4
+    assert reread["B7"].formula_friendly == "=SUM(B4:B5)"
 
 def test_delete_sheet(writable_reader):
     r = writable_reader

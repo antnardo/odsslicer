@@ -4,13 +4,13 @@
 # module, guarded by runtime checks mypy can't see through - silencing that
 # one error class here beats dozens of value-free asserts/casts. Every other
 # error class, and all signatures, remain fully checked.)
-"""Sheet: numpy-style indexing over one table, structural edits (grow, delete,
-copy, sort, merge), pivot definitions, row/column/table style access."""
+"""Sheet: numpy-style indexing over one table, structural edits (grow, insert,
+delete, copy, sort, merge), pivot definitions, row/column/table style access."""
 
 import copy
 import functools
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, Tuple, Union, cast
 
 from bs4 import BeautifulSoup, Tag
 
@@ -26,8 +26,10 @@ from .constants import (
 from .formulas import (
     _PIVOT_DATA_FUNCTIONS,
     _SHEET_QUALIFIED_RE,
-    _adjust_odf_formula_for_deletion,
+    _deletion_remap,
+    _insertion_remap,
     _quote_odf_sheet_name,
+    _remap_odf_formula_references,
     _shift_odf_formula,
     _unquote_odf_sheet_name,
 )
@@ -38,6 +40,15 @@ if TYPE_CHECKING:
     from .reader import ODSReader
 
 logger = logging.getLogger("odsslicer")
+
+
+def _set_repeat(tag: Tag, attr: str, n: int) -> None:
+    """Set a `table:number-*-repeated` attribute, omitting it for 1 (its
+    default) the way applications write it."""
+    if n == 1:
+        tag.attrs.pop(attr, None)
+    else:
+        tag.attrs[attr] = str(n)
 
 
 class Sheet:
@@ -743,7 +754,7 @@ class Sheet:
         elsewhere in the document that point at this sheet (this sheet's
         own formulas, and any other sheet's formula explicitly qualified
         with this sheet's name) are shifted in a single pass so they keep
-        pointing at the same cells - see `_adjust_formulas_for_deletion`
+        pointing at the same cells - see `_remap_formula_references`
         for what that does and doesn't cover. Raises `IndexError` if any
         index is out of range (nothing is removed in that case)."""
         targets = sorted(set(rows))
@@ -768,7 +779,7 @@ class Sheet:
                 cell.row = r
         self.n_rows = len(self.rows)
         self.size = (self.n_rows, self.n_cols)
-        self._adjust_formulas_for_deletion(deleted_rows=targets)
+        self._remap_formula_references(_deletion_remap(deleted_rows=targets))
 
     def delete_column(self, col: int) -> None:
         """Remove logical column `col` entirely, shifting every column to
@@ -776,7 +787,7 @@ class Sheet:
 
         Any merge intersecting `col` is undone first, same as
         `delete_row`; formula references elsewhere in the document are
-        adjusted the same way too - see `_adjust_formulas_for_deletion`.
+        adjusted the same way too - see `_remap_formula_references`.
         """
         if col < 0 or col >= self.n_cols:
             raise IndexError(f"column {col} out of range (sheet has {self.n_cols} columns)")
@@ -796,24 +807,205 @@ class Sheet:
                 self.rows[r][c].col = c
         self.n_cols -= 1
         self.size = (self.n_rows, self.n_cols)
-        self._adjust_formulas_for_deletion(deleted_cols=[col])
+        self._remap_formula_references(_deletion_remap(deleted_cols=[col]))
 
-    def _adjust_formulas_for_deletion(
-        self, deleted_rows: "list[int] | None" = None, deleted_cols: "list[int] | None" = None
-    ) -> None:
-        """After physically removing the (sorted) `deleted_rows` (or
-        `deleted_cols`) from this sheet, rewrite every formula in the whole
-        document - this sheet's own, and any other sheet's formula that
-        references into this sheet by name - so a reference past the
-        removed positions still points at the same cell it did before
-        (exactly one of the two is given, matching
-        `delete_rows`/`delete_column`).
+    def insert_row(self, row: int) -> None:
+        """Insert one blank row before logical row `row` - equivalent to
+        `insert_rows(row, 1)`, see there."""
+        self.insert_rows(row, 1)
 
-        A reference that pointed *exactly* at a removed row/column is
-        left unchanged rather than modeled as a `#REF!`-style error - see
-        the README's known limitations. No-op if this sheet has no owning
-        `ODSReader` (nothing else to scan). One full-document sweep per
-        call - which is why `delete_rows` batches N rows into one call.
+    def insert_rows(self, row: int, count: int = 1) -> None:
+        """Insert `count` blank rows before logical row `row`, shifting it
+        and every row below it down (`sheet.size` grows accordingly);
+        `row == sheet.n_rows` appends them at the bottom.
+
+        Behaves like a spreadsheet's "insert rows above":
+
+        - formula references anywhere in the document that point at this
+          sheet (its own formulas, and other sheets' formulas qualified
+          with its name) move with the cells they point at - a range that
+          straddles the insertion point stretches, see
+          `_remap_formula_references`;
+        - a merged range straddling the insertion point grows to include
+          the new rows rather than being undone.
+
+        The new rows are blank: no values, no cell or row styles (copy
+        formatting onto them with `copy` if needed). A formula whose
+        references get rewritten loses its cached result, like any formula
+        odsslicer writes - a spreadsheet recomputes it on open, and
+        `save(recalculate=True)` fills it back in. Raises `IndexError` if
+        `row` is out of `0..n_rows`, `ValueError` if `count < 1`."""
+        if count < 1:
+            raise ValueError(f"count must be at least 1, got {count}")
+        if row < 0 or row > self.n_rows:
+            raise IndexError(f"row {row} out of range for insertion (sheet has {self.n_rows} rows)")
+        straddling = [
+            (master.row, master.col, span_rows, span_cols)
+            for master, span_rows, span_cols in self._merge_masters()
+            if master.row < row < master.row + span_rows
+        ]
+
+        if row == self.n_rows:
+            self.grow_to(row + count - 1, max(self.n_cols, 1) - 1)
+        else:
+            self._unrepeat_row(row)
+            anchor = cast(Tag, self.rows[row][0].cell.parent)
+            template = self._empty_row_template(self.n_cols)
+            # whatever sits past the data in the XML (typically an empty row
+            # repeated up to the application's maximum, see `load`) goes, or
+            # the inserted rows would push the document over that maximum
+            self._discard_stray_rows()
+            new_rows = []
+            for k in range(count):
+                row_tag = copy.deepcopy(template)
+                anchor.insert_before(row_tag)
+                new_rows.append(
+                    [Cell(t, row=row + k, col=c, sheet=self) for c, t in enumerate(row_tag.find_all(TAG_CELL))]
+                )
+            self.rows[row:row] = new_rows
+            for r in range(row + count, len(self.rows)):
+                for cell in self.rows[r]:
+                    cell.row = r
+            self.n_rows = len(self.rows)
+            self.size = (self.n_rows, self.n_cols)
+
+        for m_row, m_col, span_rows, span_cols in straddling:
+            self._grow_merge(m_row, m_col, span_rows + count, span_cols)
+        self._remap_formula_references(_insertion_remap(at_row=row, count=count))
+
+    def insert_column(self, col: int) -> None:
+        """Insert one blank column before logical column `col` - equivalent
+        to `insert_columns(col, 1)`, see there."""
+        self.insert_columns(col, 1)
+
+    def insert_columns(self, col: int, count: int = 1) -> None:
+        """Insert `count` blank columns before logical column `col`,
+        shifting it and every column to its right (`sheet.size` grows
+        accordingly); `col == sheet.n_cols` appends them on the right.
+
+        Same semantics as `insert_rows`: formula references follow the cells
+        they point at, a merged range straddling the insertion point grows.
+        The column definitions (`<table:table-column>`, which carry widths
+        and visibility) are shifted too, so every existing column keeps its
+        own width; the new columns get default ones. Raises `IndexError` if
+        `col` is out of `0..n_cols`, `ValueError` if `count < 1`."""
+        if count < 1:
+            raise ValueError(f"count must be at least 1, got {count}")
+        if col < 0 or col > self.n_cols:
+            raise IndexError(f"column {col} out of range for insertion (sheet has {self.n_cols} columns)")
+        straddling = [
+            (master.row, master.col, span_rows, span_cols)
+            for master, span_rows, span_cols in self._merge_masters()
+            if master.col < col < master.col + span_cols
+        ]
+
+        # rows sharing one repeated <table:table-row> would otherwise each
+        # insert their new cells into that same tag
+        for r in range(self.n_rows):
+            self._unrepeat_row(r)
+        for r in range(self.n_rows):
+            new_tags = [self._empty_cell_template() for _ in range(count)]
+            if col < self.n_cols:
+                self._unrepeat_col(r, col)
+                anchor = self.rows[r][col].cell
+                for tag in new_tags:
+                    anchor.insert_before(tag)
+            else:
+                previous = self.rows[r][-1].cell
+                for tag in new_tags:
+                    previous.insert_after(tag)
+                    previous = tag
+            self.rows[r][col:col] = [Cell(t, row=r, col=col + k, sheet=self) for k, t in enumerate(new_tags)]
+            for c in range(col + count, len(self.rows[r])):
+                self.rows[r][c].col = c
+        if self.n_rows > 0:
+            self.n_cols += count
+            self.size = (self.n_rows, self.n_cols)
+        self._insert_column_definitions(col, count)
+
+        for m_row, m_col, span_rows, span_cols in straddling:
+            self._grow_merge(m_row, m_col, span_rows, span_cols + count)
+        self._remap_formula_references(_insertion_remap(at_col=col, count=count))
+
+    def _merge_masters(self) -> "list[tuple[Cell, int, int]]":
+        """Every merge master on the sheet, with its row and column spans."""
+        return [
+            (
+                cell,
+                int(cell.attrs.get("table:number-rows-spanned", "1")),
+                int(cell.attrs.get("table:number-columns-spanned", "1")),
+            )
+            for cells_row in self.rows
+            for cell in cells_row
+            if cell.cell.name != "covered-table-cell" and self._is_merge_master(cell)
+        ]
+
+    def _grow_merge(self, row: int, col: int, span_rows: int, span_cols: int) -> None:
+        """Widen the merge whose master sits at (row, col) to the new spans,
+        turning every cell newly inside it into a covered cell - the
+        insertion counterpart of `_unmerge`."""
+        self._unrepeat_row(row)
+        self._unrepeat_col(row, col)
+        master = self.rows[row][col]
+        master.cell.attrs["table:number-rows-spanned"] = str(span_rows)
+        master.cell.attrs["table:number-columns-spanned"] = str(span_cols)
+        master.__init__(master.cell, row=row, col=col, sheet=self)  # type: ignore[misc]
+        for r in range(row, row + span_rows):
+            for c in range(col, col + span_cols):
+                covered = self.rows[r][c]
+                if (r, c) == (row, col) or covered.cell.name == "covered-table-cell":
+                    continue
+                covered.cell.name = "covered-table-cell"
+                covered.__init__(covered.cell, row=r, col=c, sheet=self)  # type: ignore[misc]
+
+    def _insert_column_definitions(self, col: int, count: int) -> None:
+        """Insert `count` blank `<table:table-column>` definitions before
+        logical column `col`, so existing columns keep their widths.
+
+        Applications declare definitions up to the sheet's maximum width
+        (an empty one repeated thousands of times after the last used
+        column): that trailing filler gives back the columns just added, or
+        the document would exceed the maximum and be truncated on open. No-op
+        when the definitions don't reach `col` at all."""
+        definitions = self.table.find_all("table:table-column", recursive=False)
+        seen = 0
+        for tag in definitions:
+            n = int(tag.attrs.get("table:number-columns-repeated", "1"))
+            if seen <= col < seen + n:
+                if col > seen:  # split the repeated definition at `col`
+                    tail = copy.deepcopy(tag)
+                    _set_repeat(tag, "table:number-columns-repeated", col - seen)
+                    _set_repeat(tail, "table:number-columns-repeated", seen + n - col)
+                    tag.insert_after(tail)
+                    tag = tail
+                new_tag = _blank_template(self.table, "table:table-column")
+                _set_repeat(new_tag, "table:number-columns-repeated", count)
+                tag.insert_before(new_tag)
+                break
+            seen += n
+        else:
+            return
+        *head, last = self.table.find_all("table:table-column", recursive=False)
+        last_start = sum(int(t.attrs.get("table:number-columns-repeated", "1")) for t in head)
+        last_n = int(last.attrs.get("table:number-columns-repeated", "1"))
+        # only a filler lying entirely past the data (`n_cols` already counts
+        # the new columns) gives columns back, and it must keep at least one
+        if last is not new_tag and last_start >= self.n_cols and last_n > count:
+            _set_repeat(last, "table:number-columns-repeated", last_n - count)
+
+    def _remap_formula_references(self, remap: "Callable[[int, int], tuple[int, int]]") -> None:
+        """After a structural edit of this sheet (rows or columns deleted or
+        inserted), rewrite every formula in the whole document - this
+        sheet's own, and any other sheet's formula that references into
+        this sheet by name - through `remap` (see `_deletion_remap`/
+        `_insertion_remap`), so each reference still points at the cell it
+        did before.
+
+        Only formulas are covered: pivot-table source ranges, named ranges,
+        conditional-format and validation ranges are left as they are. No-op
+        if this sheet has no owning `ODSReader` (nothing else to scan). One
+        full-document sweep per call - which is why `delete_rows` batches N
+        rows into one call.
         """
         if self.reader is None:
             return
@@ -822,9 +1014,7 @@ class Sheet:
                 for cell in row:
                     if cell._formula is None:
                         continue
-                    adjusted = _adjust_odf_formula_for_deletion(
-                        cell._formula, self.name, sheet.name, deleted_rows, deleted_cols
-                    )
+                    adjusted = _remap_odf_formula_references(cell._formula, self.name, sheet.name, remap)
                     if adjusted != cell._formula:
                         cell.formula = adjusted
 

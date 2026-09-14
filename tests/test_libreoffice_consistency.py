@@ -237,6 +237,52 @@ def test_libreoffice_reads_back_a_sheet_after_delete_row_and_column(
 
 
 @requires_soffice
+def test_libreoffice_computes_formulas_and_merges_after_insertions(
+    writable_reader, tmp_path, libreoffice_export
+):
+    # the rewritten references must mean, to LibreOffice itself, the cells
+    # they meant before - checked through the results it computes - and a
+    # merge straddling the insertion point must come out grown
+    r = writable_reader
+    s1, s2 = r.sheet("Sheet1"), r.sheet("Sheet2Repeat")
+    s1["C1"].formula = "SUM(A2:A3)+$A$7"  # 3.4 + 3 + 2 = 8.4
+    s2["A1"].formula = "Sheet1.A6*10"  # 2 * 10 = 20
+    fusion = r.sheet("SheetFusion")
+    s1.insert_rows(2, 3)  # inside A2:A3, above A6 and A7
+    s1.insert_column(0)
+    fusion.insert_row(3)  # inside A3:A5
+    out = tmp_path / "out.ods"
+    r.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    assert re.search(r'table:formula="of:=SUM\(\[\.B2:\.B6\]\)\+\[\.\$B\$10\]"[^>]*office:value="8.4"', xml)
+    assert re.search(r'table:formula="of:=\[Sheet1\.B9\]\*10"[^>]*office:value="20"', xml)
+    assert re.search(r'table:number-rows-spanned="4"', xml)
+
+
+@requires_soffice
+def test_libreoffice_opens_a_full_grid_file_after_insertions_without_truncating(tmp_path, libreoffice_export):
+    # LibreOffice files declare the full grid through filler rows/columns;
+    # inserting into one must not push it past LibreOffice's maximum, which
+    # would make it drop data on open
+    from conftest import FIXTURES_DIR
+
+    table = ODSReader(FIXTURES_DIR / "wild" / "libreoffice26_linux_streets.ods")
+    sheet = table.sheet("Feuille1")
+    last_value = sheet[sheet.n_rows - 1, sheet.n_cols - 1].value
+    sheet.insert_rows(1, 50)
+    sheet.insert_columns(1, 3)
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    out = src_dir / "out.ods"
+    table.save(out)
+
+    reopened = ODSReader(libreoffice_export(out, "ods")).sheet("Feuille1")
+    assert reopened.size == sheet.size
+    assert reopened[sheet.n_rows - 1, sheet.n_cols - 1].value == last_value
+
+
+@requires_soffice
 def test_libreoffice_reads_back_a_copy(writable_reader, tmp_path, libreoffice_export):
     s = writable_reader.sheet("Sheet1")
     s["C1"].formula = "A2+A3"
