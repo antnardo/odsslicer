@@ -47,17 +47,26 @@ class ArrayValues:
     def _get_size(self) -> tuple[int, ...]:
         size = []
         cut = self.array
-        for d in range(self.dimension):
+        for _ in range(self.dimension):
             size.append(len(cut))
+            if not cut:
+                break  # an empty level has nothing deeper to measure
             cut = cut[0]
         return tuple(size)
 
     @classmethod
     def _get_dimension(cls, array: object) -> int:
+        """How deeply the selection is nested: 0 for a single `Cell`, 1 for a
+        row/column, 2 for a block - measured from the first element, since
+        every level holds the same kind."""
         try:
             return cls._get_dimension(array[0]) + 1  # type: ignore[index]
-        except (TypeError, IndexError):
-            return 0
+        except IndexError:
+            # an empty list is an empty *selection* - every row of a sheet
+            # with no rows, say - so it is a (zero-length) row, not a cell
+            return 1
+        except TypeError:
+            return 0  # a Cell: not indexable, so this is the bottom
 
     def _iter_cells(self) -> "Iterator[Cell]":
         """Yield every underlying `Cell`, regardless of this selection's

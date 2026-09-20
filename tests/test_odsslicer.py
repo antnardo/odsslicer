@@ -467,6 +467,33 @@ def test_empty_text_p_reads_as_empty_string_not_the_word_none():
     assert str(cell) == ""
 
 
+def test_reading_a_whole_empty_sheet_gives_an_empty_selection(reader):
+    # regression: an empty list was taken for a single cell (dimension 0), so
+    # reading every cell of a sheet with no rows - what a plain scan over a
+    # workbook does - crashed with AttributeError on a real file
+    s = reader.sheet("SheetEmpty")
+    assert s.size == (0, 0)
+    for selection in (s[:, :], s[:], s[0:0, 0:0]):
+        assert selection.dimension == 1
+        assert selection.size == (0,)
+        assert selection.to_list() == []
+        assert selection.to_numpy().shape == (0,)
+
+
+def test_writing_to_an_empty_selection_does_nothing(writable_reader):
+    writable_reader.sheet("SheetEmpty")[:, :].value = 1  # no cell to write to
+
+
+def test_a_row_of_an_empty_sheet_keeps_its_two_dimensions(reader):
+    # [[]] is a one-row selection of zero cells, not a zero-row one
+    from odsslicer.classes import ArrayValues
+
+    selection = ArrayValues([[]])
+    assert selection.dimension == 2
+    assert selection.size == (1, 0)
+    assert selection.to_list() == [[]]
+
+
 def test_multi_paragraph_cell_reads_every_line():
     # regression: a cell holding several lines (Ctrl+Enter in a spreadsheet) is
     # one <text:p> per line in ODF - the reader only looked at the first one,

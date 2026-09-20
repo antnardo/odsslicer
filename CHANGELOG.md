@@ -5,6 +5,15 @@ All notable changes to `odsslicer` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
 still change between minor versions.
 
+## [Unreleased]
+
+### Fixed
+- **Reading every cell of an empty sheet no longer crashes.** A selection holding no cells at
+  all (`sheet[:, :]` on a sheet with no rows) was mistaken for a single cell, so `.to_list()`
+  raised `AttributeError: 'list' object has no attribute 'value'` — hit by any plain scan over
+  a workbook that happens to contain one empty sheet. Such a selection is now a zero-length
+  row: `.to_list()` returns `[]`, `.size` is `(0,)`, and writing to it does nothing.
+
 ## [0.12.1] — 2026-09-20
 
 ### Fixed
