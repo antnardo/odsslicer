@@ -118,7 +118,8 @@ stays 2D; see `to_vector()` below to flatten it).
 cell = sheet["A1"]
 cell.value          # typed value: str / float / bool / datetime.date / datetime.time / None
 cell.text           # the text as displayed in the spreadsheet (str, or None)
-str(cell)            # == cell.text (or "None")
+str(cell)            # == cell.text (or "None"); a multi-line cell reads back
+                     # as "line 1\nline 2…", one ODF paragraph per line
 cell.format          # "string" / "float" / "percentage" / "currency" / "date" / "time" / "boolean" / None
 cell.row, cell.col   # 0-indexed position
 cell.address         # spreadsheet-style address, e.g. "A1", "AZ12"
@@ -130,6 +131,11 @@ cell.is_empty        # True if no value/text/format/formula is set
 `+`, `math.trunc/ceil/floor`) and comparisons (`==`, `<`, `>`, `<=`, `>=`), all operating on
 `cell.value`. Comparing an empty cell (`value=None`) to a numeric cell raises `TypeError`, just
 like plain Python (`None < 3.4`).
+
+A cell holding several lines (Ctrl+Enter in a spreadsheet) is one `<text:p>` paragraph per
+line in ODF — `cell.text` and a string `cell.value` join them with `\n`, and writing a value
+containing `\n` writes one paragraph per line in return (a literal newline *inside* a
+paragraph is plain whitespace to ODF, so it would not survive).
 
 Available formats are listed in `odsslicer.FORMATS` (ODF format -> conversion callable).
 

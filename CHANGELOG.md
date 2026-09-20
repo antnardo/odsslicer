@@ -5,6 +5,19 @@ All notable changes to `odsslicer` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
 still change between minor versions.
 
+## [Unreleased]
+
+### Fixed
+- **A cell holding several lines no longer reads back as its first line only.** ODF stores a
+  multi-line cell (Ctrl+Enter in a spreadsheet) as one `<text:p>` per line; `cell.text` — and
+  a string `cell.value` — only looked at the first one, silently dropping the rest of what the
+  spreadsheet displays. All the paragraphs are now joined with `\n`, a comment's own
+  paragraphs still excluded.
+- Writing a value containing `\n` now writes one paragraph per line, the way applications do:
+  a literal newline inside a single paragraph is plain whitespace to ODF and would not
+  survive a round trip through a stricter reader. Rewriting a cell with fewer lines drops the
+  paragraphs left over.
+
 ## [0.12.0] — 2026-09-14
 
 ### Added

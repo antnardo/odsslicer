@@ -467,6 +467,74 @@ def test_empty_text_p_reads_as_empty_string_not_the_word_none():
     assert str(cell) == ""
 
 
+def test_multi_paragraph_cell_reads_every_line():
+    # regression: a cell holding several lines (Ctrl+Enter in a spreadsheet) is
+    # one <text:p> per line in ODF - the reader only looked at the first one,
+    # silently dropping the rest of a cell LibreOffice shows in full
+    xml = (
+        '<root xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
+        'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+        'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0">'
+        '<table:table-cell office:value-type="string">'
+        "<text:p>ligne 1</text:p><text:p>ligne 2</text:p><text:p>ligne 3</text:p>"
+        "</table:table-cell></root>"
+    )
+    from bs4 import BeautifulSoup
+
+    tag = BeautifulSoup(xml, "xml").find("table:table-cell")
+    cell = Cell(tag)
+    assert cell.text == "ligne 1\nligne 2\nligne 3"
+    assert cell.value == "ligne 1\nligne 2\nligne 3"
+
+
+def test_a_comments_paragraphs_are_not_read_as_the_cells_text():
+    # the cell's own paragraphs are its direct children only: an annotation
+    # carries its own text:p, which must stay out of cell.text
+    xml = (
+        '<root xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
+        'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+        'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0">'
+        '<table:table-cell office:value-type="string">'
+        "<office:annotation><text:p>note 1</text:p><text:p>note 2</text:p></office:annotation>"
+        "<text:p>valeur</text:p>"
+        "</table:table-cell></root>"
+    )
+    from bs4 import BeautifulSoup
+
+    tag = BeautifulSoup(xml, "xml").find("table:table-cell")
+    assert Cell(tag).text == "valeur"
+
+
+def test_writing_a_multi_line_value_writes_one_paragraph_per_line(writable_reader, tmp_path):
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].value = "ligne 1\nligne 2\nligne 3"
+    assert s["A1"].text == "ligne 1\nligne 2\nligne 3"
+    # ODF has no newline *inside* a paragraph (it is plain whitespace there),
+    # so each line must be its own <text:p>, the way applications write it
+    assert [p.get_text() for p in s["A1"].cell.find_all("text:p", recursive=False)] == [
+        "ligne 1",
+        "ligne 2",
+        "ligne 3",
+    ]
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+    assert ODSReader(out).sheet("Sheet1")["A1"].value == "ligne 1\nligne 2\nligne 3"
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [("a\nb\nc", "x"), ("x", "a\nb\nc"), ("a\nb", "c\nd"), ("a\nb", "")],
+)
+def test_rewriting_a_cell_leaves_no_stale_paragraph(writable_reader, first, second):
+    # going from more lines to fewer must drop the extra paragraphs, not keep
+    # them hanging around below the new value
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].value = first
+    s["A1"].value = second
+    assert s["A1"].value == second
+    assert len(s["A1"].cell.find_all("text:p", recursive=False)) == len(second.split("\n"))
+
+
 def test_rich_text_with_a_span_reads_correctly_instead_of_none():
     # regression: same root cause as above, but for real (non-empty) text split
     # across several children - e.g. "1er / 20" stored as "1" + <text:span>er</text:span>

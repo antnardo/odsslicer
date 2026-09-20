@@ -366,6 +366,24 @@ def test_libreoffice_opens_a_value_rendered_from_a_real_format_with_no_example(t
 
 
 @requires_soffice
+def test_libreoffice_round_trips_a_multi_line_cell(writable_reader, tmp_path, libreoffice_export):
+    # a multi-line cell means one <text:p> per line: check LibreOffice keeps
+    # all of them (it rewrites the cell its own way on export), and that
+    # odsslicer reads back what LibreOffice itself wrote
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].value = "ligne 1\nligne 2\nligne 3"
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    out = src_dir / "out.ods"
+    writable_reader.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    assert "<text:p>ligne 1</text:p><text:p>ligne 2</text:p><text:p>ligne 3</text:p>" in xml
+    reopened = ODSReader(libreoffice_export(out, "ods")).sheet("Sheet1")
+    assert reopened["A1"].value == "ligne 1\nligne 2\nligne 3"
+
+
+@requires_soffice
 def test_libreoffice_reads_back_a_comment_without_corrupting_the_value(
     writable_reader, tmp_path, libreoffice_export
 ):

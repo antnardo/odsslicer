@@ -258,19 +258,19 @@ class Cell:
             self.raw_value = self.attrs.get("office:boolean-value")
         else:
             self.raw_value = self.attrs.get("office:value", None)
-        # recursive=False: a cell's own value text:p is always a direct child -
-        # an unscoped find() would instead match one nested inside an
-        # office:annotation (a cell comment, see Cell.comment) if there is one
-        p = self.cell.find("text:p", recursive=False)
-        if p is not None:
-            # `p.string` is only ever a plain str when text:p has EXACTLY one text
-            # child; it's None both for a genuinely empty <text:p/> (e.g. a formula
-            # whose cached result is "") and for one with several children (spans,
-            # line breaks...) - `str(None)` would then wrongly become the literal
-            # string "None" instead of the cell's actual (possibly empty) text.
-            self.text: "str | None" = p.get_text()
-        else:
-            self.text = None
+        # ODF has no newline inside a paragraph: a multi-line cell is one
+        # <text:p> per line (what applications write when you type
+        # Ctrl+Enter), so every paragraph counts, joined back with "\n".
+        # recursive=False: a cell's own value paragraphs are always direct
+        # children - an unscoped find_all() would also match those nested
+        # inside an office:annotation (a cell comment, see Cell.comment).
+        paragraphs = self.cell.find_all("text:p", recursive=False)
+        # `p.string` is only ever a plain str when text:p has EXACTLY one text
+        # child; it's None both for a genuinely empty <text:p/> (e.g. a formula
+        # whose cached result is "") and for one with several children (spans,
+        # line breaks...) - `str(None)` would then wrongly become the literal
+        # string "None" instead of the cell's actual (possibly empty) text.
+        self.text: "str | None" = "\n".join(p.get_text() for p in paragraphs) if paragraphs else None
         if self.format == "string":
             self._value = self.text
         else:
@@ -612,26 +612,37 @@ class Cell:
         return None
 
     def _set_text(self, text: "str | None") -> None:
-        p = self.cell.find("text:p", recursive=False)  # see __init__'s note on scoping
+        paragraphs = self.cell.find_all("text:p", recursive=False)  # see __init__'s note on scoping
         if text is None:
-            if p is not None:
+            for p in paragraphs:
                 p.decompose()
             self.text = None
             return
-        if p is None:
-            # An existing text:p elsewhere in the document is preferred as a
-            # template (keeps whatever incidental formatting bs4/lxml would
-            # otherwise not know how to reproduce), falling back to building
-            # one from scratch (see `_new_qualified_tag`) if there is none.
-            template = self.cell.find_previous("text:p") or self.cell.find_next("text:p")
-            if template is None:
-                p = _new_qualified_tag("text:p")
-            else:
-                p = copy.copy(template)
-                p.string = ""
-            self.cell.append(p)
-        p.string = text
+        # one paragraph per line, the only way ODF represents a multi-line
+        # cell (a literal "\n" inside a paragraph is just whitespace there)
+        lines = text.split("\n")
+        for extra in paragraphs[len(lines):]:
+            extra.decompose()
+        for i, line in enumerate(lines):
+            p = paragraphs[i] if i < len(paragraphs) else self._new_text_paragraph()
+            p.string = line
         self.text = text
+
+    def _new_text_paragraph(self) -> Tag:
+        """A fresh, empty `<text:p>` appended to this cell.
+
+        An existing text:p elsewhere in the document is preferred as a
+        template (keeps whatever incidental formatting bs4/lxml would
+        otherwise not know how to reproduce), falling back to building one
+        from scratch (see `_new_qualified_tag`) if there is none."""
+        template = self.cell.find_previous("text:p") or self.cell.find_next("text:p")
+        if template is None:
+            p = _new_qualified_tag("text:p")
+        else:
+            p = cast(Tag, copy.copy(template))
+            p.string = ""
+        self.cell.append(p)
+        return p
 
     def __call__(self) -> Any:
         return self.value
