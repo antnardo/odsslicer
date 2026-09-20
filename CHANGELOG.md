@@ -5,7 +5,7 @@ All notable changes to `odsslicer` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
 still change between minor versions.
 
-## [Unreleased]
+## [0.12.1] — 2026-09-20
 
 ### Fixed
 - **A cell holding several lines no longer reads back as its first line only.** ODF stores a
@@ -178,6 +178,7 @@ typed cell values (text, number, percentage, currency, date, time, boolean), for
 repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
+[0.12.1]: https://github.com/antnardo/odsslicer/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/antnardo/odsslicer/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/antnardo/odsslicer/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/antnardo/odsslicer/compare/v0.10.0...v0.11.0
