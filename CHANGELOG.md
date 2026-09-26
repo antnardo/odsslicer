@@ -7,6 +7,22 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Documentation
+
+- **Recalculating from LibreOffice's command line** (DOCS.md, section 7):
+  `soffice --headless --convert-to ods`, how to force a full recalculation on load (the
+  profile's *Recalculation on File Load* setting, `ODFRecalcMode`, set through a throwaway
+  `-env:UserInstallation` profile), why the result has to be written elsewhere and moved back
+  (converting onto the input fails, yet `soffice` exits with status 0), and when to prefer
+  `recalculate()`, which also refreshes pivot tables.
+- **References to other workbooks come back as `Err:540`** after any headless recalculation,
+  `recalculate()` and `--convert-to` alike — and `INDIRECT()` ones even after a plain
+  conversion, since volatile formulas are recomputed on every load. No command-line option or
+  configuration setting lifts it: `--convert-to` never allows link updates. What does, and is
+  now documented: a script that loads the workbook with `UpdateDocMode=FULL_UPDATE`, from a
+  folder the profile trusts, and dispatches `.uno:UpdateTableLinks` before recalculating. The
+  `recalculate()` docstring points to it.
+
 ## [0.12.3] — 2026-09-26
 
 ### Fixed

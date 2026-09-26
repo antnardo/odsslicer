@@ -49,6 +49,9 @@ sheet = table.sheet("Sheet1")
    - [Formula references follow structural edits](#formula-references-follow-structural-edits)
 6. [Pivot tables](#6-pivot-tables)
 7. [Recalculating with LibreOffice](#7-recalculating-with-libreoffice)
+   - [From the command line](#from-the-command-line)
+   - [Which one to use](#which-one-to-use)
+   - [References to other workbooks](#references-to-other-workbooks)
 8. [Styles](#8-styles)
    - [Reading a cell's style](#reading-a-cells-style)
    - [Writing cell styles](#writing-cell-styles)
@@ -739,6 +742,136 @@ times out (`timeout=120` seconds by default), or runs but doesn't rewrite the fi
 a silently-not-executed script shows up — e.g. when another LibreOffice instance already owns
 the profile).
 
+### From the command line
+
+LibreOffice's own command line does a similar round trip without Python: `--convert-to` loads
+each file and saves it again, and an `.ods` converted to `.ods` comes out with the results of
+its formulas cached in it:
+
+```bash
+soffice --headless --convert-to ods --outdir recalculated/ workbook.ods
+```
+
+`soffice` is `/Applications/LibreOffice.app/Contents/MacOS/soffice` on macOS, `soffice` or
+`libreoffice` on Linux; `--convert-to` has been there since the LibreOffice 3.x series. What
+follows was verified with LibreOffice 25.8.4 on macOS, and against its source code:
+
+- **It never overwrites its input.** The result goes to `--outdir` (the current directory by
+  default) under the input's name, and pointing `--outdir` at the input's own folder fails with
+  `Error: Please verify input parameters... (SfxBaseModel::impl_store <…> failed:
+  0x4c0c(Error Area:Sfx Class:Write Code:12))` — while `soffice` still exits with status 0.
+  Convert into another folder, check that the output exists, then move it over the original.
+- **What gets recalculated on load.** Formulas without a cached result — every formula whose
+  text `odsslicer` rewrote — and volatile functions (`NOW()`, `RAND()`, `INDIRECT()`,
+  `OFFSET()`…) always are. The others depend on *Tools > Options > LibreOffice Calc > Formula >
+  Recalculation on File Load > ODF spreadsheet (not saved by LibreOffice)*, which defaults to
+  *Never recalculate*. *Always recalculate* (`ODFRecalcMode` = `0` in the profile) forces a
+  full recalculation of every ODF file on load — files saved by LibreOffice included, whatever
+  the label says: only *Prompt user* looks at which program saved the file. LibreOffice 25.8.4
+  recomputed every formula even without it in our tests, but its documentation says a file it
+  saved itself keeps its cached results under *Never recalculate*: set *Always recalculate*
+  rather than rely on either. No command-line switch sets it; it lives in the user profile.
+- **A profile of its own.** `-env:UserInstallation=file:///…` points LibreOffice at a separate
+  profile: that is how to pass the setting above without changing your own, and it keeps the
+  run independent of a LibreOffice already open on your desktop.
+- **Pivot tables are not refreshed**, *Always recalculate* or not: their output area stays
+  empty. Only `recalculate()` refreshes them.
+- **References to other workbooks come out as `Err:540`** — see
+  [References to other workbooks](#references-to-other-workbooks).
+
+A complete run, with a throwaway profile set to *Always recalculate* and the result moved back
+in place:
+
+```bash
+profile=$(mktemp -d)
+mkdir -p "$profile/user"
+cat > "$profile/user/registrymodifications.xcu" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<item oor:path="/org.openoffice.Office.Calc/Formula/Load"><prop oor:name="ODFRecalcMode" oor:op="fuse"><value>0</value></prop></item>
+</oor:items>
+EOF
+out=$(mktemp -d)
+soffice "-env:UserInstallation=file://$profile" --headless --convert-to ods --outdir "$out" workbook.ods
+test -s "$out/workbook.ods" && mv "$out/workbook.ods" workbook.ods
+rm -rf "$profile" "$out"
+```
+
+### Which one to use
+
+| | `recalculate()` / `save(recalculate=True)` | `soffice --convert-to ods` |
+| --- | --- | --- |
+| Runs from | Python, right after `odsslicer` writes | any shell, Makefile or CI job |
+| Formulas | all recalculated (`calculateAll()`) | all, guaranteed only with *Always recalculate* in the profile |
+| Pivot tables | refreshed | left empty |
+| Output | the file itself, rewritten in place | a new file in `--outdir`, to move back yourself |
+| Failure | raises `RuntimeError` or `FileNotFoundError` | printed, exit status 0 even when nothing was written |
+| Profile | throwaway, set up for you | your own, unless you pass `-env:UserInstallation` |
+| References to other workbooks | `Err:540` | `Err:540` |
+
+Use `recalculate()` whenever the file comes out of Python code anyway. The command line suits
+shell pipelines, batches (`--convert-to` takes several files in one LibreOffice start) and
+files `odsslicer` never touched.
+
+### References to other workbooks
+
+A workbook can pull cells from another file, either written out in a formula
+(`='file:///…/students.ods'#$Students.B2`) or built at run time, as in `OFFSET(INDIRECT($B$1);…)`
+with the address in `B1`. Recalculated headless — by `recalculate()` as by
+`soffice --convert-to` — those cells come out as **`Err:540`** ("External content disabled"),
+and `odsslicer` then reads the string `"Err:540"`. This happens even to a file that displayed
+them correctly when it was last saved from LibreOffice:
+
+- LibreOffice reads another file for a formula only once link updates are allowed for the
+  document — in the application, by the *Allow updating* button of the "Automatic update of
+  external links has been disabled." bar. Until then, a formula that needs the other file
+  evaluates to `Err:540`. Neither headless route allows updates.
+- `INDIRECT()` and `OFFSET()` are volatile, recomputed on every load: a plain conversion, with
+  no recalculation option at all, already replaces their cached results with `Err:540`.
+- When at least one formula writes the reference out, LibreOffice also saves the values it read
+  from that file into the workbook — a hidden sheet named after the file, which `sheets_names`
+  lists — and reuses them instead of reading the file, stale or not. A workbook that reaches
+  the other file only through `INDIRECT()` saves no such copy.
+
+No command-line switch changes this, and no configuration does either: `--convert-to` loads
+files without an `UpdateDocMode`, which Calc treats as "never update links" whatever the
+profile says. *Update links when opening: Always (from trusted locations)*, the *Low* macro
+security level and a trusted file location, all set together, still gave `Err:540` with
+`--convert-to`: they only matter to a load that asks for link updates.
+
+A script that loads the workbook itself, the way `recalculate()` does, can have the links
+updated. Verified with LibreOffice 25.8.4, it takes:
+
+1. `UpdateDocMode` = `3` (`FULL_UPDATE`) among the load arguments;
+2. the workbook's own folder among the profile's trusted file locations — `SecureURL` under
+   `/org.openoffice.Office.Common/Security/Scripting`, a list of folder URLs. LibreOffice
+   updates links without asking only for a document in a trusted location (or at the *Low*
+   macro security level, which trusts everything); anywhere else `FULL_UPDATE` falls back to
+   asking, and headless nobody answers. Trusting the other file's folder is not enough;
+3. a `.uno:UpdateTableLinks` dispatch before `calculateAll()`, so that a saved copy of the
+   other file's values (see above) is read again rather than reused. Without such a copy, the
+   first two are enough.
+
+```python
+# in LibreOffice's own Python, with a profile whose SecureURL lists the workbook's folder
+props = (
+    PropertyValue(Name="Hidden", Value=True),
+    PropertyValue(Name="UpdateDocMode", Value=3),       # FULL_UPDATE
+    PropertyValue(Name="MacroExecutionMode", Value=0),  # NEVER_EXECUTE: trust the folder, not its macros
+)
+doc = desktop.loadComponentFromURL(url, "_blank", 0, props)
+dispatcher = ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.DispatchHelper", ctx)
+dispatcher.executeDispatch(doc.getCurrentController().getFrame(), ".uno:UpdateTableLinks", "", 0, ())
+doc.calculateAll()
+doc.store()
+doc.close(True)
+```
+
+`recalculate()` does not do this: copying other files' contents into the workbook is precisely
+what LibreOffice's check guards against, so it would have to be an explicit opt-in. Until
+then, such a workbook still has to be opened in LibreOffice, *Allow updating* clicked and the
+file saved before its computed values can be read.
+
 ## 8. Styles
 
 ODF splits a cell's formatting across two concerns: a `table:style-name` pointing to a
@@ -1064,7 +1197,9 @@ reading *and rewriting* documents whose formatting must survive.
   and pivot tables are written as definitions only. Use
   [`recalculate()` / `save(recalculate=True)`](#7-recalculating-with-libreoffice) to have a
   local LibreOffice compute both; without it, a real application recomputes formulas on open,
-  but a pivot table needs an explicit refresh.
+  but a pivot table needs an explicit refresh. Formulas that read another workbook come back
+  as `Err:540` from any headless recalculation — see
+  [References to other workbooks](#references-to-other-workbooks).
 - **Named ranges and 3D references** (`Sheet1:Sheet3.A1`) aren't translated by the friendly
   formula syntax — write them in ODF's bracket syntax directly (the `[` escape hatch).
 - **Displayed-text locale.** The on-write `.text` inference doesn't capture the document's

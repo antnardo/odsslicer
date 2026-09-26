@@ -130,6 +130,12 @@ def recalculate(path: "str | Path", timeout: int = 120) -> None:
     whole file in its own serialization - exactly as if you'd opened it and
     hit Save - so expect it to grow and be normalized.
 
+    A formula that reads another workbook (a reference to another file,
+    written out or built by `INDIRECT()`) comes back as `Err:540`:
+    LibreOffice only reads other files once link updates are allowed, and
+    this run never allows them - see "References to other workbooks" in
+    DOCS.md.
+
     Requires `soffice` on PATH (or `LIBREOFFICE_COMMAND[0]` set to its full
     path); raises `FileNotFoundError` if it can't be found, and
     `RuntimeError` if LibreOffice fails or times out (`timeout` seconds).
