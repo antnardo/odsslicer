@@ -4093,3 +4093,12 @@ def test_recalculate_bare_name_not_found_anywhere_raises(writable_reader, tmp_pa
             recalculate(out)
     finally:
         odsslicer.LIBREOFFICE_COMMAND[0] = saved
+
+
+def test_save_with_update_links_but_no_recalculate_raises(writable_reader, tmp_path):
+    # only the LibreOffice run updates links: asking for it without one must
+    # not pass silently, nor write the file first
+    out = tmp_path / "out.ods"
+    with pytest.raises(ValueError, match="recalculate=True"):
+        writable_reader.save(out, update_links=True)
+    assert not out.exists()

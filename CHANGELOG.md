@@ -7,6 +7,18 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Added
+
+- **`recalculate(path, update_links=True)`**, and `save(..., recalculate=True,
+  update_links=True)`, have LibreOffice update the workbook's links before recalculating: a
+  formula reading another workbook, written out or built by `INDIRECT()`, computes instead of
+  coming back as `Err:540`, and from that file as it is now rather than from values
+  LibreOffice saved from it earlier. Opt-in, for workbooks you trust: it lets a workbook read
+  any file and fetch any URL its formulas name, which is what LibreOffice's own check guards
+  against. For the run, the throwaway profile trusts the workbook's folder, and the workbook's
+  macros stay disabled. `save()` raises `ValueError` for `update_links=True` without
+  `recalculate=True`; without `update_links`, nothing changes.
+
 ### Documentation
 
 - **Recalculating from LibreOffice's command line** (DOCS.md, section 7):
@@ -15,13 +27,13 @@ still change between minor versions.
   `-env:UserInstallation` profile), why the result has to be written elsewhere and moved back
   (converting onto the input fails, yet `soffice` exits with status 0), and when to prefer
   `recalculate()`, which also refreshes pivot tables.
-- **References to other workbooks come back as `Err:540`** after any headless recalculation,
-  `recalculate()` and `--convert-to` alike — and `INDIRECT()` ones even after a plain
-  conversion, since volatile formulas are recomputed on every load. No command-line option or
-  configuration setting lifts it: `--convert-to` never allows link updates. What does, and is
-  now documented: a script that loads the workbook with `UpdateDocMode=FULL_UPDATE`, from a
-  folder the profile trusts, and dispatches `.uno:UpdateTableLinks` before recalculating. The
-  `recalculate()` docstring points to it.
+- **References to other workbooks come back as `Err:540`** after a headless recalculation
+  that does not update links — and `INDIRECT()` ones even after a plain conversion, since
+  volatile formulas are recomputed on every load. No command-line option or configuration
+  setting lifts it: `--convert-to` never allows link updates. What does, and is now
+  documented: loading the workbook with `UpdateDocMode=FULL_UPDATE` from a folder the profile
+  trusts, spelled as LibreOffice spells URLs, and dispatching `.uno:UpdateTableLinks` before
+  recalculating — what `update_links=True` does.
 
 ## [0.12.3] — 2026-09-26
 

@@ -44,19 +44,67 @@ _LIBREOFFICE_FALLBACKS = [
 # system-side python-uno needed. It gets the target file through the
 # environment, since scripting-framework macros launched from the command
 # line can't take arguments.
+#
+# With `update_links=True`, the script updates links to other files before
+# recalculating, which takes three things:
+# - a load that asks for it, UpdateDocMode = FULL_UPDATE: a hidden load that
+#   doesn't gets NO_UPDATE, which no profile setting overrides;
+# - the workbook's folder as a trusted location (SecureURL), without which
+#   FULL_UPDATE falls back to asking - and headless, nobody answers. Trusting
+#   the folders of the files the workbook reads is not enough, and the Low
+#   macro security level would trust every location. The script trusts the
+#   folder of the very URL it loads: LibreOffice compares the two as strings,
+#   and leaves unescaped some characters that `Path.as_uri()` escapes
+#   (' & + ( ) among them), so a folder URL written into the profile from
+#   here would miss folders named with those;
+# - a `.uno:UpdateTableLinks` dispatch, which reloads the other files where
+#   LibreOffice would otherwise reuse the values from them it saved in the
+#   workbook, stale or not.
+# MacroExecutionMode = NEVER_EXECUTE is a hidden load's default already,
+# spelled out because the folder is trusted for its links, not its macros.
 _LIBREOFFICE_RECALC_SCRIPT = '''\
 import os
 import uno
 from com.sun.star.beans import PropertyValue
 
 
+def trust_folder_of(ctx, url):
+    provider = ctx.ServiceManager.createInstanceWithContext(
+        "com.sun.star.configuration.ConfigurationProvider", ctx
+    )
+    node = PropertyValue(
+        Name="nodepath", Value="/org.openoffice.Office.Common/Security/Scripting"
+    )
+    scripting = provider.createInstanceWithArguments(
+        "com.sun.star.configuration.ConfigurationUpdateAccess", (node,)
+    )
+    folder = url[: url.rindex("/") + 1]
+    # typed: a bare tuple would go as []any, which the setting rejects
+    secure_urls = uno.Any("[]string", (folder,))
+    uno.invoke(scripting, "setPropertyValue", ("SecureURL", secure_urls))
+    scripting.commitChanges()
+
+
 def recalculate(*args):
     path = os.environ["ODSSLICER_RECALC_FILE"]
+    update_links = os.environ.get("ODSSLICER_RECALC_UPDATE_LINKS") == "1"
     url = uno.systemPathToFileUrl(path)
     ctx = XSCRIPTCONTEXT.getComponentContext()
     desktop = ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", ctx)
-    doc = desktop.loadComponentFromURL(url, "_blank", 0, (PropertyValue(Name="Hidden", Value=True),))
+    props = [PropertyValue(Name="Hidden", Value=True)]
+    if update_links:
+        trust_folder_of(ctx, url)
+        props += [
+            PropertyValue(Name="UpdateDocMode", Value=3),  # FULL_UPDATE
+            PropertyValue(Name="MacroExecutionMode", Value=0),  # NEVER_EXECUTE
+        ]
+    doc = desktop.loadComponentFromURL(url, "_blank", 0, tuple(props))
     try:
+        if update_links:
+            helper = "com.sun.star.frame.DispatchHelper"
+            dispatcher = ctx.ServiceManager.createInstanceWithContext(helper, ctx)
+            frame = doc.getCurrentController().getFrame()
+            dispatcher.executeDispatch(frame, ".uno:UpdateTableLinks", "", 0, ())
         doc.calculateAll()
         sheets = doc.getSheets()
         for i in range(sheets.getCount()):
@@ -115,7 +163,9 @@ def _path_without_foreign_pythons(path_value: str) -> str:
     return os.pathsep.join(keep)
 
 
-def recalculate(path: "str | Path", timeout: int = 120) -> None:
+def recalculate(
+    path: "str | Path", timeout: int = 120, update_links: bool = False
+) -> None:
     """Have a local LibreOffice open the `.ods` at `path`, recalculate every
     formula (`calculateAll()` - including ones whose cached value is stale),
     refresh every pivot table (materializing its output), and save the file
@@ -132,9 +182,19 @@ def recalculate(path: "str | Path", timeout: int = 120) -> None:
 
     A formula that reads another workbook (a reference to another file,
     written out or built by `INDIRECT()`) comes back as `Err:540`:
-    LibreOffice only reads other files once link updates are allowed, and
-    this run never allows them - see "References to other workbooks" in
-    DOCS.md.
+    LibreOffice reads other files only once link updates are allowed.
+    `update_links=True` allows them, and updates every link before the
+    recalculation, so that such formulas compute from the other files as
+    they are now, not from values LibreOffice saved from them earlier. See
+    "References to other workbooks" in DOCS.md.
+
+    `update_links` is off by default because it lets the workbook decide
+    what LibreOffice reads - any file it names, and any URL, through
+    `WEBSERVICE()` or a reference to a remote file. That is exactly what
+    LibreOffice's own check guards against: use it only on workbooks you
+    trust. For that run, the throwaway profile trusts the workbook's folder,
+    as LibreOffice updates links without asking only for a document in a
+    trusted location, and the workbook's macros are never executed.
 
     Requires `soffice` on PATH (or `LIBREOFFICE_COMMAND[0]` set to its full
     path); raises `FileNotFoundError` if it can't be found, and
@@ -151,7 +211,12 @@ def recalculate(path: "str | Path", timeout: int = 120) -> None:
         (scripts / "odsslicer_recalc.py").write_text(_LIBREOFFICE_RECALC_SCRIPT, encoding="utf-8")
         base = [exe, *LIBREOFFICE_COMMAND[1:], f"-env:UserInstallation={profile.as_uri()}"]
         cmd = base + ["vnd.sun.star.script:odsslicer_recalc.py$recalculate?language=Python&location=user"]
-        env = dict(os.environ, ODSSLICER_RECALC_FILE=str(path))
+        env = dict(
+            os.environ,
+            ODSSLICER_RECALC_FILE=str(path),
+            # set either way, so that it is never inherited from the caller
+            ODSSLICER_RECALC_UPDATE_LINKS="1" if update_links else "0",
+        )
         # LibreOffice runs the script through its own Python, and the calling
         # process's Python environment must not leak into it: PYTHONPATH/
         # PYTHONHOME/LD_LIBRARY_PATH would poison the embedded interpreter,

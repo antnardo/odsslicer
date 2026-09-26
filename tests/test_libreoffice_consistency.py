@@ -644,3 +644,80 @@ def test_recalculate_is_idempotent(writable_reader, tmp_path):
     writable_reader.save(out, recalculate=True)
     recalculate(out)  # a second pass on an already-computed file must work too
     assert ODSReader(out).sheet("Sheet1")["A5"].value == 103.0
+
+
+# ---------------------------------------------------------------------------
+# recalculate(update_links=True): formulas reading another workbook
+# ---------------------------------------------------------------------------
+
+
+def _write_students(path, name):
+    table = ODSReader.new("Students")
+    students = table.sheet("Students")
+    students["A1"].value = "Id"
+    students["B1"].value = "Name"
+    students["A2"].value = 1.0
+    students["B2"].value = name
+    table.save(path)
+
+
+def _workbook_reading(students):
+    # Students.B2 of the other file, reached both ways: from an address
+    # built at run time (A1), and by a reference written out (A2)
+    table = ODSReader.new()
+    sheet = table.sheet("Sheet1")
+    sheet["B1"].value = f"'{students.as_uri()}'#$Students.A1"
+    sheet["A1"].formula = "OFFSET(INDIRECT($B$1);1;1)"
+    sheet["A2"].formula = f"of:=['{students.as_uri()}'#$Students.B2]"
+    return table
+
+
+def _names_read(workbook):
+    sheet = ODSReader(workbook).sheet("Sheet1")
+    return sheet["A1"].value, sheet["A2"].value
+
+
+@requires_soffice
+def test_recalculate_without_update_links_gives_err540_for_other_workbooks(tmp_path):
+    from odsslicer import recalculate
+
+    students, workbook = tmp_path / "students.ods", tmp_path / "workbook.ods"
+    _write_students(students, "Alice")
+    _workbook_reading(students).save(workbook)
+    recalculate(workbook)
+    assert _names_read(workbook) == ("Err:540", "Err:540")
+
+
+@requires_soffice
+@pytest.mark.parametrize(
+    "folder",
+    ["workbooks", "Classe d'été (2026) & co"],
+    ids=["plain-folder", "folder-named-with-quote-and-parentheses"],
+)
+def test_save_with_update_links_reads_other_workbooks(tmp_path, folder):
+    # LibreOffice has to trust the workbook's folder, and compares folder
+    # URLs as strings: ' & ( ), which it leaves unescaped, must match too
+    (tmp_path / folder).mkdir()
+    students = tmp_path / folder / "students.ods"
+    workbook = tmp_path / folder / "workbook.ods"
+    _write_students(students, "Alice")
+    _workbook_reading(students).save(workbook, recalculate=True, update_links=True)
+    assert _names_read(workbook) == ("Alice", "Alice")
+
+
+@requires_soffice
+def test_recalculate_with_update_links_rereads_a_changed_workbook(tmp_path):
+    from odsslicer import recalculate
+
+    students, workbook = tmp_path / "students.ods", tmp_path / "workbook.ods"
+    _write_students(students, "Alice")
+    _workbook_reading(students).save(workbook)
+    recalculate(workbook, update_links=True)
+    assert _names_read(workbook) == ("Alice", "Alice")
+    # the workbook now holds LibreOffice's own copy of what it read from
+    # students.ods: the next run must read the file again, not reuse it
+    changed = ODSReader(students)
+    changed.sheet("Students")["B2"].value = "Alicia"
+    changed.save()
+    recalculate(workbook, update_links=True)
+    assert _names_read(workbook) == ("Alicia", "Alicia")

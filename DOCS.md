@@ -776,7 +776,8 @@ follows was verified with LibreOffice 25.8.4 on macOS, and against its source co
   run independent of a LibreOffice already open on your desktop.
 - **Pivot tables are not refreshed**, *Always recalculate* or not: their output area stays
   empty. Only `recalculate()` refreshes them.
-- **References to other workbooks come out as `Err:540`** — see
+- **References to other workbooks come out as `Err:540`**, whatever the options: only
+  `recalculate(update_links=True)` reads them — see
   [References to other workbooks](#references-to-other-workbooks).
 
 A complete run, with a throwaway profile set to *Always recalculate* and the result moved back
@@ -807,7 +808,7 @@ rm -rf "$profile" "$out"
 | Output | the file itself, rewritten in place | a new file in `--outdir`, to move back yourself |
 | Failure | raises `RuntimeError` or `FileNotFoundError` | printed, exit status 0 even when nothing was written |
 | Profile | throwaway, set up for you | your own, unless you pass `-env:UserInstallation` |
-| References to other workbooks | `Err:540` | `Err:540` |
+| References to other workbooks | read with `update_links=True`, for trusted workbooks; `Err:540` otherwise | `Err:540` |
 
 Use `recalculate()` whenever the file comes out of Python code anyway. The command line suits
 shell pipelines, batches (`--convert-to` takes several files in one LibreOffice start) and
@@ -817,15 +818,15 @@ files `odsslicer` never touched.
 
 A workbook can pull cells from another file, either written out in a formula
 (`='file:///…/students.ods'#$Students.B2`) or built at run time, as in `OFFSET(INDIRECT($B$1);…)`
-with the address in `B1`. Recalculated headless — by `recalculate()` as by
-`soffice --convert-to` — those cells come out as **`Err:540`** ("External content disabled"),
-and `odsslicer` then reads the string `"Err:540"`. This happens even to a file that displayed
-them correctly when it was last saved from LibreOffice:
+with the address in `B1`. Recalculated headless, those cells come out as **`Err:540`**
+("External content disabled") — always with `soffice --convert-to`, and with `recalculate()`
+unless you pass `update_links=True` — and `odsslicer` then reads the string `"Err:540"`. This
+happens even to a file that displayed them correctly when it was last saved from LibreOffice:
 
 - LibreOffice reads another file for a formula only once link updates are allowed for the
   document — in the application, by the *Allow updating* button of the "Automatic update of
   external links has been disabled." bar. Until then, a formula that needs the other file
-  evaluates to `Err:540`. Neither headless route allows updates.
+  evaluates to `Err:540`. Headless, updates are allowed only to a load that asks for them.
 - `INDIRECT()` and `OFFSET()` are volatile, recomputed on every load: a plain conversion, with
   no recalculation option at all, already replaces their cached results with `Err:540`.
 - When at least one formula writes the reference out, LibreOffice also saves the values it read
@@ -839,38 +840,50 @@ profile says. *Update links when opening: Always (from trusted locations)*, the 
 security level and a trusted file location, all set together, still gave `Err:540` with
 `--convert-to`: they only matter to a load that asks for link updates.
 
-A script that loads the workbook itself, the way `recalculate()` does, can have the links
-updated. Verified with LibreOffice 25.8.4, it takes:
+`recalculate()` asks for them when you pass **`update_links=True`**, and so does `save()` with
+`recalculate=True` (without it, `save()` raises `ValueError`):
+
+```python
+from odsslicer import recalculate
+
+recalculate("workbook.ods", update_links=True)                   # an existing file
+table.save("workbook.ods", recalculate=True, update_links=True)  # right after writing it
+```
+
+LibreOffice then updates every link of the workbook before recalculating, as *Allow updating*
+would: formulas reading another workbook compute from that file as it is now, whether they
+write the reference out or build it with `INDIRECT()`, and a saved copy of its values is read
+again rather than reused.
+
+**It is off by default, and meant for workbooks you trust**, because it lets the workbook
+decide what LibreOffice reads: any file its formulas name, and any URL — `WEBSERVICE()` fetches
+one, a reference to a remote workbook downloads it. One formula can read a local file and send
+what it read to a server, which is precisely what LibreOffice's check guards against. For its
+run, `recalculate()` makes the workbook's folder a trusted location in its throwaway profile —
+your own LibreOffice settings stay untouched — and loads the workbook with macros disabled.
+
+Once a run has updated the links, the workbook holds LibreOffice's copy of what it read (see
+above), and a later run without `update_links=True` may fall back on that copy, stale, rather
+than give `Err:540`: keep passing it for such a workbook.
+
+**What it takes**, should you drive LibreOffice from your own script — this is what
+`recalculate()` does, verified with LibreOffice 25.8.4 and against its source:
 
 1. `UpdateDocMode` = `3` (`FULL_UPDATE`) among the load arguments;
 2. the workbook's own folder among the profile's trusted file locations — `SecureURL` under
    `/org.openoffice.Office.Common/Security/Scripting`, a list of folder URLs. LibreOffice
    updates links without asking only for a document in a trusted location (or at the *Low*
    macro security level, which trusts everything); anywhere else `FULL_UPDATE` falls back to
-   asking, and headless nobody answers. Trusting the other file's folder is not enough;
+   asking, and headless nobody answers. Trusting the other file's folder is not enough. The
+   folder URL must be spelled the way LibreOffice spells the document's own URL, which leaves
+   characters such as `'`, `&`, `+`, `(` and `)` unescaped where Python's `Path.as_uri()`
+   escapes them: written into the profile from Python, it misses folders named with those.
+   `recalculate()` sets it from inside LibreOffice, from the URL it loads;
 3. a `.uno:UpdateTableLinks` dispatch before `calculateAll()`, so that a saved copy of the
    other file's values (see above) is read again rather than reused. Without such a copy, the
    first two are enough.
 
-```python
-# in LibreOffice's own Python, with a profile whose SecureURL lists the workbook's folder
-props = (
-    PropertyValue(Name="Hidden", Value=True),
-    PropertyValue(Name="UpdateDocMode", Value=3),       # FULL_UPDATE
-    PropertyValue(Name="MacroExecutionMode", Value=0),  # NEVER_EXECUTE: trust the folder, not its macros
-)
-doc = desktop.loadComponentFromURL(url, "_blank", 0, props)
-dispatcher = ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.DispatchHelper", ctx)
-dispatcher.executeDispatch(doc.getCurrentController().getFrame(), ".uno:UpdateTableLinks", "", 0, ())
-doc.calculateAll()
-doc.store()
-doc.close(True)
-```
-
-`recalculate()` does not do this: copying other files' contents into the workbook is precisely
-what LibreOffice's check guards against, so it would have to be an explicit opt-in. Until
-then, such a workbook still has to be opened in LibreOffice, *Allow updating* clicked and the
-file saved before its computed values can be read.
+The whole script is `_LIBREOFFICE_RECALC_SCRIPT`, in `odsslicer/libreoffice.py`.
 
 ## 8. Styles
 
@@ -1198,7 +1211,8 @@ reading *and rewriting* documents whose formatting must survive.
   [`recalculate()` / `save(recalculate=True)`](#7-recalculating-with-libreoffice) to have a
   local LibreOffice compute both; without it, a real application recomputes formulas on open,
   but a pivot table needs an explicit refresh. Formulas that read another workbook come back
-  as `Err:540` from any headless recalculation — see
+  as `Err:540` from a headless recalculation, unless `recalculate()` updates links
+  (`update_links=True`, for workbooks you trust) — see
   [References to other workbooks](#references-to-other-workbooks).
 - **Named ranges and 3D references** (`Sheet1:Sheet3.A1`) aren't translated by the friendly
   formula syntax — write them in ODF's bracket syntax directly (the `[` escape hatch).

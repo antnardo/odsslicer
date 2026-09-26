@@ -180,7 +180,13 @@ class ODSReader:
             reader._sheets = {sheet_name: reader._sheets.pop("Sheet1")}
         return reader
 
-    def save(self, path: Union[Path, str, None] = None, recalculate: bool = False, timeout: int = 120) -> None:
+    def save(
+        self,
+        path: Union[Path, str, None] = None,
+        recalculate: bool = False,
+        timeout: int = 120,
+        update_links: bool = False,
+    ) -> None:
         """Write the in-memory content back out as a .ods file.
 
         `content.xml` (sheets, cell data, automatic styles, formulas) and
@@ -197,7 +203,15 @@ class ODSReader:
         table in place - see the module-level `recalculate()` for details
         and requirements. The in-memory document is *not* reloaded: reopen
         the file (`ODSReader(path)`) to read the computed values back.
+        `update_links=True`, only with `recalculate=True`, has LibreOffice
+        update links to other workbooks first, so that formulas reading them
+        compute instead of giving `Err:540` - for workbooks you trust only,
+        see `recalculate()`.
         """
+        if update_links and not recalculate:
+            # unlike an unused `timeout`, ignoring it would silently leave
+            # every formula reading another workbook as it was
+            raise ValueError("update_links=True requires recalculate=True")
         if path is None:
             if self._from_template:
                 raise ValueError(
@@ -222,7 +236,8 @@ class ODSReader:
                 item.compress_type = ZIP_STORED if item.filename == "mimetype" else ZIP_DEFLATED
                 dst.writestr(item, data)
         if recalculate:
-            _recalculate_file(path, timeout=timeout)  # the parameter shadows the module function
+            # the parameter shadows the module function
+            _recalculate_file(path, timeout=timeout, update_links=update_links)
 
     def export_content_xml(self, pretty: bool = True) -> None:
         if pretty:
