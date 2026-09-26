@@ -35,7 +35,7 @@ Repository = "https://github.com/antnardo/odsslicer"
 Issues = "https://github.com/antnardo/odsslicer/issues"
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest", "ruff"]
 typecheck = ["mypy", "types-beautifulsoup4"]
 
 [tool.setuptools.packages.find]
@@ -60,4 +60,12 @@ files = ["src/odsslicer"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_unused_ignores = true
+
+[tool.ruff]
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "N", "C4", "PTH", "RET"]
+ignore = ["RUF001", "RUF002", "RUF003"]  # unicode look-alikes: the prose uses typographic dashes
 
