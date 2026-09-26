@@ -22,7 +22,7 @@ from conftest import (
     cells_with_content,
     empty_cells,
     ods_with_sheet,
-    row,
+    table_row,
     text_cell,
 )
 
@@ -935,8 +935,8 @@ def test_writing_into_or_below_a_trailing_run_of_empty_rows(tmp_path, address):
     # Valid ODF, though LibreOffice itself writes such a run's last row apart.
     xml = (
         '<table:table-column table:number-columns-repeated="2"/>'
-        + row(text_cell("a"), text_cell("b"))
-        + row(empty_cells(2), repeat=5)
+        + table_row(text_cell("a"), text_cell("b"))
+        + table_row(empty_cells(2), repeat=5)
     )
     path = ods_with_sheet(tmp_path / "tail.ods", xml)
     r = ODSReader(path)
@@ -952,7 +952,7 @@ def test_writing_into_or_below_a_trailing_run_of_empty_rows(tmp_path, address):
 # stays in the file, where writing past the data must not land beyond it.
 # ---------------------------------------------------------------------------
 
-_GAP_COLUMNS_XML = '<table:table-column table:number-columns-repeated="26"/>' + row(
+_GAP_COLUMNS_XML = '<table:table-column table:number-columns-repeated="26"/>' + table_row(
     text_cell("a"), empty_cells(24), text_cell("z")
 )
 
@@ -990,9 +990,9 @@ def test_empty_rows_between_data_stay_in_the_grid(tmp_path):
     # wherever it stood, moving A2000 up to A2
     xml = (
         "<table:table-column/>"
-        + row(text_cell("a"))
-        + row(empty_cells(), repeat=1998)
-        + row(text_cell("far below"))
+        + table_row(text_cell("a"))
+        + table_row(empty_cells(), repeat=1998)
+        + table_row(text_cell("far below"))
     )
     s = ODSReader(ods_with_sheet(tmp_path / "gap.ods", xml)).sheet("Sheet1")
     assert s.size == (2000, 1)
@@ -1014,14 +1014,14 @@ def test_empty_rows_between_data_stay_in_the_grid(tmp_path):
 def test_the_rows_around_the_filler_of_a_full_height_sheet(tmp_path, after_filler, size):
     xml = (
         "<table:table-column/>"
-        + row(text_cell("a"))
-        + row(empty_cells())
-        + row(empty_cells(), repeat=1_048_570)
+        + table_row(text_cell("a"))
+        + table_row(empty_cells())
+        + table_row(empty_cells(), repeat=1_048_570)
     )
     if after_filler > 1:
-        xml += row(empty_cells(), repeat=after_filler - 1)
+        xml += table_row(empty_cells(), repeat=after_filler - 1)
     if after_filler:
-        xml += row(empty_cells())
+        xml += table_row(empty_cells())
     path = ods_with_sheet(tmp_path / "padded.ods", xml)
     r = ODSReader(path)
     s = r.sheet("Sheet1")
@@ -1035,8 +1035,8 @@ def test_the_rows_around_the_filler_of_a_full_height_sheet(tmp_path, after_fille
 def test_empty_rows_padding_a_sheet_to_its_full_height_are_still_left_out(tmp_path):
     xml = (
         "<table:table-column/>"
-        + row(text_cell("a"))
-        + row(empty_cells(), repeat=1_048_575)
+        + table_row(text_cell("a"))
+        + table_row(empty_cells(), repeat=1_048_575)
     )
     path = ods_with_sheet(tmp_path / "padded.ods", xml)
     r = ODSReader(path)
@@ -1050,7 +1050,7 @@ def test_empty_rows_padding_a_sheet_to_its_full_height_are_still_left_out(tmp_pa
 # out of the grid, but not out of the file - D1 used to land in S1
 _FORMATTED_PAST_DATA_XML = '<table:table-column table:number-columns-repeated="18"/>'
 _FORMATTED_PAST_DATA_XML += "".join(
-    row(text_cell(text), text_cell(text), text_cell(text), empty_cells(15, "yellow"))
+    table_row(text_cell(text), text_cell(text), text_cell(text), empty_cells(15, "yellow"))
     for text in ("x", "y")
 )
 _YELLOW_XML = (

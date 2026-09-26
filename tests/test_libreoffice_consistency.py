@@ -24,7 +24,7 @@ from conftest import (
     libreoffice_shows,
     ods_with_sheet,
     requires_soffice,
-    row,
+    table_row,
     text_cell,
 )
 
@@ -317,7 +317,7 @@ def test_libreoffice_shows_values_written_around_empty_columns_where_written(tmp
     path = ods_with_sheet(
         tmp_path / "gap.ods",
         '<table:table-column table:number-columns-repeated="26"/>'
-        + row(text_cell("a"), empty_cells(24), text_cell("z")),
+        + table_row(text_cell("a"), empty_cells(24), text_cell("z")),
     )
     table = ODSReader(path)
     table.sheet("Sheet1")["Z1"].value = "new z"

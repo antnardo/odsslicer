@@ -164,7 +164,7 @@ def empty_cells(repeat=1, style=None):
     return f"<table:table-cell{attrs}/>"
 
 
-def row(*cells, repeat=1):
+def table_row(*cells, repeat=1):
     """A `<table:table-row>` of `cells`, repeated `repeat` times."""
     attrs = f' table:number-rows-repeated="{repeat}"' if repeat > 1 else ""
     return f"<table:table-row{attrs}>{''.join(cells)}</table:table-row>"
@@ -185,9 +185,9 @@ def cells_with_content(sheet):
 # LibreOffice drops trailing empty rows, which is what hid issue #5.
 REPEATED_RUN_XML = (
     '<table:table-column table:number-columns-repeated="2"/>'
-    + row(text_cell("a"), text_cell("b"))
-    + row(empty_cells(2), repeat=5)
-    + row(text_cell("end"), empty_cells())
+    + table_row(text_cell("a"), text_cell("b"))
+    + table_row(empty_cells(2), repeat=5)
+    + table_row(text_cell("end"), empty_cells())
 )
 
 
