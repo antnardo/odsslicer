@@ -7,6 +7,8 @@ still change between minor versions.
 
 ## [Unreleased]
 
+## [0.13.1] — 2026-09-26
+
 ### Fixed
 
 - **Writing past the columns of a run of repeated rows no longer corrupts the run**
@@ -332,7 +334,8 @@ typed cell values (text, number, percentage, currency, date, time, boolean), for
 repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
-[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/antnardo/odsslicer/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/antnardo/odsslicer/compare/v0.12.3...v0.13.0
 [0.12.3]: https://github.com/antnardo/odsslicer/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/antnardo/odsslicer/compare/v0.12.1...v0.12.2
