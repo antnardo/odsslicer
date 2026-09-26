@@ -542,6 +542,10 @@ string literals are left alone). If the formula already contains a `[` it's assu
 hand-written in ODF syntax and is passed through unchanged — an escape hatch for anything the
 translation doesn't cover (named ranges, 3D references).
 
+Function names are written as given, so they must be the names ODF stores: a function taken
+from Excel is usually stored with a `COM.MICROSOFT.` prefix — `COM.MICROSOFT.CONCAT(A1,B1)`,
+where a plain `CONCAT(A1,B1)` shows as `#NAME?` in LibreOffice.
+
 Writing a formula auto-materializes repeated/merged cells and auto-grows the sheet if needed;
 writing `.value` or `.formula` clears the other.
 
