@@ -8,7 +8,7 @@ Everything below assumes:
 
 ```python
 from odsslicer import ODSReader, NumberFormat
-from datetime import date, time, datetime
+from datetime import date, time, datetime, timedelta
 
 table = ODSReader("workbook.ods")
 sheet = table.sheet("Sheet1")
@@ -22,6 +22,7 @@ sheet = table.sheet("Sheet1")
    - [Opening a file, sheets](#opening-a-file-sheets)
    - [Indexing and slicing](#indexing-and-slicing)
    - [Cells (`Cell`)](#cells-cell)
+   - [Dates, times and durations](#dates-times-and-durations)
    - [Arrays (`ArrayValues`)](#arrays-arrayvalues)
    - [Iteration](#iteration)
    - [Address conversion helpers](#address-conversion-helpers)
@@ -116,7 +117,7 @@ stays 2D; see `to_vector()` below to flatten it).
 
 ```python
 cell = sheet["A1"]
-cell.value          # typed value: str / float / bool / datetime.date / datetime.time / None
+cell.value          # typed value: str / float / bool / date / datetime / time / timedelta / None
 cell.text           # the text as displayed in the spreadsheet (str, or None)
 str(cell)            # == cell.text (or "None"); a multi-line cell reads back
                      # as "line 1\nline 2…", one ODF paragraph per line
@@ -138,6 +139,39 @@ containing `\n` writes one paragraph per line in return (a literal newline *insi
 paragraph is plain whitespace to ODF, so it would not survive).
 
 Available formats are listed in `odsslicer.FORMATS` (ODF format -> conversion callable).
+
+### Dates, times and durations
+
+ODF stores a date cell as a date or a date-time, and a time cell as a *duration*, which only
+reads as a time of day when it is shorter than one. `cell.value` follows the value itself:
+
+| Stored in the file | `cell.value` |
+| --- | --- |
+| `office:date-value="2023-11-30"` | `date(2023, 11, 30)` |
+| `office:date-value="2023-11-30T13:00:00"` | `datetime(2023, 11, 30, 13, 0)` |
+| `office:time-value="PT09H30M00S"` | `time(9, 30)` |
+| `office:time-value="PT12H30M15.5S"` | `time(12, 30, 15, 500000)` |
+| `office:time-value="PT128H45M00S"`, shown `128:45:00` | `timedelta(hours=128, minutes=45)` |
+| `office:time-value="-PT01H30M00S"`, shown `-01:30:00` | `timedelta(hours=-1, minutes=-30)` |
+
+- A duration reads as a `time` when it lies within a day, and as a `timedelta` otherwise:
+  24 hours or more — an elapsed time in a `[HH]:MM:SS` format, typically — or negative.
+- One column can therefore mix `time` and `timedelta`, and a column of date-times can mix
+  `datetime` and `date`: LibreOffice saves a date-time falling on midnight as a bare date.
+  `Sheet.sort` orders either mix.
+- LibreOffice saves a date-time displayed with a time-only format as the duration since
+  30 December 1899 (`PT1086253H00M00S`): it reads as a large `timedelta`, and
+  `value % timedelta(days=1)` gives back the time of day.
+- A UTC offset, which spreadsheet files rarely carry, is applied and dropped: the value
+  reads in UTC, as LibreOffice reads it.
+- A value that cannot be read as its declared type (a malformed date, a duration counted in
+  years or months) does not make the sheet unreadable: the cell reads as its displayed text,
+  `cell.raw_value` keeps the value as written, and loading the sheet emits one `UserWarning`
+  naming such cells.
+
+pandas still fails here: as of pandas 3.0.5, `read_excel(..., engine="odf")` raises
+`hour must be in 0..23` on a sheet holding a duration of 24 hours or more
+([Stack Overflow question 71646358](https://stackoverflow.com/questions/71646358)).
 
 ### Arrays (`ArrayValues`)
 
@@ -203,15 +237,21 @@ sheet["A2"].value = 42.5
 sheet["A3"].value = True
 sheet["A4"].value = date(2026, 12, 31)
 sheet["A5"].value = time(9, 30)
-sheet["A6"].value = None              # clears the cell
+sheet["A6"].value = datetime(2026, 12, 31, 18, 30)
+sheet["A7"].value = timedelta(hours=128, minutes=45)   # stored as PT128H45M00S
+sheet["A8"].value = None              # clears the cell
 
 table.save("modified_workbook.ods")    # or table.save() to overwrite the source file
 ```
 
-Accepted types: `str`, `int`/`float`, `bool`, `datetime.date`, `datetime.time`, and `None`
-(clears). Writing a number over a cell already formatted as `percentage` or `currency` keeps
-that format. Writing over a cell that held a formula erases the formula (`is_formula` becomes
-`False`).
+Accepted types: `str`, `int`/`float`, `bool`, `datetime.date`, `datetime.datetime`,
+`datetime.time`, `datetime.timedelta`, and `None` (clears). Writing a number over a cell
+already formatted as `percentage` or `currency` keeps that format. Writing over a cell that
+held a formula erases the formula (`is_formula` becomes `False`).
+
+A date or time value reads back at once the way a reload would read it (see
+[Dates, times and durations](#dates-times-and-durations)): a `timedelta` within a day comes
+back as a `time`, and an aware `datetime` is written in UTC and comes back without its offset.
 
 `ODSReader.save(path=None)` rewrites the `.ods`: `content.xml` and `meta.xml` are regenerated
 from the in-memory trees; every other zip member (`styles.xml`, `settings.xml`,
@@ -311,7 +351,12 @@ that applies wins:
    text from the format on open anyway, so this cached text mostly matters to `odsslicer`'s
    own `.text` reads.
 
-3. **Plain Python conversion**, only if neither layer applies.
+   A duration is shown as LibreOffice shows it: wrapped around the clock by a time format
+   (`128:45` shows as `08:45:00`), counted in full by an elapsed-time `[HH]:MM:SS` one. A
+   `timedelta` skips the first layer, since an example under 24 hours looks the same in both.
+
+3. **Plain Python conversion**, only if neither layer applies — ISO for dates and date-times,
+   hours in full for a duration (`128:45:00`).
 
 ---
 

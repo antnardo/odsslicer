@@ -15,8 +15,10 @@ self-consistent with our own reader.
 Skipped automatically if no `soffice`/`libreoffice` binary is on PATH (not
 installed in CI by default) - install LibreOffice locally to run these.
 """
+import datetime as dt
 import re
 
+import pytest
 from conftest import requires_soffice
 
 from odsslicer import ODSReader
@@ -381,6 +383,100 @@ def test_libreoffice_round_trips_a_multi_line_cell(writable_reader, tmp_path, li
     assert "<text:p>ligne 1</text:p><text:p>ligne 2</text:p><text:p>ligne 3</text:p>" in xml
     reopened = ODSReader(libreoffice_export(out, "ods")).sheet("Sheet1")
     assert reopened["A1"].value == "ligne 1\nligne 2\nligne 3"
+
+
+@requires_soffice
+def test_libreoffice_reads_written_date_times_and_durations_as_meant(
+    tmp_path, libreoffice_export
+):
+    # issue #4: the serial number LibreOffice computes from each written
+    # value (days since 1899-12-30) proves it reads the value as meant
+    r = ODSReader.new()
+    s = r.sheet("Sheet1")
+    values = [
+        (dt.datetime(2023, 11, 30, 13), 45260 + 13 / 24),
+        (dt.timedelta(hours=128, minutes=45), 128.75 / 24),
+        (dt.timedelta(hours=-1, minutes=-30), -1.5 / 24),
+        (dt.time(12, 30, 15, 500_000), (12 * 3600 + 30 * 60 + 15.5) / 86400),
+        (
+            dt.datetime(2023, 11, 30, 13, tzinfo=dt.timezone(dt.timedelta(hours=5))),
+            45260 + 8 / 24,
+        ),
+    ]
+    for row, (value, _) in enumerate(values, start=1):
+        s[f"A{row}"].value = value
+        s[f"B{row}"].formula = f"A{row}*1"
+    out = tmp_path / "out.ods"
+    r.save(out)
+
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    computed = re.findall(
+        r'table:formula="of:=\[\.A\d\]\*1"[^>]*office:value="([^"]*)"', xml
+    )
+    assert [float(v) for v in computed] == pytest.approx(
+        [serial for _, serial in values]
+    )
+
+
+@requires_soffice
+def test_odsslicer_reads_back_date_times_and_durations_as_libreoffice_saves_them(
+    tmp_path, libreoffice_export
+):
+    # the other way round: LibreOffice re-saves these cells its own way
+    # (hours past a day, a leading minus, a trimmed fraction of a second)
+    r = ODSReader.new()
+    s = r.sheet("Sheet1")
+    dmy_hms = NumberFormat.create(
+        r,
+        "date",
+        components=[
+            ("day", "long"),
+            ("text", "/"),
+            ("month", "long"),
+            ("text", "/"),
+            ("year", "long"),
+            ("text", " "),
+            ("hours", "long"),
+            ("text", ":"),
+            ("minutes", "long"),
+            ("text", ":"),
+            ("seconds", "long"),
+        ],
+    )
+    hms = NumberFormat.create(
+        r,
+        "time",
+        components=[
+            ("hours", "long"),
+            ("text", ":"),
+            ("minutes", "long"),
+            ("text", ":"),
+            ("seconds", "long"),
+        ],
+    )
+    values = [
+        (dmy_hms, dt.datetime(2023, 11, 30, 13, 0, 0, 500_000)),
+        (hms, dt.timedelta(hours=128, minutes=45)),
+        (hms, dt.timedelta(hours=-1, minutes=-30)),
+        (hms, dt.time(12, 30, 15, 500_000)),
+        (dmy_hms, dt.datetime(2023, 11, 30)),
+    ]
+    for row, (fmt, value) in enumerate(values, start=1):
+        s[f"A{row}"].value = value
+        s[f"A{row}"].style.number_format = fmt
+    # the ods->ods conversion below writes into tmp_path: the source lives elsewhere
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    out = src_dir / "out.ods"
+    r.save(out)
+
+    reread = ODSReader(libreoffice_export(out, "ods")).sheet("Sheet1")
+    assert [reread[row, 0].value for row in range(4)] == [
+        value for _, value in values[:4]
+    ]
+    assert reread["A2"].raw_value == "PT128H45M00S"
+    # LibreOffice saves a date-time falling on midnight as a bare date
+    assert reread["A5"].value == dt.date(2023, 11, 30)
 
 
 @requires_soffice

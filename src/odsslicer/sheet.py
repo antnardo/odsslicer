@@ -10,6 +10,7 @@ delete, copy, sort, merge), pivot definitions, row/column/table style access."""
 import copy
 import functools
 import logging
+import warnings
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, Tuple, Union, cast
 
 from bs4 import BeautifulSoup, Tag
@@ -23,6 +24,7 @@ from .constants import (
     RE_STRING_CELL,
     TAG_CELL,
 )
+from .datetimes import _comparable
 from .formulas import (
     _PIVOT_DATA_FUNCTIONS,
     _SHEET_QUALIFIED_RE,
@@ -78,6 +80,7 @@ class Sheet:
 
     def load(self, table_bs: Tag) -> list[list[Cell]]:
         table = []
+        unreadable: list[Cell] = []  # read as their text instead, see Cell.__init__
         rows = table_bs.find_all("table:table-row")
         logger.log(self._log_level, "    Loading %s, %d unrepeated rows", self.name, len(rows))
         # Grid-filler guard, column direction: Excel and LibreOffice pad rows
@@ -138,9 +141,13 @@ class Sheet:
                     n_cols = int(cell.attrs.get("table:number-columns-repeated", "1"))
                     for _ in range(n_cols):
                         cells.append(Cell(cell, row=i, col=j, sheet=self))
+                        if cells[-1]._unreadable is not None:
+                            unreadable.append(cells[-1])
                         j += 1
                 table.append(cells)
                 i += 1
+        if unreadable:
+            self._warn_unreadable(unreadable)
         # CLEAN UP
         if len(table) == 0:
             return table
@@ -191,6 +198,20 @@ class Sheet:
                         empty_cols_pos[i] = (jp, vp + 1)
                 empty_cols_aggr = [e[1] for e in empty_cols_pos]
         return table
+
+    def _warn_unreadable(self, cells: list[Cell]) -> None:
+        """One warning for all the cells of this sheet whose value could not
+        be read as its declared type - one per cell would bury the user
+        under a generator's systematic quirk, repeated all down a column."""
+        listed = ", ".join(f"{cell.address} ({cell._unreadable})" for cell in cells[:3])
+        if len(cells) > 3:
+            listed += f" and {len(cells) - 3} more"
+        warnings.warn(
+            f"sheet {self.name!r}: {listed}: not readable as the declared type,"
+            " read as the displayed text instead (cell.raw_value keeps the value"
+            " as written)",
+            stacklevel=1,
+        )
 
     def _normalize_row_width(self, row_tag: Tag, cells_bs: "list[Tag]", real_width: int, row_index: int) -> "list[Tag]":
         """Rewrite one row's XML so its total width is exactly `real_width`
@@ -546,7 +567,9 @@ class Sheet:
         key_offset = by - col0
 
         def compare(a: tuple[int, list[tuple[Any, Any, Any]]], b: tuple[int, list[tuple[Any, Any, Any]]]) -> int:
-            va, vb = a[1][key_offset][0], b[1][key_offset][0]
+            # _comparable: a column of dates can hold date-times too, and one
+            # of times durations - Python refuses to order either pair as is
+            va, vb = _comparable(a[1][key_offset][0]), _comparable(b[1][key_offset][0])
             if va is None and vb is None:
                 return 0
             if va is None:

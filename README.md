@@ -12,7 +12,7 @@ from odsslicer import ODSReader
 table = ODSReader("workbook.ods")
 sheet = table.sheet("Sheet1")
 
-sheet["A1"].value          # typed value: str / float / bool / date / time / None
+sheet["A1"].value          # typed: str / float / bool / date / datetime / time / timedelta / None
 sheet["A1:B3"].to_numpy()  # any block as a numpy array
 sheet[:, 0]                 # entire column A
 

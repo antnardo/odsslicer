@@ -8,6 +8,7 @@
 
 import copy
 import datetime as dt
+import itertools
 import math
 import re
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, cast
@@ -17,6 +18,14 @@ from bs4 import BeautifulSoup, Tag
 
 from .addresses import string_address
 from .constants import EMPTY_CELL_BS, FORMATS
+from .datetimes import (
+    _as_datetime,
+    _duration_text,
+    _format_date_value,
+    _format_time_value,
+    _parse_date_value,
+    _parse_time_value,
+)
 from .formulas import (
     _expand_formula_template,
     _friendly_formula,
@@ -35,7 +44,9 @@ def _is_broadcastable_scalar(value: object) -> bool:
     """True for a value that should be written as-is to every cell of a
     multi-cell selection, rather than unpacked element-wise (a `str` is
     iterable but clearly meant as one value, not one cell per character)."""
-    return value is None or isinstance(value, (str, bool, int, float, dt.date, dt.time))
+    return value is None or isinstance(
+        value, (str, bool, int, float, dt.date, dt.time, dt.timedelta)
+    )
 
 
 class ArrayValues:
@@ -280,10 +291,19 @@ class Cell:
         # line breaks...) - `str(None)` would then wrongly become the literal
         # string "None" instead of the cell's actual (possibly empty) text.
         self.text: "str | None" = "\n".join(p.get_text() for p in paragraphs) if paragraphs else None
+        # A value its declared type cannot be read from - a malformed date, a
+        # type no reader knows (KeyError) - must not take the whole sheet
+        # down with it: the cell reads as its displayed text instead, and
+        # Sheet.load warns once per sheet, from `_unreadable`.
+        self._unreadable: str | None = None
         if self.format == "string":
             self._value = self.text
         else:
-            self._value = FORMATS[self.format](self.raw_value)
+            try:
+                self._value = FORMATS[self.format](self.raw_value)
+            except (KeyError, TypeError, ValueError):
+                self._value = self.text
+                self._unreadable = f"{self.format} value {self.raw_value!r}"
         self._formula = self.attrs.get("table:formula", None)
 
         self.is_formula = self._formula is not None
@@ -328,21 +348,29 @@ class Cell:
                 or self._render_display_from_number_format(new_value)
                 or str(new_value)
             )
-        elif isinstance(new_value, dt.date) and not isinstance(new_value, dt.datetime):
+        elif isinstance(new_value, dt.date):  # a datetime.datetime too
             fmt = "date"
-            tag.attrs["office:date-value"] = new_value.isoformat()
+            tag.attrs["office:date-value"] = _format_date_value(new_value)
+            # as reading it back gives it: an aware datetime turns naive, in UTC
+            new_value = _parse_date_value(tag.attrs["office:date-value"])
             text = (
                 self._infer_date_display(new_value)
                 or self._render_display_from_number_format(new_value)
-                or new_value.isoformat()
+                or str(new_value)  # the ISO format, a space before a time part
             )
-        elif isinstance(new_value, dt.time):
+        elif isinstance(new_value, (dt.time, dt.timedelta)):
             fmt = "time"
-            tag.attrs["office:time-value"] = new_value.strftime("PT%HH%MM%SS")
+            tag.attrs["office:time-value"] = _format_time_value(new_value)
+            # as reading it back gives it: a time if it fits in a day, else a timedelta
+            new_value = _parse_time_value(tag.attrs["office:time-value"])
             text = (
                 self._infer_time_display(new_value)
                 or self._render_display_from_number_format(new_value)
-                or new_value.isoformat()
+                or (
+                    _duration_text(new_value)
+                    if isinstance(new_value, dt.timedelta)
+                    else new_value.isoformat()
+                )
             )
         else:
             raise TypeError(f"unsupported value type for a Cell: {type(new_value)}")
@@ -368,6 +396,7 @@ class Cell:
         self._formula = None
         self.is_formula = False
         self._value = new_value
+        self._unreadable = None
         self.is_empty = self._compute_is_empty()
 
     @property
@@ -397,6 +426,7 @@ class Cell:
         self.format = None
         self.raw_value = None
         self._value = None
+        self._unreadable = None
         self.is_empty = self._compute_is_empty()
 
     @property
@@ -481,6 +511,10 @@ class Cell:
         "%Y-%m-%d", "%d.%m.%Y", "%d-%m-%Y",
     )
     _TIME_PATTERNS = ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p")
+    # a date-time shows as a date pattern alone when its format has no time part
+    _DATE_TIME_PATTERNS = _DATE_PATTERNS + tuple(
+        " ".join(pair) for pair in itertools.product(_DATE_PATTERNS, _TIME_PATTERNS)
+    )
 
     def _format_template_candidates(self, fmt: "str | None", raw_attr: str) -> Iterator[tuple[str, str]]:
         """Other cells with the same ODF format (this cell's own pre-write state
@@ -561,21 +595,31 @@ class Cell:
         return None
 
     def _infer_date_display(self, new_value: dt.date) -> "str | None":
+        # dates and date-times alike go through as date-times: a date-time
+        # pattern then also covers a date - LibreOffice saves a date-time
+        # falling on midnight as a bare date - and a date pattern a date-time
         for template_raw, template_text in self._format_template_candidates("date", "office:date-value"):
             try:
-                template_value = dt.datetime.strptime(template_raw, "%Y-%m-%d").date()
+                template_value = _as_datetime(_parse_date_value(template_raw))
             except (TypeError, ValueError):
                 continue
-            for pattern in self._DATE_PATTERNS:
+            for pattern in self._DATE_TIME_PATTERNS:
                 if template_value.strftime(pattern) == template_text:
-                    return new_value.strftime(pattern)
+                    return _as_datetime(new_value).strftime(pattern)
         return None
 
-    def _infer_time_display(self, new_value: dt.time) -> "str | None":
+    def _infer_time_display(self, new_value: "dt.time | dt.timedelta") -> "str | None":
+        # a duration past a day shows wrapped in a clock format (08:45:00) but
+        # not in an elapsed-time one (128:45:00), and an example within a day
+        # looks the same in both: only the cell's own format can tell
+        if isinstance(new_value, dt.timedelta):
+            return None
         for template_raw, template_text in self._format_template_candidates("time", "office:time-value"):
             try:
-                template_value = dt.datetime.strptime(template_raw, "PT%HH%MM%SS").time()
+                template_value = _parse_time_value(template_raw)
             except (TypeError, ValueError):
+                continue
+            if not isinstance(template_value, dt.time):
                 continue
             for pattern in self._TIME_PATTERNS:
                 if template_value.strftime(pattern) == template_text:
@@ -614,9 +658,9 @@ class Cell:
         number_format = self._resolved_number_format(new_value)
         if isinstance(new_value, (int, float)) and not isinstance(new_value, bool):
             return _render_number_from_format(number_format, new_value)
-        if isinstance(new_value, dt.date) and not isinstance(new_value, dt.datetime):
+        if isinstance(new_value, dt.date):  # a datetime.datetime too
             return _render_date_time_from_format(number_format, new_value, "date")
-        if isinstance(new_value, dt.time):
+        if isinstance(new_value, (dt.time, dt.timedelta)):
             return _render_date_time_from_format(number_format, new_value, "time")
         return None
 

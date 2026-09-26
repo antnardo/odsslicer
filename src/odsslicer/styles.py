@@ -9,10 +9,12 @@ Border, CellStyle, RowStyle, ColumnStyle, TableStyle."""
 
 import datetime as dt
 import re
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, cast
 
 from bs4 import Tag
 
+from .datetimes import _ONE_DAY, _as_datetime, _as_timedelta, _clock_parts
 from .xmlutils import _blank_template, _ensure_style_child
 
 if TYPE_CHECKING:
@@ -34,6 +36,7 @@ _DATE_TIME_COMPONENT_NAMES = (
     "day", "month", "year", "day-of-week", "week-of-year", "quarter", "era",
     "hours", "minutes", "seconds", "am-pm", "text",
 )
+_TIME_OF_DAY_COMPONENT_NAMES = frozenset({"hours", "minutes", "seconds", "am-pm"})
 
 
 _CONDITION_RE = re.compile(r"^value\(\)\s*(<=|>=|!=|<|>|=)\s*(-?\d+(?:\.\d+)?)$")
@@ -289,28 +292,62 @@ def _render_number_from_format(number_format: "NumberFormat | None", value: floa
 
 
 def _render_date_time_from_format(
-    number_format: "NumberFormat | None", value: "dt.date | dt.time", family: str
+    number_format: "NumberFormat | None",
+    value: "dt.date | dt.time | dt.timedelta",
+    family: str,
 ) -> "str | None":
-    """Render `value` (a `datetime.date` or `datetime.time`) by walking
+    """Render `value` (a `datetime.date` or `datetime.datetime`, a
+    `datetime.time` or a `datetime.timedelta`) by walking
     `number_format.components` - the same ordered layout `.components`
     itself exposes on read. `None` if `number_format` isn't a `family`
     format, has no `.components`, or uses a component this doesn't know
     how to render (`day-of-week`/`week-of-year`/`quarter`/`era`) - safer
-    to fall back than to silently drop part of the layout."""
+    to fall back than to silently drop part of the layout.
+
+    As LibreOffice shows them: a date in a format with a time part reads
+    as its midnight, and a duration wraps around the clock in an ordinary
+    time format (128:45 shows as 08:45) but counts in full, sign included,
+    in an elapsed-time one (`[HH]:MM:SS`, flagged
+    `number:truncate-on-overflow="false"`)."""
     if number_format is None or number_format.family != family or not number_format.components:
         return None
+    kinds = {kind for kind, _ in number_format.components}
+    sign, fields = "", cast(Any, value)
+    if isinstance(value, (dt.time, dt.timedelta)):
+        # a time of day too: an elapsed [MM]:SS format shows 02:05:03 as 125:03
+        delta = _as_timedelta(value)
+        if number_format._tag.get("number:truncate-on-overflow") == "false":
+            sign, fields = _elapsed_fields(delta, kinds)
+        else:
+            fields = (dt.datetime.min + delta % _ONE_DAY).time()
+    elif isinstance(value, dt.date) and kinds & _TIME_OF_DAY_COMPONENT_NAMES:
+        fields = _as_datetime(value)
     parts = []
     for kind, style in number_format.components:
         if kind == "text":
             parts.append(style)
         elif kind == "am-pm":
-            parts.append("PM" if value.hour >= 12 else "AM")
+            parts.append("PM" if fields.hour >= 12 else "AM")
         elif kind in _DATE_TIME_RENDER_LONG:
             renderer = _DATE_TIME_RENDER_LONG if style == "long" else _DATE_TIME_RENDER_SHORT
-            parts.append(renderer[kind](value))
+            parts.append(renderer[kind](fields))
         else:
             return None
-    return "".join(parts)
+    return sign + "".join(parts)
+
+
+def _elapsed_fields(
+    value: dt.timedelta, kinds: set[str]
+) -> tuple[str, SimpleNamespace]:
+    """The sign of a duration, and its `.hour`/`.minute`/`.second` as an
+    elapsed-time format shows them: the leading unit - the hours, else the
+    minutes, else the seconds - holds the whole duration, however long."""
+    sign, hours, minutes, seconds, _ = _clock_parts(value)
+    if "hours" not in kinds:
+        hours, minutes = 0, minutes + 60 * hours
+        if "minutes" not in kinds:
+            minutes, seconds = 0, seconds + 60 * minutes
+    return sign, SimpleNamespace(hour=hours, minute=minutes, second=seconds)
 
 
 def _make_border(raw: "str | None") -> "Border | None":

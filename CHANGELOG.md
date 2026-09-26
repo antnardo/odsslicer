@@ -9,6 +9,25 @@ still change between minor versions.
 
 ### Fixed
 
+- **A date-time cell, or a duration of 24 hours or more, no longer makes its whole sheet
+  unreadable** ([#4](https://github.com/antnardo/odsslicer/issues/4)). Dates and times were
+  parsed with fixed patterns that took nothing but a bare date and a whole-second duration
+  under a day, so loading a sheet holding `30/11/2023 13:00`, `128:45:00`, a negative
+  duration or a fraction of a second raised `ValueError` — even for `sheet["A1"]`. A
+  date-time now reads as a `datetime.datetime`, and a duration as a `datetime.time` when it
+  fits in a day, fractional seconds included, or as a `datetime.timedelta` otherwise.
+  Everything that read before reads the same.
+- **Date-times and durations can be written**: `cell.value` accepts `datetime.datetime` and
+  `datetime.timedelta`, which raised `TypeError` — so neither could `Sheet.copy` or
+  `Sheet.sort` move such a cell — and stores them as LibreOffice does. A `datetime.time`
+  keeps its microseconds, which were dropped. `Sheet.sort` orders a column mixing dates and
+  date-times, or times and durations.
+- **A value that cannot be read as its declared type falls back to its displayed text**
+  instead of failing the sheet (a malformed date, a duration counted in months, an unknown
+  value type): one `UserWarning` per sheet names such cells, and `cell.raw_value` keeps the
+  value as written.
+- Writing a date into a cell whose format shows a time no longer raises `AttributeError`
+  when no other cell shows how to display it: it shows as its midnight.
 - **The source distribution no longer ships the `rsc/` folder** (the wheels were never
   affected). `setuptools-scm` packs every tracked file, and that folder held development
   references: the OASIS OpenDocument 1.2 specification (two PDFs, under OASIS copyright

@@ -2,10 +2,11 @@
 """Backwards-compatibility shim.
 
 `odsslicer` used to be a single module (`odsslicer.classes`); it is now split
-into focused modules (`addresses`, `constants`, `xmlutils`, `formulas`,
-`styles`, `cell`, `sheet`, `properties`, `libreoffice`, `reader`). Everything
-that was importable from here still is - `from odsslicer.classes import Sheet`
-keeps working - but new code should import from `odsslicer` directly.
+into focused modules (`addresses`, `datetimes`, `constants`, `xmlutils`,
+`formulas`, `styles`, `cell`, `sheet`, `properties`, `libreoffice`,
+`reader`). Everything that was importable from here still is - `from
+odsslicer.classes import Sheet` keeps working - but new code should import
+from `odsslicer` directly.
 """
 from .addresses import string_address, string_to_col
 from .cell import ArrayValues, Cell, Comment

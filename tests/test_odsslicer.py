@@ -14,6 +14,7 @@ Et une section dédiée à l'écriture (Cell.value = ... / ODSReader.save()).
 """
 import datetime as dt
 import math
+import warnings
 
 import pytest
 from conftest import FIXTURES_DIR
@@ -1034,6 +1035,289 @@ def test_number_format_with_an_unsupported_date_component_falls_back_safely():
     s["A1"].style.number_format = fmt
     s["A1"].value = dt.date(2026, 3, 5)
     assert s["A1"].text == "2026-03-05"  # isoformat() fallback, not a partial/garbled render
+
+
+# ---------------------------------------------------------------------------
+# Dates, date-times and durations (issue #4)
+# ---------------------------------------------------------------------------
+
+_DMY = [
+    ("day", "long"),
+    ("text", "/"),
+    ("month", "long"),
+    ("text", "/"),
+    ("year", "long"),
+]
+_HMS = [
+    ("hours", "long"),
+    ("text", ":"),
+    ("minutes", "long"),
+    ("text", ":"),
+    ("seconds", "long"),
+]
+_RAW_VALUE_ATTRS = {"date": "office:date-value", "time": "office:time-value"}
+
+
+def _saved_with_raw_values(tmp_path, cells):
+    """Save a document with a plain label in A1, then from A2 down one cell
+    per `(value type, raw value, displayed text)`, written as another
+    application would have - odsslicer's own writer produces few of these."""
+    r = ODSReader.new()
+    s = r.sheet("Sheet1")
+    s["A1"].value = "label"
+    for row, (value_type, raw, text) in enumerate(cells, start=1):
+        cell = s[row, 0]
+        cell.value = text
+        cell.attrs["office:value-type"] = value_type
+        cell.attrs[_RAW_VALUE_ATTRS.get(value_type, "office:value")] = raw
+    path = tmp_path / "raw.ods"
+    r.save(path)
+    return path
+
+
+@pytest.mark.parametrize(
+    ("value_type", "raw", "text", "expected"),
+    [
+        (
+            "date",
+            "2023-11-30T13:00:00",
+            "30/11/2023 13:00",
+            dt.datetime(2023, 11, 30, 13),
+        ),
+        (
+            "date",
+            "2023-11-30T13:00:00.12346",
+            "30/11/2023 13:00",
+            dt.datetime(2023, 11, 30, 13, 0, 0, 123_460),
+        ),
+        ("time", "PT128H45M00S", "128:45:00", dt.timedelta(hours=128, minutes=45)),
+        ("time", "PT12H30M15.5S", "12:30:15", dt.time(12, 30, 15, 500_000)),
+        ("time", "-PT01H30M00S", "-01:30:00", dt.timedelta(hours=-1, minutes=-30)),
+        # a date-time shown in a time-only format: LibreOffice saves it as
+        # the duration since 1899
+        ("time", "PT1086253H00M00S", "13:00:00", dt.timedelta(hours=1_086_253)),
+        ("time", "PT09H30M00S", "09:30:00", dt.time(9, 30)),
+    ],
+)
+def test_a_sheet_holding_a_date_time_or_a_long_duration_loads(
+    tmp_path, value_type, raw, text, expected
+):
+    # regression (issue #4): one such cell made loading the whole sheet raise
+    # ValueError, so not even A1 could be read
+    path = _saved_with_raw_values(tmp_path, [(value_type, raw, text)])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # a value that reads is no reason to warn
+        s = ODSReader(path).sheet("Sheet1")
+    assert s["A1"].value == "label"
+    assert s["A2"].value == expected
+    assert type(s["A2"].value) is type(expected)
+    assert s["A2"].text == text
+
+
+def test_an_unreadable_value_reads_as_its_text_with_one_warning_for_the_sheet(tmp_path):
+    path = _saved_with_raw_values(
+        tmp_path,
+        [
+            ("date", "30/11/2023", "30/11/2023"),
+            # a year has no fixed length: LibreOffice refuses it too
+            ("time", "P1Y", "1 year"),
+            ("float", "n/a", "n/a"),
+            ("time", "PT128H45M00S", "128:45:00"),
+            ("duration", "PT1H", "1:00"),  # no such value type in ODF
+        ],
+    )
+    with pytest.warns(UserWarning, match="not readable as the declared type") as caught:
+        s = ODSReader(path).sheet("Sheet1")
+    (message,) = [str(w.message) for w in caught if "not readable" in str(w.message)]
+    assert "sheet 'Sheet1'" in message
+    assert (
+        "A2 (date value '30/11/2023'), A3 (time value 'P1Y'),"
+        " A4 (float value 'n/a') and 1 more" in message
+    )
+    assert s["A1"].value == "label"
+    assert [s[row, 0].value for row in range(1, 6)] == [
+        "30/11/2023",
+        "1 year",
+        "n/a",
+        dt.timedelta(hours=128, minutes=45),
+        "1:00",
+    ]
+    # the value as written, and its declared type, are still there
+    assert s["A2"].raw_value == "30/11/2023"
+    assert s["A2"].format == "date"
+
+
+@pytest.mark.parametrize(
+    ("value", "raw"),
+    [
+        (dt.datetime(2023, 11, 30, 13), "2023-11-30T13:00:00"),
+        # a date-time even at midnight
+        (dt.datetime(2023, 11, 30), "2023-11-30T00:00:00"),
+        # the microseconds used to be dropped
+        (dt.time(12, 30, 15, 500_000), "PT12H30M15.5S"),
+        (dt.timedelta(hours=128, minutes=45), "PT128H45M00S"),
+        (dt.timedelta(hours=-1, minutes=-30), "-PT01H30M00S"),
+    ],
+)
+def test_a_written_date_time_or_duration_round_trips(tmp_path, value, raw):
+    r = ODSReader.new()
+    s = r.sheet("Sheet1")
+    s["A1"].value = value
+    assert s["A1"].raw_value == raw
+    assert s["A1"].value == value
+    out = tmp_path / "out.ods"
+    r.save(out)
+    reread = ODSReader(out).sheet("Sheet1")
+    assert reread["A1"].value == value
+    assert type(reread["A1"].value) is type(value)
+    assert reread["A1"].format == s["A1"].format
+
+
+def test_a_written_duration_within_a_day_reads_as_a_time_of_day(writable_reader):
+    # .value is at once what reading the cell back gives: see odsslicer/datetimes.py
+    s = writable_reader.sheet("Sheet1")
+    s["A9"].value = dt.timedelta(hours=9, minutes=30)
+    assert s["A9"].raw_value == "PT09H30M00S"
+    assert s["A9"].value == dt.time(9, 30)
+
+
+def test_an_aware_datetime_is_written_in_utc(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    s["A8"].value = dt.datetime(
+        2023, 11, 30, 13, tzinfo=dt.timezone(dt.timedelta(hours=5))
+    )
+    assert s["A8"].raw_value == "2023-11-30T08:00:00"
+    assert s["A8"].value == dt.datetime(2023, 11, 30, 8)
+
+
+def test_date_time_display_reads_the_real_format_with_no_example_anywhere():
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    s["A1"].style.number_format = NumberFormat.create(
+        r, "date", components=[*_DMY, ("text", " "), *_HMS]
+    )
+    s["A1"].value = dt.datetime(2023, 11, 30, 13, 5, 9)
+    assert s["A1"].text == "30/11/2023 13:05:09"
+
+
+def test_a_date_in_a_date_time_format_displays_as_its_midnight():
+    # used to raise AttributeError: a date has no .hour to render
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    s["A1"].style.number_format = NumberFormat.create(
+        r, "date", components=[*_DMY, ("text", " "), *_HMS]
+    )
+    s["A1"].value = dt.date(2023, 11, 30)
+    assert s["A1"].text == "30/11/2023 00:00:00"
+
+
+@pytest.mark.parametrize(
+    ("elapsed", "value", "text"),
+    [
+        # a clock format wraps around the day
+        (False, dt.timedelta(hours=128, minutes=45), "08:45:00"),
+        (False, dt.timedelta(hours=-1, minutes=-30), "22:30:00"),
+        # [HH]:MM:SS counts every hour
+        (True, dt.timedelta(hours=128, minutes=45), "128:45:00"),
+        (True, dt.timedelta(hours=-1, minutes=-30), "-01:30:00"),
+    ],
+)
+def test_duration_display_follows_the_real_format_like_libreoffice(
+    elapsed, value, text
+):
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    fmt = NumberFormat.create(r, "time", components=_HMS)
+    if elapsed:  # NumberFormat.create has no switch for it
+        fmt._tag.attrs["number:truncate-on-overflow"] = "false"
+    s["A1"].style.number_format = fmt
+    s["A1"].value = value
+    assert s["A1"].text == text
+
+
+def test_an_elapsed_minutes_format_counts_the_hours_in_the_minutes():
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    fmt = NumberFormat.create(
+        r, "time", components=[("minutes", "long"), ("text", ":"), ("seconds", "long")]
+    )
+    fmt._tag.attrs["number:truncate-on-overflow"] = "false"
+    s["A1"].style.number_format = fmt
+    # within a day, so it reads back as a time of day
+    s["A1"].value = dt.timedelta(hours=2, minutes=5, seconds=3)
+    assert s["A1"].text == "125:03"
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (dt.datetime(2023, 11, 30, 13), "2023-11-30 13:00:00"),
+        (dt.timedelta(hours=128, minutes=45), "128:45:00"),
+        (dt.timedelta(hours=-1, minutes=-30), "-01:30:00"),
+    ],
+)
+def test_date_time_and_duration_display_fall_back_to_a_plain_rendering(value, text):
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    s["A1"].value = value
+    assert s["A1"].text == text
+
+
+def test_date_time_display_is_learnt_from_another_date_time_cell(tmp_path):
+    path = _saved_with_raw_values(
+        tmp_path, [("date", "2023-11-30T13:00:00", "30/11/2023 13:00")]
+    )
+    s = ODSReader(path).sheet("Sheet1")
+    s["A3"].value = dt.datetime(2024, 1, 5, 8, 30)
+    s["A4"].value = dt.date(2024, 1, 6)  # a bare date, as LibreOffice saves a midnight
+    assert s["A3"].text == "05/01/2024 08:30"
+    assert s["A4"].text == "06/01/2024 00:00"
+
+
+def test_a_date_time_displays_as_a_date_next_to_dates(tmp_path):
+    # as a date-only format shows it: the example is taken to share the cell's format
+    path = _saved_with_raw_values(tmp_path, [("date", "2023-11-30", "30/11/2023")])
+    s = ODSReader(path).sheet("Sheet1")
+    s["A3"].value = dt.datetime(2024, 1, 5, 8, 30)
+    assert s["A3"].text == "05/01/2024"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        # LibreOffice saves a date-time falling on midnight as a bare date
+        [
+            dt.datetime(2023, 11, 29, 13),
+            dt.date(2023, 11, 30),
+            dt.datetime(2023, 11, 30, 8),
+        ],
+        [dt.timedelta(hours=-1), dt.time(9), dt.timedelta(hours=26)],
+    ],
+)
+def test_sort_orders_the_types_a_date_or_time_column_mixes(values):
+    # Python refuses to order a date and a date-time, or a time and a timedelta
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    s["A1:A3"].value = [[values[2]], [values[0]], [values[1]]]
+    s.sort("A1:A3", by=0)
+    assert [s[row, 0].value for row in range(3)] == values
+
+
+def test_copy_carries_date_times_and_durations(writable_reader):
+    # writing either type raised TypeError, so Sheet.copy could not carry them
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].value = dt.datetime(2023, 11, 30, 13)
+    s["A2"].value = dt.timedelta(hours=128, minutes=45)
+    s.copy("A1:A2", "C1")
+    assert s["C1"].value == dt.datetime(2023, 11, 30, 13)
+    assert s["C2"].value == dt.timedelta(hours=128, minutes=45)
+
+
+def test_a_duration_is_written_to_every_cell_of_a_range():
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    s["A1:A3"].value = dt.timedelta(hours=30)
+    assert s["A1:A3"].to_list() == [[dt.timedelta(hours=30)]] * 3
 
 
 # ---------------------------------------------------------------------------

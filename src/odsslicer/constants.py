@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """Shared constants: ODF cell-type conversions, size limits, sentinel objects."""
 
-import datetime as dt
 import re
 from typing import Any, Callable
 
 from bs4 import BeautifulSoup
+
+from .datetimes import _parse_date_value, _parse_time_value
 
 
 RE_STRING_CELL = re.compile(r"([A-Z]+)?([0-9]+)?(:)?([A-Z]+)?([0-9]+)?")
@@ -27,8 +28,10 @@ FORMATS: "dict[str | None, Callable[[Any], Any]]" = {
     "float": float,
     "percentage": float,
     "currency": float,
-    "date": lambda s: dt.datetime.strptime(s, "%Y-%m-%d").date(),
-    "time": lambda s: dt.datetime.strptime(s, "PT%HH%MM%SS").time(),
+    # a datetime.date, or a datetime.datetime when the value has a time part
+    "date": _parse_date_value,
+    # a datetime.time within a day, a datetime.timedelta beyond (see datetimes.py)
+    "time": _parse_time_value,
     # ODF stores booleans as the strings "true"/"false" (office:boolean-value);
     # plain `bool(s)` would treat "false" as truthy since it's a non-empty string.
     "boolean": lambda s: None if s is None else s == "true",
