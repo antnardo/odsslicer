@@ -64,6 +64,7 @@ sheet = table.sheet("Sheet1")
 10. [Cell hyperlinks](#10-cell-hyperlinks)
 11. [Document properties](#11-document-properties)
 12. [Performance](#12-performance)
+    - [How it compares to other readers](#how-it-compares-to-other-readers)
 13. [Known limitations](#13-known-limitations)
 14. [Appendix: notable bug fixes](#14-appendix-notable-bug-fixes)
 
@@ -1286,10 +1287,12 @@ reading *and rewriting* documents whose formatting must survive.
   [References to other workbooks](#references-to-other-workbooks).
 - **Named ranges and 3D references** (`Sheet1:Sheet3.A1`) aren't translated by the friendly
   formula syntax — write them in ODF's bracket syntax directly (the `[` escape hatch).
-- **Displayed-text locale.** The on-write `.text` inference doesn't capture the document's
-  actual locale (`number:language`/`number:country`); its layers may produce a different
-  separator convention than the rest of the document. Real applications recompute display
-  text on open.
+- **Displayed-text locale, for numbers.** A date or time written into a cell with no number
+  format does get the standard format of the document's locale (see [Displayed
+  text](#displayed-text-how-text-is-produced-on-write)), but the layer that reads a
+  `NumberFormat` renders numbers with a fixed `.`/`,` convention: it doesn't read the
+  format's own `number:language`/`number:country`, so a number's separators may differ from
+  the rest of the document. Real applications recompute display text on open.
 - **Structural edits only rewrite formulas.** Inserting or deleting rows/columns leaves
   pivot-table source ranges, named ranges, and conditional-format or validation ranges as
   they were.
@@ -1308,8 +1311,10 @@ reading *and rewriting* documents whose formatting must survive.
 
 ## 14. Appendix: notable bug fixes
 
-Bugs found and fixed while developing the module — all covered
-by regression tests.
+Bugs found and fixed while developing the module, before the first release — all covered by
+regression tests. Those found since are in the
+[CHANGELOG](https://github.com/antnardo/odsslicer/blob/master/CHANGELOG.md), each with the
+issue it was reported in.
 
 1. **Reading boolean cells**: the `"boolean"` format looked up `office:value` instead of
    `office:boolean-value`, and converted with `bool(s)` — `True` for the non-empty string

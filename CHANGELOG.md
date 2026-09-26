@@ -7,6 +7,11 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Changed
+
+- The PyPI page lists the same keywords as the repository's GitHub topics, so a search for
+  what the package does finds it.
+
 ## [0.13.2] — 2026-09-27
 
 ### Fixed
