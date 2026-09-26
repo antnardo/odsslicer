@@ -7,6 +7,8 @@ still change between minor versions.
 
 ## [Unreleased]
 
+## [0.13.2] — 2026-09-27
+
 ### Fixed
 
 - **`recalculate()` no longer has LibreOffice copy its result over the workbook in place**
@@ -356,7 +358,8 @@ typed cell values (text, number, percentage, currency, date, time, boolean), for
 repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
-[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.13.2...HEAD
+[0.13.2]: https://github.com/antnardo/odsslicer/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/antnardo/odsslicer/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/antnardo/odsslicer/compare/v0.12.3...v0.13.0
 [0.12.3]: https://github.com/antnardo/odsslicer/compare/v0.12.2...v0.12.3
