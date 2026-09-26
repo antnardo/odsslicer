@@ -7,6 +7,21 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Writing past the columns of a run of repeated rows no longer corrupts the run**
+  ([#5](https://github.com/antnardo/odsslicer/issues/5)). LibreOffice stores a run of
+  identical rows, empty ones included, as one repeated element. Writing a range past the
+  sheet's width inside such a run saved its first value onto every row of the run and the
+  next ones further right, one column in two — `D2:D4 = [[1], [2], [3]]` gave D = 1 and F = 2
+  on all of rows 2 to 6 — while the sheet read back as expected until the save. Growing the
+  sheet now widens the run's element once, and writing unrolls it first, as it already did
+  within the sheet's width.
+- `delete_column` no longer raises `ValueError` on a run of repeated rows whose cells are
+  repeated too, which is how LibreOffice writes empty ones.
+- On a sheet ending in a run of repeated empty rows, writing inside the run no longer raises
+  `IndexError`, and writing below it no longer lands one row too low.
+
 ## [0.13.0] — 2026-09-26
 
 ### Added

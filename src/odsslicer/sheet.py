@@ -53,6 +53,11 @@ def _set_repeat(tag: Tag, attr: str, n: int) -> None:
         tag.attrs[attr] = str(n)
 
 
+def _repeat(tag: Tag, attr: str) -> int:
+    """A `table:number-*-repeated` attribute's value: 1 when absent."""
+    return int(tag.attrs.get(attr, "1"))
+
+
 class Sheet:
     def __init__(self, table: Tag, verbose: bool = False, reader: "ODSReader | None" = None) -> None:
         self.verbose = verbose
@@ -149,16 +154,22 @@ class Sheet:
         if unreadable:
             self._warn_unreadable(unreadable)
         # CLEAN UP
+        # What the grid leaves out below stays in the file, and must stay out
+        # of the elements the grid points at: `_unrepeat_row` gives a copy
+        # to every repetition of an element, and `grow_to` appends rows
+        # after the last element of the grid (issue #5).
+        if not table or not table[0]:
+            return []
+        if all(cell.is_empty for cell in table[-1]):
+            row_tag = cast(Tag, table[-1][0].cell.parent)
+            keep = len(self._run_in(table, len(table) - 1)) - 1
+            table.pop()
+            logger.log(self._log_level, "    Last row empty: removed")
+            self._split_row_element(row_tag, keep)
         if len(table) == 0:
             return table
-        # Check if last row is empty and remove
-        if sum(not cell.is_empty for cell in table[-1]) == 0:
-            table = table[:-1]
-            logger.log(self._log_level, "    Last row empty: removed")
         # Remove repeated columns > MAX and empty
         # Transpose
-        if len(table) == 0:
-            return table
         n_cols = len(table[0])
         columns = [[row[j] for row in table] for j in range(n_cols)]
         # Get empty columns
@@ -198,6 +209,48 @@ class Sheet:
                         empty_cols_pos[i] = (jp, vp + 1)
                 empty_cols_aggr = [e[1] for e in empty_cols_pos]
         return table
+
+    @staticmethod
+    def _run_in(rows: "list[list[Cell]]", row: int) -> range:
+        """The rows of `rows` sharing `row`'s `<table:table-row>` element: a
+        run of repeated rows (`table:number-rows-repeated`), or `row` alone.
+        The grid keeps one list of cells per row, but they all point at the
+        same elements, so reshaping any row of a run has to reach them all."""
+        tag = rows[row][0].cell.parent
+        first, stop = row, row + 1
+        while first > 0 and rows[first - 1][0].cell.parent is tag:
+            first -= 1
+        while stop < len(rows) and rows[stop][0].cell.parent is tag:
+            stop += 1
+        return range(first, stop)
+
+    @classmethod
+    def _runs_in(cls, rows: "list[list[Cell]]") -> "list[range]":
+        """`rows`, grouped into runs (see `_run_in`), in order."""
+        runs: list[range] = []
+        start = 0
+        while start < len(rows):
+            runs.append(cls._run_in(rows, start))
+            start = runs[-1].stop
+        return runs
+
+    def _run_of(self, row: int) -> range:
+        """The grid's rows sharing `row`'s element - see `_run_in`."""
+        return self._run_in(self.rows, row)
+
+    @staticmethod
+    def _split_row_element(row_tag: Tag, keep: int) -> None:
+        """Split a repeated `<table:table-row>` after its first `keep`
+        repetitions: the element keeps those, since the grid's cells point
+        at its cells, and a copy inserted after it takes the others."""
+        attr = "table:number-rows-repeated"
+        n = _repeat(row_tag, attr)
+        if not 0 < keep < n:
+            return
+        rest = copy.deepcopy(row_tag)
+        _set_repeat(row_tag, attr, keep)
+        _set_repeat(rest, attr, n - keep)
+        row_tag.insert_after(rest)
 
     def _warn_unreadable(self, cells: list[Cell]) -> None:
         """One warning for all the cells of this sheet whose value could not
@@ -293,10 +346,7 @@ class Sheet:
         if n <= 1:
             return
 
-        start = row
-        while start > 0 and self.rows[start - 1][0].cell.parent is row_tag:
-            start -= 1
-
+        run = self._run_of(row)
         copies = [copy.deepcopy(row_tag) for _ in range(n)]
         for c in copies:
             c.attrs.pop("table:number-rows-repeated", None)
@@ -306,8 +356,7 @@ class Sheet:
             prev.insert_after(nxt)
             prev = nxt
 
-        for k, copy_tag in enumerate(copies):
-            r = start + k
+        for r, copy_tag in zip(run, copies, strict=True):
             j = 0
             for cell_tag in copy_tag.find_all(TAG_CELL):
                 n_cols = int(cell_tag.attrs.get("table:number-columns-repeated", "1"))
@@ -318,7 +367,9 @@ class Sheet:
 
     def _unrepeat_col(self, row: int, col: int) -> None:
         """Split the `table:number-columns-repeated` cell tag covering (row, col)
-        into one independent `<table:table-cell>` per repetition."""
+        into one independent `<table:table-cell>` per repetition - for every
+        row of the run sharing it (see `_run_in`), which the split reaches
+        all the same."""
         cell_tag = self.rows[row][col].cell
         n = int(cell_tag.attrs.get("table:number-columns-repeated", "1"))
         if n <= 1:
@@ -327,6 +378,7 @@ class Sheet:
         start = col
         while start > 0 and self.rows[row][start - 1].cell is cell_tag:
             start -= 1
+        run = self._run_of(row)  # before the split detaches `cell_tag`
 
         copies = [copy.deepcopy(cell_tag) for _ in range(n)]
         for copy_of_cell in copies:
@@ -337,9 +389,9 @@ class Sheet:
             prev.insert_after(nxt)
             prev = nxt
 
-        for k, copy_tag in enumerate(copies):
-            c = start + k
-            self.rows[row][c].__init__(copy_tag, row=row, col=c, sheet=self)  # type: ignore[misc]
+        for r in run:
+            for c, copy_tag in enumerate(copies, start=start):
+                self.rows[r][c].__init__(copy_tag, row=r, col=c, sheet=self)  # type: ignore[misc]
 
     @staticmethod
     def _is_merge_master(cell: Cell) -> bool:
@@ -705,18 +757,26 @@ class Sheet:
         Widens every existing row with new blank cells first (if `col` is past
         the current width), then appends new, full-width blank rows (if `row` is
         past the current height) — `sheet.size` reflects the new extent
-        afterwards, and every newly created cell is a real, independently
-        writable `Cell` (not the `EMPTY_CELL_BS` placeholder used for reads).
+        afterwards, and every newly created cell is a real `Cell` of the grid
+        (not the `EMPTY_CELL_BS` placeholder used for reads), which writing
+        unrolls like any other (see `materialize_cell`).
+
+        A row element is widened once, however many rows of the grid it
+        stands for: every row of a run of repeated rows points at the same
+        new cells, as `load` would have them (issue #5).
         """
         target_cols = max(col + 1, self.n_cols)
-        extra_cols = target_cols - self.n_cols
-        if extra_cols > 0:
-            for r, cells_row in enumerate(self.rows):
-                row_tag = cells_row[0].cell.parent
-                for _ in range(extra_cols):
-                    new_cell_tag = self._empty_cell_template()
-                    row_tag.append(new_cell_tag)
-                    cells_row.append(Cell(new_cell_tag, row=r, col=len(cells_row), sheet=self))
+        if target_cols > self.n_cols:
+            for run in self._runs_in(self.rows):
+                pad = self._empty_cell_template()
+                extra = target_cols - self.n_cols
+                _set_repeat(pad, "table:number-columns-repeated", extra)
+                self.rows[run.start][0].cell.parent.append(pad)
+                for r in run:
+                    self.rows[r].extend(
+                        Cell(pad, row=r, col=c, sheet=self)
+                        for c in range(self.n_cols, target_cols)
+                    )
             self.n_cols = target_cols
 
         if row >= self.n_rows:
@@ -743,8 +803,9 @@ class Sheet:
         what `self.rows` accounts for.
 
         `load()`'s cleanup (a lone blank row, a trimmed trailing empty row, a
-        huge discarded repeated block...) only affects the in-memory `self.rows`
-        view - it never touches the underlying XML. Appending new rows without
+        huge discarded repeated block...) only leaves rows out of the
+        in-memory `self.rows` view - they stay in the XML, split off any
+        element the grid still points at. Appending new rows without
         first clearing these out would silently leave them in place, ready to
         resurface as extra "phantom" rows the next time the file is parsed.
         """
@@ -823,11 +884,12 @@ class Sheet:
         for r in range(self.n_rows):
             self._unrepeat_col(r, col)
         self._unrepeat_column_tag(col).decompose()
-        for r in range(self.n_rows):
-            self.rows[r][col].cell.decompose()
-            del self.rows[r][col]
-            for c in range(col, len(self.rows[r])):
-                self.rows[r][c].col = c
+        for run in self._runs_in(self.rows):
+            self.rows[run.start][col].cell.decompose()  # once for the whole run
+            for r in run:
+                del self.rows[r][col]
+                for c in range(col, len(self.rows[r])):
+                    self.rows[r][c].col = c
         self.n_cols -= 1
         self.size = (self.n_rows, self.n_cols)
         self._remap_formula_references(_deletion_remap(deleted_cols=[col]))

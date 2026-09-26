@@ -19,7 +19,7 @@ import datetime as dt
 import re
 
 import pytest
-from conftest import requires_soffice
+from conftest import libreoffice_shows, requires_soffice
 
 from odsslicer import ODSReader
 from odsslicer.classes import Border, NumberFormat
@@ -282,6 +282,25 @@ def test_libreoffice_opens_a_full_grid_file_after_insertions_without_truncating(
     reopened = ODSReader(libreoffice_export(out, "ods")).sheet("Feuille1")
     assert reopened.size == sheet.size
     assert reopened[sheet.n_rows - 1, sheet.n_cols - 1].value == last_value
+
+
+@requires_soffice
+def test_libreoffice_shows_values_written_past_a_run_of_repeated_rows_where_written(
+    repeated_run_ods, tmp_path
+):
+    # issue #5: rows 2 to 6 all showed D = 1 and F = 2, and 3 went to H
+    table = ODSReader(repeated_run_ods)
+    table.sheet("Sheet1")["D2:D4"].value = [[1], [2], [3]]
+    table.save()
+    assert libreoffice_shows(repeated_run_ods, tmp_path) == [
+        ["a", "b", "", ""],
+        ["", "", "", "1"],
+        ["", "", "", "2"],
+        ["", "", "", "3"],
+        ["", "", "", ""],
+        ["", "", "", ""],
+        ["end", "", "", ""],
+    ]
 
 
 @requires_soffice

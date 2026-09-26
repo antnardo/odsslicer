@@ -332,6 +332,9 @@ sheet.size            # (12, 5): rows 10-12 added, columns C-E added, everything
 A plain read (`sheet["Z1"].value` with no assignment) never grows anything — only a write
 triggers growth. New rows/cells don't inherit any particular style.
 
+A run of repeated rows is widened once for all its rows, and writing into it then unrolls
+it, as above.
+
 ### Displayed text: how `.text` is produced on write
 
 ODF stores both a cell's value (`office:value`) and the text as displayed (`text:p`), formatted

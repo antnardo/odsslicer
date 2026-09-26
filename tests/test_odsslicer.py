@@ -17,10 +17,19 @@ import math
 import warnings
 
 import pytest
-from conftest import FIXTURES_DIR
+from conftest import (
+    FIXTURES_DIR,
+    cells_with_content,
+    empty_cells,
+    ods_with_sheet,
+    row,
+    text_cell,
+)
 
 from odsslicer import ODSReader
 from odsslicer.classes import ArrayValues, Border, Cell, CellStyle, NumberFormat, Sheet
+from odsslicer.constants import TAG_CELL
+from odsslicer.sheet import _repeat
 
 
 # ---------------------------------------------------------------------------
@@ -831,6 +840,110 @@ def test_save_round_trip_after_unrepeat_and_unmerge(writable_reader, tmp_path):
     assert reread.sheet("Sheet1")["A1"].value == "texte simple"
     sr = reread.sheet("Sheet2Repeat")
     assert sr.size == (9, 6) and sr["A1"].value == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Runs of repeated rows (issue #5) - every row of a run points at the same
+# `<table:table-row>` element, so reshaping one row has to reach them all.
+# The damage only shows once saved: read back from the file.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("address", "values", "written"),
+    [
+        # past the run's two columns: every row of the run got D = 1, F = 2
+        ("D2:D4", [[1], [2], [3]], {"D2": 1.0, "D3": 2.0, "D4": 3.0}),
+        ("C6", 4, {"C6": 4.0}),
+        (
+            "B3:E4",
+            [[1, 2, 3, 4], [5, 6, 7, 8]],
+            {"B3": 1, "C3": 2, "D3": 3, "E3": 4, "B4": 5, "C4": 6, "D4": 7, "E4": 8},
+        ),
+        # inside them, which already worked
+        ("B2:B4", [[1], [2], [3]], {"B2": 1.0, "B3": 2.0, "B4": 3.0}),
+    ],
+)
+def test_writing_into_a_run_of_repeated_rows_changes_only_the_written_cells(
+    repeated_run_ods, address, values, written
+):
+    r = ODSReader(repeated_run_ods)
+    r.sheet("Sheet1")[address].value = values
+    r.save()
+    s = ODSReader(repeated_run_ods).sheet("Sheet1")
+    assert cells_with_content(s) == {"A1": "a", "B1": "b", "A7": "end", **written}
+
+
+def test_writing_past_the_width_of_a_libreoffice_run_of_repeated_rows(
+    writable_reader, tmp_path
+):
+    # Sheet2Repeat, saved by LibreOffice: rows 3 to 8 are one element whose
+    # cells are one repeated element too, and F9 comes after them
+    s = writable_reader.sheet("Sheet2Repeat")
+    before = cells_with_content(s)
+    s["G3:G5"].value = [[1], [2], [3]]
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+    reread = ODSReader(out).sheet("Sheet2Repeat")
+    assert reread.size == (9, 7)
+    assert cells_with_content(reread) == {**before, "G3": 1.0, "G4": 2.0, "G5": 3.0}
+
+
+def test_growing_a_run_of_repeated_rows_widens_its_element_once(repeated_run_ods):
+    # the shared element used to get the new cells once per row of the run
+    s = ODSReader(repeated_run_ods).sheet("Sheet1")
+    s.grow_to(0, 4)
+    run = s.rows[1][0].cell.parent
+    assert run.attrs["table:number-rows-repeated"] == "5"
+    cells = run.find_all(TAG_CELL)
+    assert sum(_repeat(c, "table:number-columns-repeated") for c in cells) == 5
+    # one new cell for the whole run, as load() would have it
+    assert all(s.rows[r][4].cell is s.rows[1][4].cell for r in range(2, 6))
+
+
+@pytest.mark.parametrize(
+    ("col", "expected"),
+    [(0, {"A1": "b"}), (1, {"A1": "a", "A7": "end"})],
+)
+def test_deleting_a_column_through_a_run_of_repeated_cells(
+    repeated_run_ods, col, expected
+):
+    # regression: ValueError, the run's repeated cell being split once per
+    # row of the run - the second time once it had left the tree
+    r = ODSReader(repeated_run_ods)
+    r.sheet("Sheet1").delete_column(col)
+    r.save()
+    assert cells_with_content(ODSReader(repeated_run_ods).sheet("Sheet1")) == expected
+
+
+def test_deleting_a_column_of_a_libreoffice_sheet_with_repeated_rows(
+    writable_reader, tmp_path
+):
+    s = writable_reader.sheet("Sheet2Repeat")
+    s.delete_column(2)
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+    reread = ODSReader(out).sheet("Sheet2Repeat")
+    assert reread.size == (9, 5)
+    ones = {f"{col}{r}": 1.0 for col in "ABC" for r in (1, 2)}
+    assert cells_with_content(reread) == {**ones, "E9": 5.0}
+
+
+@pytest.mark.parametrize("address", ["A3", "B5", "A6", "A7", "C9"])
+def test_writing_into_or_below_a_trailing_run_of_empty_rows(tmp_path, address):
+    # regression: IndexError inside the run, and one row too low below it -
+    # load() left the run's last row out of the grid, not out of the element.
+    # Valid ODF, though LibreOffice itself writes such a run's last row apart.
+    xml = (
+        '<table:table-column table:number-columns-repeated="2"/>'
+        + row(text_cell("a"), text_cell("b"))
+        + row(empty_cells(2), repeat=5)
+    )
+    path = ods_with_sheet(tmp_path / "tail.ods", xml)
+    r = ODSReader(path)
+    r.sheet("Sheet1")[address].value = "x"
+    r.save()
+    expected = {"A1": "a", "B1": "b", address: "x"}
+    assert cells_with_content(ODSReader(path).sheet("Sheet1")) == expected
 
 
 def test_save_round_trip(writable_reader, tmp_path):

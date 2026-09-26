@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import csv
 import shutil
 import subprocess
 import sys
@@ -10,8 +11,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pytest
+from bs4 import BeautifulSoup, Tag
 
 from odsslicer import ODSReader
+from odsslicer.xmlutils import _ODF_NAMESPACES
 
 FIXTURES_DIR = Path(__file__).resolve().parent
 
@@ -87,7 +90,8 @@ def convert_with_libreoffice(src_path, fmt, outdir):
     )
     if result.returncode != 0:
         raise RuntimeError(f"soffice --convert-to {fmt} failed:\n{result.stdout}\n{result.stderr}")
-    out_path = Path(outdir) / f"{Path(src_path).stem}.{fmt}"
+    extension = fmt.split(":", 1)[0]  # "csv:<filter>:<options>" writes a .csv
+    out_path = Path(outdir) / f"{Path(src_path).stem}.{extension}"
     if not out_path.exists():
         raise RuntimeError(f"soffice did not produce {out_path}:\n{result.stdout}\n{result.stderr}")
     return out_path
@@ -99,3 +103,94 @@ def libreoffice_export(tmp_path):
         return convert_with_libreoffice(ods_path, fmt, tmp_path)
 
     return _export
+
+
+# CSV export options: comma, double quote, UTF-8, from line 1, and token 9,
+# "save cell contents as shown" - what LibreOffice displays, not the value
+_CSV_AS_SHOWN = (
+    "csv:Text - txt - csv (StarCalc):44,34,76,1,,0,false,true,true,false,false"
+)
+
+
+def libreoffice_shows(ods_path, outdir):
+    """The first sheet of `ods_path` as LibreOffice displays it: the text of
+    each cell, row by row, as far as its last used row and column."""
+    csv_path = convert_with_libreoffice(ods_path, _CSV_AS_SHOWN, outdir)
+    with csv_path.open(newline="", encoding="utf-8") as f:
+        return list(csv.reader(f))
+
+
+def _fragment(xml):
+    """The top-level elements of an ODF XML fragment, detached."""
+    declarations = " ".join(
+        f'xmlns:{prefix}="{uri}"' for prefix, uri in _ODF_NAMESPACES.items()
+    )
+    soup = BeautifulSoup(f"<fragment {declarations}>{xml}</fragment>", "xml")
+    root = soup.find("fragment")
+    return [child.extract() for child in list(root.children) if isinstance(child, Tag)]
+
+
+def ods_with_sheet(path, table_xml, styles_xml=""):
+    """Save at `path` a document whose only sheet, Sheet1, is made of
+    `table_xml` - `<table:table-column>` and `<table:table-row>` elements
+    written as another application would write them, since odsslicer's own
+    writer never produces most of what a sheet can hold - with
+    `styles_xml` added to its automatic styles. Returns `path`."""
+    reader = ODSReader.new()
+    table = reader.tables[0]
+    for child in list(table.children):
+        child.extract()
+    for element in _fragment(table_xml):
+        table.append(element)
+    for element in _fragment(styles_xml):
+        reader._automatic_styles().append(element)
+    reader.save(path)
+    return path
+
+
+def text_cell(text):
+    """A string cell, as `table_xml` for `ods_with_sheet`."""
+    return (
+        '<table:table-cell office:value-type="string">'
+        f"<text:p>{text}</text:p></table:table-cell>"
+    )
+
+
+def empty_cells(repeat=1, style=None):
+    """`repeat` empty cells written as one element, as applications do."""
+    attrs = f' table:style-name="{style}"' if style else ""
+    if repeat > 1:
+        attrs += f' table:number-columns-repeated="{repeat}"'
+    return f"<table:table-cell{attrs}/>"
+
+
+def row(*cells, repeat=1):
+    """A `<table:table-row>` of `cells`, repeated `repeat` times."""
+    attrs = f' table:number-rows-repeated="{repeat}"' if repeat > 1 else ""
+    return f"<table:table-row{attrs}>{''.join(cells)}</table:table-row>"
+
+
+def cells_with_content(sheet):
+    """`{address: value}` for every cell of `sheet` holding something."""
+    return {
+        cell.address: cell.value
+        for cells in sheet.rows
+        for cell in cells
+        if not cell.is_empty
+    }
+
+
+# A1:B1 filled, rows 2 to 6 one repeated row element - as LibreOffice writes
+# a run of identical rows - and A7 filled. Something has to follow the run:
+# LibreOffice drops trailing empty rows, which is what hid issue #5.
+REPEATED_RUN_XML = (
+    '<table:table-column table:number-columns-repeated="2"/>'
+    + row(text_cell("a"), text_cell("b"))
+    + row(empty_cells(2), repeat=5)
+    + row(text_cell("end"), empty_cells())
+)
+
+
+@pytest.fixture()
+def repeated_run_ods(tmp_path):
+    return ods_with_sheet(tmp_path / "run.ods", REPEATED_RUN_XML)

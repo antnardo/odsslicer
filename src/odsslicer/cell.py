@@ -493,6 +493,8 @@ class Cell:
         out-of-range position rather than storing it, `self` is repointed at the
         newly created tag and installed as the sheet's canonical `Cell` for that
         position, so later reads/writes of the same position see this object.
+        A grown cell is then materialized like any other: a run of repeated
+        rows gets one new cell for all its rows (issue #5).
         """
         if self.sheet is None:
             raise RuntimeError(
@@ -503,7 +505,6 @@ class Cell:
             new_cell = self.sheet.rows[self.row][self.col]
             self.__init__(new_cell.cell, row=self.row, col=self.col, sheet=self.sheet)  # type: ignore[misc]
             self.sheet.rows[self.row][self.col] = self
-            return
         self.sheet.materialize_cell(self.row, self.col)
 
     _DATE_PATTERNS = (
