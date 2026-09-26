@@ -7,6 +7,8 @@ still change between minor versions.
 
 ## [Unreleased]
 
+## [0.12.3] — 2026-09-26
+
 ### Fixed
 
 - **A date-time cell, or a duration of 24 hours or more, no longer makes its whole sheet
@@ -233,7 +235,8 @@ typed cell values (text, number, percentage, currency, date, time, boolean), for
 repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
-[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.12.3...HEAD
+[0.12.3]: https://github.com/antnardo/odsslicer/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/antnardo/odsslicer/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/antnardo/odsslicer/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/antnardo/odsslicer/compare/v0.11.1...v0.12.0
