@@ -263,6 +263,26 @@ convention (`mimetype` first, uncompressed) is respected. With no argument, `sav
 the source file — except for a document created with `ODSReader.new()`, which has no source
 file and requires an explicit path.
 
+`save()` never writes into the workbook itself: it writes the new file under a temporary name
+in the same folder (`.name.ods.<random>.tmp`), has it reach the disk, then renames it over the
+target in one step. A program reading the workbook meanwhile gets the old version or the new
+one, never a partial file, and a save that fails or is interrupted (an exception, Ctrl-C)
+leaves the old version as it was, with no temporary file behind — a crash or a power cut can
+leave one, to delete. As the saved file is a new file:
+
+- it keeps the permissions of the one it replaces, and a file saved to a new path gets the
+  default permissions of any new file;
+- a symbolic link is followed and stays as it was, but another hard link to the old file
+  keeps the old content;
+- saving needs write access to the folder, not just to the file, and a read-only file raises
+  `PermissionError`;
+- on Windows, a file another program keeps open cannot be replaced: `save()` raises
+  `PermissionError` and leaves the file as it was.
+
+With `recalculate=True`, only odsslicer's write is atomic: LibreOffice then saves the workbook
+again, its own way, copying its result over the file in place (checked with LibreOffice 25.8),
+so a reader can catch that copy half done.
+
 ### Writing a range at once
 
 `sheet[...]` (a slice, not a single cell) is writable, for both `.value` and `.formula`:

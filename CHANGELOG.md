@@ -19,6 +19,21 @@ still change between minor versions.
   macros stay disabled. `save()` raises `ValueError` for `update_links=True` without
   `recalculate=True`; without `update_links`, nothing changes.
 
+### Fixed
+
+- **`save()` no longer truncates the workbook before rewriting it**
+  ([#8](https://github.com/antnardo/odsslicer/issues/8)). It wrote the new zip straight into
+  its target, the source file by default: a program reading the file meanwhile got a partial
+  zip (`BadZipFile`), and a save stopped midway — an exception, Ctrl-C, a crash — left the
+  workbook unreadable, its previous version gone. The new file is now written under a
+  temporary name in the same folder, flushed to disk, then renamed over the target with
+  `os.replace()`: a reader gets the old version or the new one, and an interrupted save
+  leaves the old one as it was, with no temporary file behind. The saved file keeps the
+  permissions of the one it replaces, a symbolic link is followed, and a read-only file still
+  raises `PermissionError`. Saving now needs write access to the folder, and another hard link
+  to the old file keeps the old content. With `recalculate=True`, LibreOffice's own save,
+  which follows, still copies its result over the file in place.
+
 ### Documentation
 
 - **Recalculating from LibreOffice's command line** (DOCS.md, section 7):

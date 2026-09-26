@@ -1,10 +1,16 @@
 # -*- coding: utf-8 -*-
 """ODSReader: the document itself - zip I/O, sheets, styles lookup, save."""
 
+import contextlib
+import errno
 import logging
+import os
 import re
+import secrets
+import shutil
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Union, cast
+from typing import BinaryIO, Union, cast
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from bs4 import BeautifulSoup, Tag
@@ -41,6 +47,69 @@ _BLANK_META_XML = (
     b"<office:meta/>"
     b"</office:document-meta>"
 )
+
+
+def _open_sibling(target: Path, mode: int) -> tuple[int, Path]:
+    """A new, empty file next to `target`, open for writing: its descriptor
+    and its path, hidden (`.<name>.<random>.tmp`) and matching no `*.ods`."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    while True:
+        path = target.with_name(f".{target.name}.{secrets.token_hex(4)}.tmp")
+        try:
+            return os.open(path, flags, mode), path
+        except FileExistsError:
+            continue
+
+
+def _sync_folder(folder: Path) -> None:
+    """Have `folder`'s entries reach the disk, so that a rename in it
+    survives a power cut - on POSIX only: Windows cannot open a folder."""
+    if os.name != "posix":
+        return
+    with contextlib.suppress(OSError):  # some network file systems refuse
+        fd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+@contextlib.contextmanager
+def _replacing(path: Path) -> Iterator[BinaryIO]:
+    """A file to write the new content of `path` into, which replaces `path`
+    in one step when the `with` block ends - or is deleted, leaving `path`
+    as it was, if the block raises.
+
+    Writing straight into `path` truncated it first: a program reading it
+    meanwhile got a partial zip, and an interrupted save left it unreadable
+    (issue #8). The content goes to a temporary file instead, in the same
+    folder since `os.replace()` is atomic only within one file system, and
+    reaches the disk before the rename - otherwise a power cut could keep
+    the rename but lose the data.
+    """
+    target = path.resolve()  # replace what a symlink points to, not the link
+    exists = target.exists()
+    if exists and not os.access(target, os.W_OK):
+        # renaming needs only the folder to be writable: without this, a
+        # read-only file would be replaced where writing into it failed
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(path))
+    # tempfile creates its files 0o600, which would make every new workbook
+    # private: a new file gets 0o666 less the umask, as open() gives it, and
+    # one replacing a file stays private until it takes that file's mode
+    fd, tmp = _open_sibling(target, 0o600 if exists else 0o666)
+    try:
+        with os.fdopen(fd, "wb") as file:
+            yield file
+            file.flush()
+            os.fsync(file.fileno())
+        if exists:
+            shutil.copymode(target, tmp)
+        tmp.replace(target)
+    except BaseException:  # Ctrl-C included: leave no temporary file behind
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+    _sync_folder(target.parent)
 
 
 class ODSReader:
@@ -198,11 +267,19 @@ class ODSReader:
         `ODSReader.new()`, which has no source file of its own and
         requires an explicit `path`.
 
+        The file is written under a temporary name in the same folder, then
+        renamed over `path`: a program reading it meanwhile sees either the
+        old version or the new one, never a partial file, and a save that
+        fails or is interrupted leaves the old version as it was. The saved
+        file keeps the permissions of the one it replaces, a symbolic link
+        is followed, and a read-only file raises `PermissionError`.
+
         With `recalculate=True`, a local LibreOffice is then run headless on
         the saved file to compute every formula and refresh every pivot
         table in place - see the module-level `recalculate()` for details
-        and requirements. The in-memory document is *not* reloaded: reopen
-        the file (`ODSReader(path)`) to read the computed values back.
+        and requirements. LibreOffice's own save copies its result over the
+        file, which is not atomic. The in-memory document is *not* reloaded:
+        reopen the file (`ODSReader(path)`) to read the computed values back.
         `update_links=True`, only with `recalculate=True`, has LibreOffice
         update links to other workbooks first, so that formulas reading them
         compute instead of giving `Err:540` - for workbooks you trust only,
@@ -230,7 +307,7 @@ class ODSReader:
         # written, or the in-memory edits to it would be dropped
         present = {item.filename for item, _ in entries}
         entries += [(ZipInfo(name), data) for name, data in regenerated.items() if name not in present]
-        with ZipFile(path, "w") as dst:
+        with _replacing(Path(path)) as file, ZipFile(file, "w") as dst:
             for item, data in entries:
                 # the ODF spec requires `mimetype` to be the first entry and stored uncompressed
                 item.compress_type = ZIP_STORED if item.filename == "mimetype" else ZIP_DEFLATED
