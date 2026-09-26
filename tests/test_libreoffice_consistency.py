@@ -19,7 +19,14 @@ import datetime as dt
 import re
 
 import pytest
-from conftest import libreoffice_shows, requires_soffice
+from conftest import (
+    empty_cells,
+    libreoffice_shows,
+    ods_with_sheet,
+    requires_soffice,
+    row,
+    text_cell,
+)
 
 from odsslicer import ODSReader
 from odsslicer.classes import Border, NumberFormat
@@ -301,6 +308,22 @@ def test_libreoffice_shows_values_written_past_a_run_of_repeated_rows_where_writ
         ["", "", "", ""],
         ["end", "", "", ""],
     ]
+
+
+@requires_soffice
+def test_libreoffice_shows_values_written_around_empty_columns_where_written(tmp_path):
+    # issue #6: Z1 landed in AX1, the 24 empty columns between A and Z being
+    # left out of the grid but not out of the file
+    path = ods_with_sheet(
+        tmp_path / "gap.ods",
+        '<table:table-column table:number-columns-repeated="26"/>'
+        + row(text_cell("a"), empty_cells(24), text_cell("z")),
+    )
+    table = ODSReader(path)
+    table.sheet("Sheet1")["Z1"].value = "new z"
+    table.sheet("Sheet1")["B1"].value = "b"
+    table.save()
+    assert libreoffice_shows(path, tmp_path) == [["a", "b", *[""] * 23, "new z"]]
 
 
 @requires_soffice

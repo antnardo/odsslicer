@@ -946,6 +946,155 @@ def test_writing_into_or_below_a_trailing_run_of_empty_rows(tmp_path, address):
     assert cells_with_content(ODSReader(path).sheet("Sheet1")) == expected
 
 
+# ---------------------------------------------------------------------------
+# What load() leaves out of the grid (issue #6): only the padding after the
+# data, never empty rows or columns between it - and what it leaves out
+# stays in the file, where writing past the data must not land beyond it.
+# ---------------------------------------------------------------------------
+
+_GAP_COLUMNS_XML = '<table:table-column table:number-columns-repeated="26"/>' + row(
+    text_cell("a"), empty_cells(24), text_cell("z")
+)
+
+
+def test_empty_columns_between_data_stay_in_the_grid(tmp_path):
+    # regression: a run of more than 10 of them was left out, moving Z1 to B1
+    path = ods_with_sheet(tmp_path / "gap.ods", _GAP_COLUMNS_XML)
+    s = ODSReader(path).sheet("Sheet1")
+    assert s.size == (1, 26)
+    assert s["B1"].value is None
+    assert s["Z1"].value == "z"
+
+
+@pytest.mark.parametrize(
+    ("address", "expected"),
+    [
+        ("B1", {"A1": "a", "B1": "x", "Z1": "z"}),
+        ("Z1", {"A1": "a", "Z1": "x"}),
+        ("AB1", {"A1": "a", "Z1": "z", "AB1": "x"}),
+    ],
+)
+def test_writing_around_empty_columns_between_data_lands_where_written(
+    tmp_path, address, expected
+):
+    # regression: B1 raised IndexError, and Z1 landed in AX1
+    path = ods_with_sheet(tmp_path / "gap.ods", _GAP_COLUMNS_XML)
+    r = ODSReader(path)
+    r.sheet("Sheet1")[address].value = "x"
+    r.save()
+    assert cells_with_content(ODSReader(path).sheet("Sheet1")) == expected
+
+
+def test_empty_rows_between_data_stay_in_the_grid(tmp_path):
+    # regression: an element of more than 1,000 empty rows was left out
+    # wherever it stood, moving A2000 up to A2
+    xml = (
+        "<table:table-column/>"
+        + row(text_cell("a"))
+        + row(empty_cells(), repeat=1998)
+        + row(text_cell("far below"))
+    )
+    s = ODSReader(ods_with_sheet(tmp_path / "gap.ods", xml)).sheet("Sheet1")
+    assert s.size == (2000, 1)
+    assert s["A2"].value is None
+    assert s["A2000"].value == "far below"
+
+
+@pytest.mark.parametrize(
+    ("after_filler", "size"),
+    [
+        # LibreOffice writes the sheet's last row apart, after the filler: the
+        # empty row above the filler stays in the grid, as it always has
+        (1, (2, 1)),
+        # rows after the filler lie a million rows down: out of the grid
+        (133, (2, 1)),
+        (0, (1, 1)),  # no row after the filler: the empty last row goes
+    ],
+)
+def test_the_rows_around_the_filler_of_a_full_height_sheet(tmp_path, after_filler, size):
+    xml = (
+        "<table:table-column/>"
+        + row(text_cell("a"))
+        + row(empty_cells())
+        + row(empty_cells(), repeat=1_048_570)
+    )
+    if after_filler > 1:
+        xml += row(empty_cells(), repeat=after_filler - 1)
+    if after_filler:
+        xml += row(empty_cells())
+    path = ods_with_sheet(tmp_path / "padded.ods", xml)
+    r = ODSReader(path)
+    s = r.sheet("Sheet1")
+    assert s.size == size
+    s[size[0], 0].value = "next"  # the first row past the grid
+    r.save()
+    reread = ODSReader(path).sheet("Sheet1")
+    assert cells_with_content(reread) == {"A1": "a", f"A{size[0] + 1}": "next"}
+
+
+def test_empty_rows_padding_a_sheet_to_its_full_height_are_still_left_out(tmp_path):
+    xml = (
+        "<table:table-column/>"
+        + row(text_cell("a"))
+        + row(empty_cells(), repeat=1_048_575)
+    )
+    path = ods_with_sheet(tmp_path / "padded.ods", xml)
+    r = ODSReader(path)
+    assert r.sheet("Sheet1").size == (1, 1)
+    r.sheet("Sheet1")["A2"].value = "b"
+    r.save()
+    assert cells_with_content(ODSReader(path).sheet("Sheet1")) == {"A1": "a", "A2": "b"}
+
+
+# 15 empty columns formatted past the data, as LibreOffice writes them: left
+# out of the grid, but not out of the file - D1 used to land in S1
+_FORMATTED_PAST_DATA_XML = '<table:table-column table:number-columns-repeated="18"/>'
+_FORMATTED_PAST_DATA_XML += "".join(
+    row(text_cell(text), text_cell(text), text_cell(text), empty_cells(15, "yellow"))
+    for text in ("x", "y")
+)
+_YELLOW_XML = (
+    '<style:style style:name="yellow" style:family="table-cell">'
+    '<style:table-cell-properties fo:background-color="#fff2cc"/></style:style>'
+)
+
+
+@pytest.mark.parametrize(
+    ("address", "formatted"),
+    [("D1", True), ("E2", True), ("R1", True), ("S1", False), ("T2", False)],
+)
+def test_writing_past_the_data_lands_where_written_keeping_the_formatting_there(
+    tmp_path, address, formatted
+):
+    path = ods_with_sheet(
+        tmp_path / "formatted.ods", _FORMATTED_PAST_DATA_XML, _YELLOW_XML
+    )
+    r = ODSReader(path)
+    s = r.sheet("Sheet1")
+    assert s.size == (2, 3)
+    s[address].value = 1
+    r.save()
+    reread = ODSReader(path).sheet("Sheet1")
+    data = {f"{col}{r}": text for r, text in ((1, "x"), (2, "y")) for col in "ABC"}
+    assert cells_with_content(reread) == {**data, address: 1.0}
+    assert (reread[address].style.background_color == "#fff2cc") is formatted
+    # every formatted cell is still in the file, though past the grid
+    assert _logical_cells_styled(path, "yellow") == 30
+
+
+def _logical_cells_styled(path, style_name):
+    """How many cells of the first sheet of `path` have the style named
+    `style_name`, counting each repetition of a repeated element."""
+    table = ODSReader(path).tables[0]
+    return sum(
+        _repeat(r, "table:number-rows-repeated")
+        * _repeat(cell, "table:number-columns-repeated")
+        for r in table.find_all("table:table-row")
+        for cell in r.find_all(TAG_CELL, recursive=False)
+        if cell.get("table:style-name") == style_name
+    )
+
+
 def test_save_round_trip(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet1")
     s["A1"].value = "modifié"

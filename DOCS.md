@@ -88,6 +88,12 @@ sheet.name                  # "Sheet1"
 `ODSReader` parses `content.xml`, `styles.xml` and `meta.xml` (via BeautifulSoup/lxml) into
 in-memory trees. `ODSReader.sheet(name)` raises `KeyError` for an unknown name.
 
+`sheet.size` covers the data, empty rows and columns between it included. What applications
+write after it, to declare the sheet's full size or to format columns past the data, is left
+out: an empty last row, more than 1,000 repeated empty rows at the bottom, more than 10 empty
+columns at the right. It stays in the file, and writing past the data reuses it (see
+[Automatic sheet growth](#automatic-sheet-growth)).
+
 Progress and warnings go through the standard `logging` module (logger name `"odsslicer"`):
 load-time details are logged at `DEBUG` (`INFO` when a reader/sheet is created with
 `verbose=True`), and anomalies — like rows of inconsistent lengths — at `WARNING`. Configure
@@ -332,8 +338,9 @@ sheet.size            # (12, 5): rows 10-12 added, columns C-E added, everything
 A plain read (`sheet["Z1"].value` with no assignment) never grows anything — only a write
 triggers growth. New rows/cells don't inherit any particular style.
 
-A run of repeated rows is widened once for all its rows, and writing into it then unrolls
-it, as above.
+Growing first takes back what the file holds past `sheet.size`: with columns D to R empty
+but formatted, writing to D1 lands in D1 and keeps D1's formatting. A run of repeated rows is
+widened once for all its rows, and writing into it then unrolls it, as above.
 
 ### Displayed text: how `.text` is produced on write
 
@@ -1250,9 +1257,12 @@ reading *and rewriting* documents whose formatting must survive.
   flattened on read and not writable.
 - **Not covered:** data validation / drop-down lists, autofilters, frozen panes, sheet-level
   protection, row/column grouping, charts and embedded images, page layout/printing.
-- Rows/columns repeated beyond an internal threshold (LibreOffice pads a sheet's default
-  styling to 2^20 rows) are detected and discarded on load rather than materialized; a
-  `[WARNING]` is printed if a row-length inconsistency remains after that cleanup.
+- **Padding after the data is not loaded.** Empty rows repeated more than 1,000 times at the
+  bottom of a sheet (LibreOffice and Excel declare its full 1,048,576-row height that way) and
+  more than 10 empty columns at its right stay out of the grid, of `sheet.size` and of full
+  reads, though not out of the file. Empty rows and columns between data are always loaded,
+  however many: a sheet with something in row 1,000,000 costs a million rows of memory. A
+  warning is logged if a row-length inconsistency remains after that cleanup.
 
 ---
 

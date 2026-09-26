@@ -21,6 +21,21 @@ still change between minor versions.
   repeated too, which is how LibreOffice writes empty ones.
 - On a sheet ending in a run of repeated empty rows, writing inside the run no longer raises
   `IndexError`, and writing below it no longer lands one row too low.
+- **Empty rows and columns between data no longer shift the cells after them**
+  ([#6](https://github.com/antnardo/odsslicer/issues/6)). Loading left out of the grid any
+  run of more than 10 empty columns, and any repeated element of more than 1,000 empty rows,
+  wherever they stood: with data in A1 and Z1 alone, `sheet["B1"]` read Z1's value and
+  `sheet["Z1"]` read `None`, and writing to Z1 landed in AX1. Only padding after the data is
+  left out now, so `sheet.size` grows for sheets with such gaps. It shrinks for sheets with
+  empty rows past the padding, a million rows down, which the grid showed just below the
+  data: writing there landed at the bottom of the sheet.
+- **Writing past the data no longer lands beyond the formatted columns that follow it.**
+  LibreOffice writes empty cells as far as the last formatted column. Past 10 of them, the
+  grid left them out but the file kept them, and new cells went after them: with 15,
+  `sheet["D1"]` landed in S1. The sheet now grows into those cells, keeping their formatting.
+- Writing into a merged cell whose range runs into columns left out of the grid — Excel
+  merges notes across empty columns past the data — no longer raises `IndexError`; nor does
+  undoing such a merge, or deleting or inserting rows or columns through it.
 
 ## [0.13.0] — 2026-09-26
 

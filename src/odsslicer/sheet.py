@@ -115,30 +115,31 @@ class Sheet:
 
         # Its row-direction counterpart: a row repeated absurdly many times
         # whose cells are all empty is grid filler too (Excel and LibreOffice
-        # both write one to declare the sheet's full 1,048,576-row height).
-        def is_filler_row(row: Tag, cells_bs: "list[Tag]") -> bool:
-            n_rows = int(row.attrs.get("table:number-rows-repeated", "1"))
-            return n_rows > MAX_REPEAT_ROWS and all(Cell(c).is_empty for c in cells_bs)
+        # both write one to declare the sheet's full 1,048,576-row height) -
+        # but only below the last row holding anything. Above it, empty rows
+        # are real, however many: leaving them out would move every row
+        # below them up (issue #6). The grid ends at the first filler.
+        def is_empty_row(row: Tag) -> bool:
+            return all(Cell(c).is_empty for c in row.find_all(TAG_CELL))
 
-        real_width = 0
-        for row in rows:
-            cells_bs = row.find_all(TAG_CELL)
-            if is_filler_row(row, cells_bs):
-                continue  # discarded by the row-direction guard below
-            real_width = max(real_width, content_width(cells_bs)[0])
+        last_content = len(rows) - 1
+        while last_content >= 0 and is_empty_row(rows[last_content]):
+            last_content -= 1
+        fillers = (
+            k
+            for k in range(last_content + 1, len(rows))
+            if _repeat(rows[k], "table:number-rows-repeated") > MAX_REPEAT_ROWS
+        )
+        end = next(fillers, len(rows))
+
+        widths = (content_width(row.find_all(TAG_CELL))[0] for row in rows[:end])
+        real_width = max(widths, default=0)
         i = 0
-        for row in rows:
+        for row in rows[:end]:
             n_rows = int(row.attrs.get("table:number-rows-repeated", "1"))
-            # ATTENTION : if some style is applied to a whole column : you get the max length 2**20
-            all_cells_bs = row.find_all(TAG_CELL)
-            if is_filler_row(row, all_cells_bs):
-                logger.log(
-                    self._log_level,
-                    "    Row [%04d] repeated %d > MAX = %d and all-empty: row discarded",
-                    i + 1, n_rows, MAX_REPEAT_ROWS,
-                )
-                continue
-            all_cells_bs = self._normalize_row_width(row, all_cells_bs, real_width, i)
+            all_cells_bs = self._normalize_row_width(
+                row, row.find_all(TAG_CELL), real_width, i
+            )
             for j in range(n_rows):
                 cells = []
                 j = 0
@@ -151,6 +152,14 @@ class Sheet:
                         j += 1
                 table.append(cells)
                 i += 1
+        if end < len(rows):
+            logger.log(
+                self._log_level,
+                "    Row [%04d] repeated %d > MAX = %d, empty to the end: grid ends",
+                i + 1,
+                _repeat(rows[end], "table:number-rows-repeated"),
+                MAX_REPEAT_ROWS,
+            )
         if unreadable:
             self._warn_unreadable(unreadable)
         # CLEAN UP
@@ -160,7 +169,15 @@ class Sheet:
         # after the last element of the grid (issue #5).
         if not table or not table[0]:
             return []
-        if all(cell.is_empty for cell in table[-1]):
+        # The empty row trimmed here is the sheet's last, which LibreOffice
+        # writes apart - after the filler, if there is one. The grid ends
+        # before, and has nothing to trim: its last row is a real one.
+        after_filler = rows[end + 1 :]
+        written_apart = any(
+            _repeat(row, "table:number-rows-repeated") <= MAX_REPEAT_ROWS
+            for row in after_filler
+        )
+        if not written_apart and all(cell.is_empty for cell in table[-1]):
             row_tag = cast(Tag, table[-1][0].cell.parent)
             keep = len(self._run_in(table, len(table) - 1)) - 1
             table.pop()
@@ -168,46 +185,26 @@ class Sheet:
             self._split_row_element(row_tag, keep)
         if len(table) == 0:
             return table
-        # Remove repeated columns > MAX and empty
-        # Transpose
+        # Trailing columns empty in every row are left out of the grid when
+        # there are more than MAX_REPEAT_COLS of them: LibreOffice writes
+        # empty cells as far as the last formatted column, say. Only
+        # trailing ones - empty columns between data are real, and leaving
+        # them out would move every column to their right (issue #6). They
+        # stay in the file, formatting and all: each row element is split at
+        # the grid's edge, so that none straddles it, and `grow_to` takes
+        # them back as the sheet grows.
         n_cols = len(table[0])
-        columns = [[row[j] for row in table] for j in range(n_cols)]
-        # Get empty columns
-        empty_cols = [sum(not cell.is_empty for cell in col) == 0 for col in columns]
-        # Get numbers of empty cols "in a row"
-        empty_cols_pos = [(i, int(b)) for i, b in enumerate(empty_cols)]
-        for i in range(1, len(empty_cols_pos)):
-            jp, vp = empty_cols_pos[i - 1]
-            j, v = empty_cols_pos[i]
-            if v == 1 and vp >= 1:
-                empty_cols_pos[i] = (jp, vp + 1)
-        # Remove
-        empty_cols_aggr = [e[1] for e in empty_cols_pos]
-        m = max(empty_cols_aggr)
-        while max(empty_cols_aggr) > MAX_REPEAT_COLS:
-            col_start = empty_cols_pos[empty_cols_aggr.index(m)][0]
-            col_end = col_start + m
-            logger.log(self._log_level, "    Cols %d to %d empty: removed", col_start, col_end)
-            table = [row[:col_start] + row[col_end:] for row in table]
-            empty_cols_pos = empty_cols_pos[:col_start] + empty_cols_pos[col_end:]
-            empty_cols_aggr = [e[1] for e in empty_cols_pos]
-            m = max(empty_cols_aggr)
-            if m > MAX_REPEAT_COLS:
-                # dot it again to get the indexes right (works but nasty)
-                n_cols = len(table[0])
-                columns = [[row[j] for row in table] for j in range(n_cols)]
-                # Get empty columns
-                empty_cols = [
-                    sum(not cell.is_empty for cell in col) == 0 for col in columns
-                ]
-                # Get numbers of empty cols "in a row"
-                empty_cols_pos = [(i, int(b)) for i, b in enumerate(empty_cols)]
-                for i in range(1, len(empty_cols_pos)):
-                    jp, vp = empty_cols_pos[i - 1]
-                    j, v = empty_cols_pos[i]
-                    if v == 1 and vp >= 1:
-                        empty_cols_pos[i] = (jp, vp + 1)
-                empty_cols_aggr = [e[1] for e in empty_cols_pos]
+        width = n_cols
+        while width > 0 and all(row[width - 1].is_empty for row in table):
+            width -= 1
+        if n_cols - width > MAX_REPEAT_COLS:
+            logger.log(
+                self._log_level, "    Cols %d to %d empty: left out", width + 1, n_cols
+            )
+            for run in self._runs_in(table):
+                self._split_cells_at(cast(Tag, table[run.start][0].cell.parent), width)
+            # no column left: every row is empty, and so is the sheet
+            table = [row[:width] for row in table] if width > 0 else []
         return table
 
     @staticmethod
@@ -251,6 +248,25 @@ class Sheet:
         _set_repeat(row_tag, attr, keep)
         _set_repeat(rest, attr, n - keep)
         row_tag.insert_after(rest)
+
+    @staticmethod
+    def _split_cells_at(row_tag: Tag, position: int) -> None:
+        """Make logical column `position` of `row_tag` start a cell element
+        of its own, splitting the repeated cell straddling it if there is
+        one: the element keeps the columns before `position` and a copy
+        inserted after it takes the others, as in `_split_row_element`."""
+        attr = "table:number-columns-repeated"
+        start = 0
+        for cell_tag in row_tag.find_all(TAG_CELL, recursive=False):
+            n = _repeat(cell_tag, attr)
+            if start < position < start + n:
+                rest = copy.deepcopy(cell_tag)
+                _set_repeat(cell_tag, attr, position - start)
+                _set_repeat(rest, attr, start + n - position)
+                cell_tag.insert_after(rest)
+            if start + n >= position:
+                return
+            start += n
 
     def _warn_unreadable(self, cells: list[Cell]) -> None:
         """One warning for all the cells of this sheet whose value could not
@@ -438,6 +454,9 @@ class Sheet:
         mr, mc = master.row, master.col
         rows_span = int(master.attrs.get("table:number-rows-spanned", "1"))
         cols_span = int(master.attrs.get("table:number-columns-spanned", "1"))
+        # a merge can run into trailing columns the grid leaves out (see
+        # `load`): every cell it covers is about to become one of the grid's
+        self.grow_to(mr + rows_span - 1, mc + cols_span - 1)
         master.cell.attrs.pop("table:number-rows-spanned", None)
         master.cell.attrs.pop("table:number-columns-spanned", None)
         master.__init__(master.cell, row=mr, col=mc, sheet=self)  # type: ignore[misc]
@@ -763,19 +782,20 @@ class Sheet:
 
         A row element is widened once, however many rows of the grid it
         stands for: every row of a run of repeated rows points at the same
-        new cells, as `load` would have them (issue #5).
+        new cells, as `load` would have them (issue #5). The cells a row
+        already has past the grid - trailing empty columns `load` left out
+        of it - are taken back before any new one is added, formatting and
+        all (issue #6).
         """
         target_cols = max(col + 1, self.n_cols)
         if target_cols > self.n_cols:
             for run in self._runs_in(self.rows):
-                pad = self._empty_cell_template()
-                extra = target_cols - self.n_cols
-                _set_repeat(pad, "table:number-columns-repeated", extra)
-                self.rows[run.start][0].cell.parent.append(pad)
+                row_tag = cast(Tag, self.rows[run.start][0].cell.parent)
+                new_tags = self._cells_between(row_tag, self.n_cols, target_cols)
                 for r in run:
                     self.rows[r].extend(
-                        Cell(pad, row=r, col=c, sheet=self)
-                        for c in range(self.n_cols, target_cols)
+                        Cell(tag, row=r, col=c, sheet=self)
+                        for c, tag in enumerate(new_tags, start=self.n_cols)
                     )
             self.n_cols = target_cols
 
@@ -798,14 +818,38 @@ class Sheet:
 
         self.size = (self.n_rows, self.n_cols)
 
+    def _cells_between(self, row_tag: Tag, start: int, stop: int) -> "list[Tag]":
+        """The cell elements of `row_tag` for logical columns `start` to
+        `stop` (excluded), one entry per column - a repeated cell once per
+        column it covers - after splitting any that straddles either bound
+        (see `_split_cells_at`), and padding the row with a blank cell if it
+        ends before `stop`."""
+        self._split_cells_at(row_tag, start)
+        self._split_cells_at(row_tag, stop)
+        tags: list[Tag] = []
+        position = 0
+        for cell_tag in row_tag.find_all(TAG_CELL, recursive=False):
+            if position >= stop:
+                break
+            n = _repeat(cell_tag, "table:number-columns-repeated")
+            if position >= start:
+                tags += [cell_tag] * n
+            position += n
+        if position < stop:
+            pad = self._empty_cell_template()
+            _set_repeat(pad, "table:number-columns-repeated", stop - position)
+            row_tag.append(pad)
+            tags += [pad] * (stop - max(position, start))
+        return tags
+
     def _discard_stray_rows(self) -> None:
         """Remove any `<table:table-row>` physically present in the XML beyond
         what `self.rows` accounts for.
 
         `load()`'s cleanup (a lone blank row, a trimmed trailing empty row, a
-        huge discarded repeated block...) only leaves rows out of the
-        in-memory `self.rows` view - they stay in the XML, split off any
-        element the grid still points at. Appending new rows without
+        huge repeated block of empty rows at the bottom...) only leaves rows
+        out of the in-memory `self.rows` view - they stay in the XML, split
+        off any element the grid still points at. Appending new rows without
         first clearing these out would silently leave them in place, ready to
         resurface as extra "phantom" rows the next time the file is parsed.
         """
@@ -1028,7 +1072,8 @@ class Sheet:
     def _grow_merge(self, row: int, col: int, span_rows: int, span_cols: int) -> None:
         """Widen the merge whose master sits at (row, col) to the new spans,
         turning every cell newly inside it into a covered cell - the
-        insertion counterpart of `_unmerge`."""
+        insertion counterpart of `_unmerge`, which also explains the growth."""
+        self.grow_to(row + span_rows - 1, col + span_cols - 1)
         self._unrepeat_row(row)
         self._unrepeat_col(row, col)
         master = self.rows[row][col]

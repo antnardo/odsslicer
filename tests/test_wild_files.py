@@ -153,6 +153,52 @@ def test_write_into_wild_file(tmp_path, name):
     assert reopened_sheet[grown_row, 1].value == 42.5
 
 
+# Excel merges S67_01's notes across A:H, but the grid stops at B: past it,
+# every column is empty (the notes' covered cells hold nothing) and load()
+# leaves out a trailing run of more than 10 empty columns
+_S67_01_NOTE = (
+    '1. "Other" is comprised of nationalities where the number of transfers'
+    " to the UK are below 5."
+)
+# edit -> (action, {address: (value, merge range) after a save and reload})
+_MERGE_PAST_THE_GRID_EDITS = {
+    "write": (
+        lambda s: setattr(s["A17"], "value", "Notes"),
+        {"A17": ("Notes", None)},
+    ),
+    "unmerge": (
+        lambda s: s.unmerge("A17"),
+        {"A17": (_S67_01_NOTE, None)},
+    ),
+    "delete_row": (
+        lambda s: s.delete_row(16),
+        {"A17": (None, "A17:D17"), "A18": ("Back to contents", "A18:D18")},
+    ),
+    "insert_columns": (
+        lambda s: s.insert_columns(1, 2),
+        {"A17": (_S67_01_NOTE, "A17:J17"), "D5": (141.0, None)},
+    ),
+}
+
+
+@pytest.mark.parametrize("edit", sorted(_MERGE_PAST_THE_GRID_EDITS))
+def test_a_merge_running_past_the_grid_can_be_edited(tmp_path, edit):
+    # regression: writing into the merge, undoing it, or reshaping around it
+    # raised IndexError - the merge reached cells the grid had left out
+    action, expected = _MERGE_PAST_THE_GRID_EDITS[edit]
+    reader = ODSReader(WILD_DIR / "excel16_uk_stats_2020.ods")
+    sheet = reader.sheet("S67_01")
+    assert sheet.n_cols == 2
+    action(sheet)
+    out = tmp_path / "edited.ods"
+    reader.save(out)
+    reopened = ODSReader(out).sheet("S67_01")
+    for address, (value, merge_range) in expected.items():
+        cell = reopened[address]
+        assert (cell.value, cell.merge_range) == (value, merge_range)
+    assert reopened["A5"].value == "Eritrea"
+
+
 def test_googlesheets_formulas_read_back_friendly(wild_readers):
     """Google Sheets' .ods export (converted server-side by a headless
     LibreOfficeDev) writes ordinary ODF formulas - they must come back in
