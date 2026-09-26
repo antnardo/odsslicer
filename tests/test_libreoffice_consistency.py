@@ -799,3 +799,30 @@ def test_recalculate_with_update_links_rereads_a_changed_workbook(tmp_path):
     changed.save()
     recalculate(workbook, update_links=True)
     assert _names_read(workbook) == ("Alicia", "Alicia")
+
+
+@requires_soffice
+def test_recalculate_with_update_links_follows_a_moved_folder(tmp_path):
+    from odsslicer import recalculate
+
+    # INDIRECT() resolves a relative address against the workbook's URL, and
+    # LibreOffice saves a reference written out with a relative link as well,
+    # which it follows once the absolute one breaks - both work only if
+    # LibreOffice loads the workbook from where it is, and saves its result
+    # next to it
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    _write_students(first / "students.ods", "Alice")
+    table = ODSReader.new()
+    sheet = table.sheet("Sheet1")
+    sheet["B1"].value = "'students.ods'#$Students.A1"
+    sheet["A1"].formula = "OFFSET(INDIRECT($B$1);1;1)"
+    sheet["A2"].formula = f"of:=['{(first / 'students.ods').as_uri()}'#$Students.B2]"
+    table.save(first / "workbook.ods")
+    recalculate(first / "workbook.ods", update_links=True)
+    assert _names_read(first / "workbook.ods") == ("Alice", "Alice")
+
+    first.rename(second)
+    _write_students(second / "students.ods", "Bob")
+    recalculate(second / "workbook.ods", update_links=True)
+    assert _names_read(second / "workbook.ods") == ("Bob", "Bob")

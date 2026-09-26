@@ -303,9 +303,9 @@ leave one, to delete. As the saved file is a new file:
 - on Windows, a file another program keeps open cannot be replaced: `save()` raises
   `PermissionError` and leaves the file as it was.
 
-With `recalculate=True`, only odsslicer's write is atomic: LibreOffice then saves the workbook
-again, its own way, copying its result over the file in place (checked with LibreOffice 25.8),
-so a reader can catch that copy half done.
+With `recalculate=True`, LibreOffice's result replaces the workbook the same way, through a
+temporary file and a rename — see
+[Recalculating with LibreOffice](#7-recalculating-with-libreoffice).
 
 ### Writing a range at once
 
@@ -746,8 +746,8 @@ which refreshes every pivot table and materializes its output.
 (`.value` is `None`), and pivot tables are written as definitions only. `recalculate(path)`
 closes that gap by delegating to a **local LibreOffice**, run headless: it opens the file,
 recalculates every formula (including ones whose cached value went stale because you changed
-an input cell), refreshes every pivot table (materializing its output grid), and saves the
-file back in place:
+an input cell), refreshes every pivot table (materializing its output grid), and replaces the
+file with the result:
 
 ```python
 from odsslicer import ODSReader, recalculate
@@ -781,6 +781,16 @@ from LibreOffice's embedded interpreter, which would otherwise crash on some bui
 LibreOffice re-saves the whole file in its own serialization, exactly as if you had opened it
 and hit Save, so expect it to grow and be normalized.
 
+**Replacing the file.** LibreOffice loads the workbook where it is, then saves its result to a
+temporary file next to it (`.name.ods.<random>.tmp`), in the workbook's own format, and
+`recalculate()` renames that file over the workbook once LibreOffice reports the save complete
+— as `save()` does, with the same consequences (see [`Cell.value` and
+`save()`](#cellvalue-and-save)). A program reading the workbook meanwhile gets the old version
+or the recalculated one, never a partial file, and a run that fails, times out or is
+interrupted (Ctrl-C) leaves the workbook as it was, with no temporary file behind. On macOS and
+Linux, a timeout or Ctrl-C also stops LibreOffice itself, whatever wrapper script started it —
+Homebrew's `soffice` is one — and deletes the lock files it leaves next to the workbook.
+
 **Configuring the command.** The command line lives in one module-level list you can edit at
 the top of your script:
 
@@ -794,10 +804,11 @@ The first element is the executable; the rest are the flags every run gets (the 
 profile and the script URL are appended per call). A bare name is looked up on `PATH`, then in
 the usual install locations (macOS app bundle, `/usr/bin`, `/usr/lib/libreoffice`, `/opt`,
 snap, Windows `Program Files`); an explicit absolute path is taken at its word. Raises
-`FileNotFoundError` if no executable can be found, and `RuntimeError` if LibreOffice fails,
-times out (`timeout=120` seconds by default), or runs but doesn't rewrite the file (which is how
-a silently-not-executed script shows up — e.g. when another LibreOffice instance already owns
-the profile).
+`FileNotFoundError` if no executable can be found, `PermissionError` for a read-only workbook,
+before LibreOffice starts, and `RuntimeError` if LibreOffice fails, times out (`timeout=120`
+seconds by default), or runs but doesn't save the result (which is how a silently-not-executed
+script shows up — e.g. when another LibreOffice instance already owns the profile). When the
+script itself raised, the `RuntimeError` gives its traceback.
 
 ### From the command line
 
@@ -862,8 +873,8 @@ rm -rf "$profile" "$out"
 | Runs from | Python, right after `odsslicer` writes | any shell, Makefile or CI job |
 | Formulas | all recalculated (`calculateAll()`) | all, guaranteed only with *Always recalculate* in the profile |
 | Pivot tables | refreshed | left empty |
-| Output | the file itself, rewritten in place | a new file in `--outdir`, to move back yourself |
-| Failure | raises `RuntimeError` or `FileNotFoundError` | printed, exit status 0 even when nothing was written |
+| Output | the file itself, replaced in one step | a new file in `--outdir`, to move back yourself |
+| Failure | raises `RuntimeError` or `FileNotFoundError`, the file left as it was | printed, exit status 0 even when nothing was written |
 | Profile | throwaway, set up for you | your own, unless you pass `-env:UserInstallation` |
 | References to other workbooks | read with `update_links=True`, for trusted workbooks; `Err:540` otherwise | `Err:540` |
 

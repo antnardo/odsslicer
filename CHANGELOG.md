@@ -7,6 +7,28 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`recalculate()` no longer has LibreOffice copy its result over the workbook in place**
+  ([#9](https://github.com/antnardo/odsslicer/issues/9)), and neither does
+  `save(recalculate=True)`. LibreOffice saved the recalculated workbook to a temporary file of
+  its own, then copied it over the workbook: a program reading the workbook meanwhile could get
+  a partial zip (`BadZipFile`), and a copy stopped midway could leave it unreadable, as `save()`
+  could until 0.13.0. LibreOffice now saves its result to a temporary file in the workbook's
+  folder, which is renamed over the workbook once LibreOffice reports the save complete: a
+  reader gets the old version or the new one, and a failed run leaves the workbook as it was,
+  with no temporary file behind. LibreOffice still loads the workbook where it is, so that its
+  links resolve and its folder is trusted as before, and saves it in its own format. The
+  workbook keeps its permissions; a read-only one now raises `PermissionError` before
+  LibreOffice starts, where it gave `RuntimeError`.
+- **A timeout or Ctrl-C now stops LibreOffice itself**, on macOS and Linux. `recalculate()`
+  killed the process it had started, which is often a wrapper — Homebrew's `soffice` is a shell
+  script that runs the real one — and LibreOffice carried on: it rewrote the workbook seconds
+  after `recalculate()` had raised `RuntimeError`. LibreOffice now runs in a process group of
+  its own, killed as a whole, and the lock files it leaves next to the workbook are deleted.
+- When the recalculation script fails inside LibreOffice, `RuntimeError` gives its traceback,
+  where it said that the script apparently didn't execute.
+
 ## [0.13.1] — 2026-09-26
 
 ### Fixed

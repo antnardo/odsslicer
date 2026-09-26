@@ -8,21 +8,12 @@ file on disk while the zip is being written.
 
 import os
 import pathlib
-import shutil
 import stat
 import zipfile
 
 import pytest
 
 from odsslicer import ODSReader
-
-
-@pytest.fixture()
-def workbook(tmp_path, test_ods_path):
-    """A copy of TEST.ods, alone in its folder."""
-    path = tmp_path / "workbook.ods"
-    shutil.copy(test_ods_path, path)
-    return path
 
 
 def _edited(path):

@@ -67,6 +67,14 @@ def writable_reader(test_ods_path):
     return ODSReader(test_ods_path)
 
 
+@pytest.fixture()
+def workbook(tmp_path, test_ods_path):
+    """A copy of TEST.ods, alone in its folder."""
+    path = tmp_path / "workbook.ods"
+    shutil.copy(test_ods_path, path)
+    return path
+
+
 def convert_with_libreoffice(src_path, fmt, outdir):
     """Convert `src_path` to `fmt` via `soffice --headless --convert-to` -
     a real LibreOffice actually opening and re-exporting the file, not
