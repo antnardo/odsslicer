@@ -5,9 +5,21 @@ All notable changes to `odsslicer` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
 still change between minor versions.
 
+## [Unreleased]
+
+### Fixed
+
+- **The source distribution no longer ships the `rsc/` folder** (the wheels were never
+  affected). `setuptools-scm` packs every tracked file, and that folder held development
+  references: the OASIS OpenDocument 1.2 specification (two PDFs, under OASIS copyright
+  rather than the package's MIT license), a blank LibreOffice document and raw XML notes —
+  enough to take the 0.12.2 sdist to 4.3 MB instead of about 300 KB. The folder is no longer
+  tracked; neither the package nor the tests used it.
+
 ## [0.12.2] — 2026-09-20
 
 ### Fixed
+
 - **Reading every cell of an empty sheet no longer crashes.** A selection holding no cells at
   all (`sheet[:, :]` on a sheet with no rows) was mistaken for a single cell, so `.to_list()`
   raised `AttributeError: 'list' object has no attribute 'value'` — hit by any plain scan over
@@ -17,6 +29,7 @@ still change between minor versions.
 ## [0.12.1] — 2026-09-20
 
 ### Fixed
+
 - **A cell holding several lines no longer reads back as its first line only.** ODF stores a
   multi-line cell (Ctrl+Enter in a spreadsheet) as one `<text:p>` per line; `cell.text` — and
   a string `cell.value` — only looked at the first one, silently dropping the rest of what the
@@ -30,6 +43,7 @@ still change between minor versions.
 ## [0.12.0] — 2026-09-14
 
 ### Added
+
 - **`Sheet.insert_rows(row, count=1)` / `insert_row(row)` and `Sheet.insert_columns(col,
   count=1)` / `insert_column(col)`** — insert blank rows or columns, like a spreadsheet's
   "insert rows above": formula references anywhere in the document follow the cells they
@@ -39,12 +53,14 @@ still change between minor versions.
   never exceeds the maximum grid size.
 
 ### Changed
+
 - The formula-reference rewriting behind `delete_rows`/`delete_column` now shares one
   implementation with insertion (no behaviour change).
 
 ## [0.11.1] — 2026-09-10
 
 ### Fixed
+
 - **Styling a cell twice no longer loses the first properties in the spreadsheet**
   ([#1](https://github.com/antnardo/odsslicer/issues/1)). Forking a cell its own private
   style linked back to the previous one through `style:parent-style-name` — but only a
@@ -56,6 +72,7 @@ still change between minor versions.
   cell by cell as soon as a style is written to them again.
 
 ### Added
+
 - `benchmarks/compare_readers.py` and a "How it compares to other readers" table in DOCS.md:
   measured read-speed/memory comparison against `odfdo` and `python-calamine` on a purely
   numeric matrix — quantifying the README's advice that pure bulk reading is
@@ -64,6 +81,7 @@ still change between minor versions.
 ## [0.11.0] — 2026-08-26
 
 ### Added
+
 - **"Wild" fixture suite** (`tests/wild/` + `tests/test_wild_files.py`): six real-world
   `.ods` files written by other generators — Excel 16 (two builds), LibreOffice 3.5
   from 2012, LibreOffice 26.2 on Linux and Windows (open data), plus a Google Sheets export
@@ -74,6 +92,7 @@ still change between minor versions.
   licenses in `tests/wild/README.md`.
 
 ### Fixed
+
 - **Files without `settings.xml` no longer fail to open.** Excel omits it (it is optional in
   ODF, as are `styles.xml` and `meta.xml`, both now optional too with minimal stand-ins), and
   `save()` now writes the regenerated parts even when the source package lacked them.
@@ -90,6 +109,7 @@ still change between minor versions.
 ## [0.10.0] — 2026-08-24
 
 ### Changed
+
 - **`ODSReader.sheet(name)`, `delete_sheet`, `rename_sheet` and `move_sheet` now raise
   `KeyError`** (instead of `IndexError`) for an unknown sheet name — the natural exception for
   a lookup by name. Out-of-range row/column indexes (`delete_row`/`delete_column`) still raise
@@ -100,6 +120,7 @@ still change between minor versions.
   logging to see them; nothing is printed directly anymore.
 
 ### Added
+
 - **`Sheet.delete_rows([...])`** — remove many rows in one operation: the document-wide
   formula-reference adjustment runs once instead of once per row (10-15× faster for 100 rows,
   more on big documents). `delete_row` is now a thin wrapper over it.
@@ -111,24 +132,28 @@ still change between minor versions.
 - This changelog.
 
 ### Performance
+
 - Writing values of a format with no example anywhere in the document used to scan the whole
   document per cell (~33 ms each on a 10k-row sheet): the display-inference candidate lookup
   is now lazy — ×32 on the measured case, and the always-running forward scan is gone from
   every write path (range writes and `sort` got ~40-50% faster too).
 
 ### Fixed
+
 - `export_content_xml()` crashed when the reader had been opened with a `str` path rather
   than a `Path` (`self.file` is now always normalized to a `Path`).
 
 ## [0.9.1] — 2026-08-24
 
 ### Fixed
+
 - The source distribution no longer ships two private test fixture files inadvertently
   included in the 0.1.0 and 0.9.0 sdists (the wheels were never affected). The files were
   also purged from the repository's entire git history, and the old sdists were removed from
   PyPI.
 
 ### Changed
+
 - The former single 3,850-line `classes.py` is split into focused modules (`addresses`,
   `constants`, `xmlutils`, `formulas`, `styles`, `cell`, `sheet`, `properties`,
   `libreoffice`, `reader`); `odsslicer.classes` remains as a compatibility shim, so every
@@ -146,6 +171,7 @@ Feature-complete pre-1.0 release. 0.1.0 was a reader with basic value writing; 0
 full read/write toolkit, with every write verified against a real LibreOffice.
 
 ### Added
+
 - **Structure**: `ODSReader.new()` (create a file from scratch), `add_sheet`, `rename_sheet`
   (fixes cross-sheet formula references), `move_sheet`, `delete_sheet`, `Sheet.delete_row`/
   `delete_column` (formula references throughout the document follow), `Sheet.copy`
@@ -171,6 +197,7 @@ full read/write toolkit, with every write verified against a real LibreOffice.
   as a concise overview with the full API reference moved to DOCS.md.
 
 ### Fixed
+
 - Boolean cells always read back as `False` (`office:boolean-value` was never consulted).
 - `Cell.text` returned the literal string `"None"` for empty or multi-node `text:p`.
 - Growing an empty sheet (or one with a trailing empty row) could corrupt it on reload.
@@ -187,6 +214,7 @@ typed cell values (text, number, percentage, currency, date, time, boolean), for
 repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
+[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.12.2...HEAD
 [0.12.2]: https://github.com/antnardo/odsslicer/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/antnardo/odsslicer/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/antnardo/odsslicer/compare/v0.11.1...v0.12.0
