@@ -20,6 +20,7 @@ import pytest
 from conftest import (
     FIXTURES_DIR,
     cells_with_content,
+    document_in,
     empty_cells,
     ods_with_sheet,
     table_row,
@@ -1519,17 +1520,32 @@ def test_an_elapsed_minutes_format_counts_the_hours_in_the_minutes():
     ],
 )
 def test_date_time_and_duration_display_fall_back_to_a_plain_rendering(value, text):
+    # a cell formatted for numbers keeps its format, as it would in
+    # LibreOffice, and no date or time layout applies to it
     r = _blank_document()
     s = r.sheet("Sheet1")
+    s["A1"].style.number_format = NumberFormat.create(r, "number", decimal_places=2)
     s["A1"].value = value
     assert s["A1"].text == text
+
+
+def _date_formatted(path, *addresses):
+    """The first sheet of `path`, `addresses` given a date format whose
+    components nothing renders - so that their text has to be learnt from
+    another cell's, the way it would for a format showing month names."""
+    r = ODSReader(path)
+    s = r.sheet("Sheet1")
+    fmt = NumberFormat.create(r, "date", components=[("day-of-week", "long")])
+    for address in addresses:
+        s[address].style.number_format = fmt
+    return s
 
 
 def test_date_time_display_is_learnt_from_another_date_time_cell(tmp_path):
     path = _saved_with_raw_values(
         tmp_path, [("date", "2023-11-30T13:00:00", "30/11/2023 13:00")]
     )
-    s = ODSReader(path).sheet("Sheet1")
+    s = _date_formatted(path, "A3", "A4")
     s["A3"].value = dt.datetime(2024, 1, 5, 8, 30)
     s["A4"].value = dt.date(2024, 1, 6)  # a bare date, as LibreOffice saves a midnight
     assert s["A3"].text == "05/01/2024 08:30"
@@ -1539,7 +1555,7 @@ def test_date_time_display_is_learnt_from_another_date_time_cell(tmp_path):
 def test_a_date_time_displays_as_a_date_next_to_dates(tmp_path):
     # as a date-only format shows it: the example is taken to share the cell's format
     path = _saved_with_raw_values(tmp_path, [("date", "2023-11-30", "30/11/2023")])
-    s = ODSReader(path).sheet("Sheet1")
+    s = _date_formatted(path, "A3")
     s["A3"].value = dt.datetime(2024, 1, 5, 8, 30)
     assert s["A3"].text == "05/01/2024"
 
@@ -1580,6 +1596,222 @@ def test_a_duration_is_written_to_every_cell_of_a_range():
     s = r.sheet("Sheet1")
     s["A1:A3"].value = dt.timedelta(hours=30)
     assert s["A1:A3"].to_list() == [[dt.timedelta(hours=30)]] * 3
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (dt.time(13, 45), "01:45 PM"),  # used to show 13:45 PM
+        (dt.time(12, 5), "12:05 PM"),
+        (dt.time(0, 30), "12:30 AM"),
+        (dt.time(9, 5), "09:05 AM"),
+    ],
+)
+def test_an_am_pm_format_counts_the_hours_on_a_12_hour_clock(value, text):
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    s["A1"].style.number_format = NumberFormat.create(
+        r, "time", components=[*_HMS[:3], ("text", " "), ("am-pm", "")]
+    )
+    s["A1"].value = value
+    assert s["A1"].text == text
+
+
+# ---------------------------------------------------------------------------
+# A date or time written into a cell with no number format gets the one
+# LibreOffice would give it if typed there (issue #7)
+# ---------------------------------------------------------------------------
+
+_DATE_AND_TIMES = [
+    dt.date(2022, 3, 7),
+    dt.datetime(2022, 3, 7, 13, 45, 30),
+    dt.time(9, 30),
+    dt.timedelta(hours=128, minutes=45),
+    dt.timedelta(hours=-1, minutes=-30),
+]
+
+
+@pytest.mark.parametrize(
+    ("language", "country", "texts"),
+    [
+        ("fr", "FR", ["07/03/22", "07/03/22 13:45", "09:30:00"]),
+        ("en", "US", ["03/07/22", "03/07/22 01:45 PM", "09:30:00 AM"]),
+        ("de", None, ["07.03.22", "07.03.22 13:45", "09:30:00"]),
+        (None, None, ["2022-03-07", "2022-03-07 13:45:30", "09:30:00"]),
+    ],
+)
+def test_a_date_or_time_written_into_an_unformatted_cell_gets_the_locale_format(
+    tmp_path, language, country, texts
+):
+    # regression: no format at all - LibreOffice showed 44627 for the date
+    # past the declared columns, and 08:45:00 for 128:45 within them
+    texts = [*texts, "128:45:00", "-01:30:00"]  # durations: the same everywhere
+    r = document_in(language, country)
+    s = r.sheet("Sheet1")
+    for row, value in enumerate(_DATE_AND_TIMES):
+        s[row, 0].value = value  # in the one declared column
+        s[row, 2].value = value  # past it
+    assert [s[row, 0].text for row in range(5)] == texts
+    assert [s[row, 2].text for row in range(5)] == texts
+    out = tmp_path / "out.ods"
+    r.save(out)
+    reread = ODSReader(out).sheet("Sheet1")
+    assert [reread[row, 2].value for row in range(5)] == _DATE_AND_TIMES
+    formats = [reread[row, 2].style.number_format for row in range(5)]
+    assert [f.family for f in formats] == ["date", "date", "time", "time", "time"]
+    # [HH]:MM:SS counts the hours in full
+    assert formats[3]._tag.get("number:truncate-on-overflow") == "false"
+
+
+def test_one_format_and_one_style_serve_every_unformatted_cell(tmp_path):
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    s["A1:A3"].value = [[dt.date(2022, 3, day)] for day in (7, 8, 9)]
+    assert len({s[row, 0].attrs["table:style-name"] for row in range(3)}) == 1
+    out = tmp_path / "out.ods"
+    r.save(out)
+    # nor does the next session add a second format
+    r2 = ODSReader(out)
+    formats = len(r2.data.find_all("number:date-style"))
+    s2 = r2.sheet("Sheet1")
+    s2["A4"].value = dt.date(2022, 3, 10)
+    assert len(r2.data.find_all("number:date-style")) == formats
+    assert s2["A4"].style.number_format.name == s2["A1"].style.number_format.name
+
+
+def test_a_cell_formatted_for_dates_keeps_its_format(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    before = s["A8"].style.number_format.name  # DD/MM/YY
+    s["A8"].value = dt.datetime(2030, 1, 5, 8, 30)
+    assert s["A8"].style.number_format.name == before
+    assert s["A8"].text == "05/01/30"
+
+
+def test_a_cell_formatted_for_numbers_keeps_its_format_as_in_libreoffice():
+    r = _blank_document()
+    s = r.sheet("Sheet1")
+    eur = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€")
+    s["A1"].style.number_format = eur
+    s["A1"].value = dt.date(2022, 3, 7)
+    assert s["A1"].style.number_format.name == eur.name
+
+
+# Columns formatted as a whole, as LibreOffice writes them: the format is the
+# column's default cell style, and its cells have no style of their own
+_COLUMN_STYLES_XML = (
+    '<number:date-style style:name="Ndmy">'
+    '<number:day number:style="long"/><number:text>/</number:text>'
+    '<number:month number:style="long"/><number:text>/</number:text>'
+    '<number:year number:style="long"/></number:date-style>'
+    '<style:style style:name="money" style:family="table-cell">'
+    '<style:table-cell-properties fo:background-color="#fff2cc"/></style:style>'
+    '<style:style style:name="day" style:family="table-cell"'
+    ' style:data-style-name="Ndmy">'
+    '<style:table-cell-properties fo:background-color="#e2efda"/></style:style>'
+)
+_FORMATTED_COLUMNS_XML = (
+    '<table:table-column table:default-cell-style-name="money"/>'
+    '<table:table-column table:default-cell-style-name="day"/>'
+    + table_row(text_cell("Rate"), text_cell("Date"))
+    + table_row(empty_cells(2), repeat=3)
+    + table_row(text_cell("end"), empty_cells())
+)
+
+
+@pytest.fixture()
+def formatted_columns(tmp_path):
+    path = ods_with_sheet(
+        tmp_path / "columns.ods", _FORMATTED_COLUMNS_XML, _COLUMN_STYLES_XML
+    )
+    return ODSReader(path)
+
+
+def test_a_cell_reads_its_columns_default_cell_style(formatted_columns):
+    s = formatted_columns.sheet("Sheet1")
+    assert s["A2"].attrs.get("table:style-name") is None
+    assert s["A2"].style.background_color == "#fff2cc"
+    assert s["B2"].style.number_format.name == "Ndmy"
+
+
+def test_a_date_written_into_a_column_formatted_for_dates_keeps_its_format(
+    formatted_columns,
+):
+    s = formatted_columns.sheet("Sheet1")
+    s["B2"].value = dt.date(2022, 3, 7)
+    assert s["B2"].attrs.get("table:style-name") is None  # still the column's
+    assert s["B2"].text == "07/03/2022"
+    formatted_columns.save()
+    reread = ODSReader(formatted_columns.file).sheet("Sheet1")
+    assert reread["B2"].style.number_format.name == "Ndmy"
+
+
+def test_a_date_written_into_a_formatted_column_keeps_the_columns_look(
+    formatted_columns,
+):
+    # the column has a background but no number format: the cell gets a
+    # style of its own, which has to carry the column's background
+    s = formatted_columns.sheet("Sheet1")
+    s["A2"].value = dt.date(2022, 3, 7)
+    assert s["A2"].style.background_color == "#fff2cc"
+    assert s["A2"].style.number_format.family == "date"
+    assert s["A2"].text == "07/03/22"
+
+
+def test_a_copy_carries_the_format_a_cell_takes_from_its_column(formatted_columns):
+    # the copy used to take the source's own style only - none - which then
+    # wiped the date format the target had just been given
+    s = formatted_columns.sheet("Sheet1")
+    s["B2"].value = dt.date(2022, 3, 7)
+    s.copy("B2", "D2")
+    assert s["D2"].style.number_format.name == "Ndmy"
+    assert s["D2"].style.background_color == "#e2efda"
+
+
+def test_sorting_a_formatted_column_gives_its_cells_no_style_of_their_own(
+    formatted_columns,
+):
+    s = formatted_columns.sheet("Sheet1")
+    s["B2:B4"].value = [[dt.date(2022, 3, day)] for day in (9, 7, 8)]
+    s.sort("B2:B4", by=1)
+    assert s["B2:B4"].to_list() == [[dt.date(2022, 3, day)] for day in (7, 8, 9)]
+    assert all(s[r, 1].attrs.get("table:style-name") is None for r in (1, 2, 3))
+
+
+def test_setting_a_style_property_keeps_the_columns_formatting(formatted_columns):
+    # the fork used to start from nothing, dropping the column's background
+    s = formatted_columns.sheet("Sheet1")
+    s["B3"].style.bold = True
+    assert s["B3"].style.bold
+    assert s["B3"].style.background_color == "#e2efda"
+    assert s["B3"].style.number_format.name == "Ndmy"
+
+
+def test_a_date_in_a_system_format_takes_its_text_from_a_cell_libreoffice_saved(
+    tmp_path,
+):
+    # number:format-source="language": LibreOffice shows the system's own
+    # short date - 07/03/2022 on a French macOS - whatever the elements say
+    styles = (
+        '<number:date-style style:name="Nsystem" number:automatic-order="true"'
+        ' number:format-source="language"><number:day/><number:text>/</number:text>'
+        "<number:month/><number:text>/</number:text><number:year/></number:date-style>"
+        '<style:style style:name="day" style:family="table-cell"'
+        ' style:data-style-name="Nsystem"/>'
+    )
+    saved = (
+        '<table:table-cell office:value-type="date" office:date-value="2022-03-07">'
+        "<text:p>07/03/2022</text:p></table:table-cell>"
+    )
+    xml = (
+        '<table:table-column table:default-cell-style-name="day"/>'
+        + table_row(saved)
+        + table_row(text_cell("end"))
+    )
+    r = ODSReader(ods_with_sheet(tmp_path / "system.ods", xml, styles))
+    s = r.sheet("Sheet1")
+    s["A2"].value = dt.date(2022, 3, 8)
+    assert s["A2"].style.number_format.name == "Nsystem"  # kept
+    assert s["A2"].text == "08/03/2022"  # not 8/3/22, as the elements read
 
 
 # ---------------------------------------------------------------------------

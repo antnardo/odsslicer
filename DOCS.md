@@ -262,6 +262,24 @@ A date or time value reads back at once the way a reload would read it (see
 [Dates, times and durations](#dates-times-and-durations)): a `timedelta` within a day comes
 back as a `time`, and an aware `datetime` is written in UTC and comes back without its offset.
 
+A date or time written into a cell with no number format gets the one LibreOffice would give
+it if typed there: the standard format of the document's locale, its default language in
+`styles.xml`. Without one, LibreOffice shows a date past the declared columns as a serial
+number (44627), and wraps a duration of 128 hours around the clock (08:45:00).
+
+| Written | fr-FR document | en-US document | no language |
+| --- | --- | --- | --- |
+| `date(2022, 3, 7)` | `07/03/22` | `03/07/22` | `2022-03-07` |
+| `datetime(2022, 3, 7, 13, 45, 30)` | `07/03/22 13:45` | `03/07/22 01:45 PM` | `2022-03-07 13:45:30` |
+| `time(9, 30)` | `09:30:00` | `09:30:00 AM` | `09:30:00` |
+| `timedelta(hours=128, minutes=45)` | `128:45:00` | `128:45:00` | `128:45:00` |
+
+The formats of 67 locales are built in, as LibreOffice 25.8 defines them; any other locale
+gets ISO 8601, as does a document with no language. A cell that already has a number format
+keeps it, whatever its kind, as in LibreOffice — a date format of its own, its column's, or
+even a currency one. Every cell given a format shares one number format and one cell style,
+rather than getting a style of its own; `ODSReader.new()` documents are in French (fr-FR).
+
 `ODSReader.save(path=None)` rewrites the `.ods`: `content.xml` and `meta.xml` are regenerated
 from the in-memory trees; every other zip member (`styles.xml`, `settings.xml`,
 `manifest.xml`, thumbnail...) is copied through unchanged from the source file, and the ODF
@@ -346,7 +364,7 @@ widened once for all its rows, and writing into it then unrolls it, as above.
 
 ODF stores both a cell's value (`office:value`) and the text as displayed (`text:p`), formatted
 per the document's locale. On write, `odsslicer` produces that text in three layers, first one
-that applies wins:
+that applies wins — except for dates and times, which try the second one first:
 
 1. **Learn from an example.** It looks for another cell of the same format in the document
    (preferring the cell's own prior content), compares its raw value to its displayed text to
@@ -357,10 +375,6 @@ that applies wins:
    sheet["A6"].text    # "200,00 %" (value 2.0)
    sheet["A6"].value = 0.5
    sheet["A6"].text    # "50,00 %" — same style as the cell's previous content
-
-   sheet["A8"].text    # "28/02/21"
-   sheet["A8"].value = date(2030, 1, 5)
-   sheet["A8"].text    # "05/01/30"
    ```
 
    For "general" numbers (plain `float`, not percentage/currency) only the decimal separator
@@ -384,12 +398,25 @@ that applies wins:
    text from the format on open anyway, so this cached text mostly matters to `odsslicer`'s
    own `.text` reads.
 
+   A date or time goes to this layer first: its format gives its layout in full, and every
+   date written into a cell with no format gets one (see [`Cell.value` and
+   `save()`](#cellvalue-and-save)), while an example could be a cell formatted otherwise.
+
+   ```python
+   sheet["A8"].text    # "28/02/21", in a DD/MM/YY format
+   sheet["A8"].value = date(2030, 1, 5)
+   sheet["A8"].text    # "05/01/30"
+   ```
+
    A duration is shown as LibreOffice shows it: wrapped around the clock by a time format
    (`128:45` shows as `08:45:00`), counted in full by an elapsed-time `[HH]:MM:SS` one. A
-   `timedelta` skips the first layer, since an example under 24 hours looks the same in both.
+   format with AM/PM counts the hours on a 12-hour clock (`01:45 PM`). A format LibreOffice
+   writes with `number:format-source="language"` shows as the system's regional settings say,
+   not as its elements do: its text comes from an example instead, else from the third layer.
 
 3. **Plain Python conversion**, only if neither layer applies — ISO for dates and date-times,
-   hours in full for a duration (`128:45:00`).
+   hours in full for a duration (`128:45:00`). For a date or time, that now means a cell
+   formatted for another kind of value, such as a currency, which keeps its format.
 
 ---
 
@@ -947,8 +974,10 @@ style.number_format                    # None, or a NumberFormat (see below)
 style.cell_properties, style.text_properties   # raw flattened attribute dicts, escape hatch
 ```
 
-`Cell.style` is `None` only if the cell has no owning `ODSReader`; a cell with no style yet
-returns a `CellStyle` with every property `None`/`False`, which a write turns into a real one.
+`Cell.style` is `None` only if the cell has no owning `ODSReader`. A cell with no style of
+its own resolves to its column's default cell style, where LibreOffice keeps the formatting of
+a column formatted as a whole; with neither, it returns a `CellStyle` with every property
+`None`/`False`, which a write turns into a real one — carrying the column's formatting over.
 A `Border` has `.width`/`.style`/`.color`; ODF's literal `"none"` resolves to `None`.
 
 ### Writing cell styles

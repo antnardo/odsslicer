@@ -15,11 +15,12 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from bs4 import BeautifulSoup, Tag
 
+from .dateformats import _default_format_code, _format_code_components
 from .formulas import _rename_odf_formula_sheet
 from .libreoffice import _recalculate_file
 from .properties import DocumentProperties
 from .sheet import Sheet
-from .styles import _NUMBER_STYLE_TAGS
+from .styles import _NUMBER_STYLE_TAGS, NumberFormat
 from .xmlutils import _blank_template, _new_qualified_tag
 
 logger = logging.getLogger("odsslicer")
@@ -112,6 +113,21 @@ def _replacing(path: Path) -> Iterator[BinaryIO]:
     _sync_folder(target.parent)
 
 
+def _same_number_format(a: Tag, b: Tag) -> bool:
+    """True for two number styles defining the same format, whatever their
+    names."""
+
+    def definition(tag: Tag) -> object:
+        attrs = {k: v for k, v in tag.attrs.items() if k != "style:name"}
+        children = [
+            (child.prefix, child.name, child.attrs, child.get_text())
+            for child in tag.find_all(True, recursive=False)
+        ]
+        return tag.prefix, tag.name, attrs, children
+
+    return definition(a) == definition(b)
+
+
 class ODSReader:
     _from_template: bool = False  # set by new(): no source file to default save() to
 
@@ -145,6 +161,10 @@ class ODSReader:
         self.tables = self.data.find_all("table:table")
         self.sheets_names = [table["table:name"] for table in self.tables]
         self._sheets: dict[str, Sheet | None] = {name: None for name in self.sheets_names}
+        # the formats dates written into unformatted cells get, and the cell
+        # styles carrying them, shared by every cell (see Cell.value)
+        self._default_date_formats: dict[str, str] = {}
+        self._date_formatted_styles: dict[tuple[str | None, str], str] = {}
         logger.log(self._log_level, "    %r", self)
 
     def __repr__(self) -> str:
@@ -168,22 +188,72 @@ class ODSReader:
         attrs = {"style:name": name}
         if family is not None:
             attrs["style:family"] = family
-        return cast(
-            "Tag | None",
-            self.data.find("style:style", attrs=attrs)
-            or self.styles_data.find("style:style", attrs=attrs),
-        )
+        return self._find_in_styles("style:style", attrs)
 
     def _find_number_style(self, name: "str | None") -> "Tag | None":
         """A `<number:*-style>` by name, wherever it lives - like cell
         styles, a number format can be defined in either file."""
         if not name:
             return None
-        return cast(
-            "Tag | None",
-            self.data.find(_NUMBER_STYLE_TAGS, attrs={"style:name": name})
-            or self.styles_data.find(_NUMBER_STYLE_TAGS, attrs={"style:name": name}),
+        return self._find_in_styles(_NUMBER_STYLE_TAGS, {"style:name": name})
+
+    def _find_in_styles(
+        self, names: "str | list[str]", attrs: "dict[str, str]"
+    ) -> "Tag | None":
+        """The first element named `names` with `attrs` among the automatic
+        styles of `content.xml`, else in `styles.xml`. The only styles
+        `content.xml` holds are its automatic ones: searching the whole of it
+        for a style of `styles.xml` - its column's default, `Default`, for
+        most cells - cost a pass over every cell of every sheet, each time."""
+        automatic = cast("Tag | None", self.data.find("office:automatic-styles"))
+        found = automatic.find(names, attrs=attrs) if automatic is not None else None
+        return cast("Tag | None", found or self.styles_data.find(names, attrs=attrs))
+
+    def _document_locale(self) -> "tuple[str | None, str | None]":
+        """The document's default language and country - `fo:language` and
+        `fo:country` of its default cell style in `styles.xml`, where
+        LibreOffice records them - `None` for either one it does not give."""
+        default = self.styles_data.find(
+            "style:default-style", attrs={"style:family": "table-cell"}
         )
+        props = cast(
+            "Tag | None",
+            default.find("style:text-properties") if default is not None else None,
+        )
+        if props is None:
+            return None, None
+        language, country = props.get("fo:language"), props.get("fo:country")
+        return (
+            None if language in (None, "", "none") else cast(str, language),
+            None if country in (None, "", "none") else cast(str, country),
+        )
+
+    def _default_date_format(self, kind: str) -> str:
+        """The name of the number format a `kind` of date or time value (see
+        `_default_format_code`) gets in a cell with no format, as it would in
+        LibreOffice if typed there: created in the automatic styles on first
+        use, unless the document already has an identical one."""
+        if kind in self._default_date_formats:
+            return self._default_date_formats[kind]
+        code, language, country = _default_format_code(kind, *self._document_locale())
+        components, elapsed = _format_code_components(code)
+        family = "time" if kind in ("time", "duration") else "date"
+        tag = NumberFormat.create(self, family, components=components)._tag
+        if language is not None:
+            tag.attrs["number:language"] = language
+            tag.attrs["number:country"] = cast(str, country)
+        if elapsed:  # [HH]: hours in full, not around the clock
+            tag.attrs["number:truncate-on-overflow"] = "false"
+        name = cast(str, tag["style:name"])
+        # a document odsslicer saved before has it already
+        qualified_name = f"{tag.prefix}:{tag.name}"
+        for other in self._automatic_styles().find_all(qualified_name, recursive=False):
+            if other is not tag and _same_number_format(other, tag):
+                tag.decompose()
+                name = cast(str, other["style:name"])
+                break
+        self._default_date_formats[kind] = name
+        return name
 
     def _automatic_styles(self) -> Tag:
         """The `<office:automatic-styles>` element in `content.xml` - the

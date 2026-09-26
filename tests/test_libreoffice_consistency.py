@@ -20,6 +20,7 @@ import re
 
 import pytest
 from conftest import (
+    document_in,
     empty_cells,
     libreoffice_shows,
     ods_with_sheet,
@@ -324,6 +325,41 @@ def test_libreoffice_shows_values_written_around_empty_columns_where_written(tmp
     table.sheet("Sheet1")["B1"].value = "b"
     table.save()
     assert libreoffice_shows(path, tmp_path) == [["a", "b", *[""] * 23, "new z"]]
+
+
+@requires_soffice
+@pytest.mark.parametrize(
+    ("language", "country", "shown"),
+    [
+        ("fr", "FR", ["07/03/22", "07/03/22 13:45", "09:30:00"]),
+        ("en", "US", ["03/07/22", "03/07/22 01:45 PM", "09:30:00 AM"]),
+        (None, None, ["2022-03-07", "2022-03-07 13:45:30", "09:30:00"]),
+    ],
+)
+def test_libreoffice_shows_dates_written_into_unformatted_cells_as_typed_ones(
+    tmp_path, language, country, shown
+):
+    # issue #7: past the declared column, LibreOffice showed serial numbers
+    # (44627); within it, its own fallback, wrapping 128:45 around the clock
+    shown = [*shown, "128:45:00", "-01:30:00"]  # durations: the same everywhere
+    table = document_in(language, country)
+    sheet = table.sheet("Sheet1")
+    values = [
+        dt.date(2022, 3, 7),
+        dt.datetime(2022, 3, 7, 13, 45, 30),
+        dt.time(9, 30),
+        dt.timedelta(hours=128, minutes=45),
+        dt.timedelta(hours=-1, minutes=-30),
+    ]
+    for row, value in enumerate(values):
+        sheet[row, 0].value = value
+        sheet[row, 2].value = value
+    out = tmp_path / "dates.ods"
+    table.save(out)
+    shows = libreoffice_shows(out, tmp_path)
+    assert shows == [[text, "", text] for text in shown]
+    # the text odsslicer caches is what LibreOffice shows
+    assert [sheet[row, 0].text for row in range(len(values))] == shown
 
 
 @requires_soffice

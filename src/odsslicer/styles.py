@@ -311,6 +311,11 @@ def _render_date_time_from_format(
     `number:truncate-on-overflow="false"`)."""
     if number_format is None or number_format.family != family or not number_format.components:
         return None
+    # `number:format-source="language"`: LibreOffice shows the system's own
+    # short date or date-time instead, whatever the elements - on macOS, the
+    # one set in its regional settings. Nothing here can render that.
+    if number_format._tag.get("number:format-source") == "language":
+        return None
     kinds = {kind for kind, _ in number_format.components}
     sign, fields = "", cast(Any, value)
     if isinstance(value, (dt.time, dt.timedelta)):
@@ -328,6 +333,9 @@ def _render_date_time_from_format(
             parts.append(style)
         elif kind == "am-pm":
             parts.append("PM" if fields.hour >= 12 else "AM")
+        elif kind == "hours" and "am-pm" in kinds:  # 13:45 shows as 01:45 PM
+            hour = fields.hour % 12 or 12
+            parts.append(f"{hour:02d}" if style == "long" else str(hour))
         elif kind in _DATE_TIME_RENDER_LONG:
             renderer = _DATE_TIME_RENDER_LONG if style == "long" else _DATE_TIME_RENDER_SHORT
             parts.append(renderer[kind](fields))

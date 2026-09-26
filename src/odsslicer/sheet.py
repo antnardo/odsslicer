@@ -561,7 +561,9 @@ class Sheet:
         moves with the copy, `$A$1` stays put), and style (see
         `Cell.style`'s setter - the destination points at the same
         underlying style as the source, forking its own private copy only
-        once something on it is actually changed) all come along.
+        once something on it is actually changed) all come along. The
+        style is the one the source shows with, its column's default cell
+        style if it has none of its own.
 
         Grows the sheet first if `dest` extends past its current extent.
         Safe when `source` and `dest` overlap (every source cell is read
@@ -580,7 +582,8 @@ class Sheet:
                 (
                     self.get_cell(r, c).value,
                     self.get_cell(r, c).formula,
-                    self.get_cell(r, c).attrs.get("table:style-name"),
+                    # the style it shows with, its column's if it has none
+                    self.get_cell(r, c)._style_name(),
                 )
                 for c in range(col0, col1 + 1)
             ]
@@ -596,7 +599,10 @@ class Sheet:
                     target.formula = _shift_odf_formula(formula, drow, dcol)
                 else:
                     target.value = value
-                target.style = style_name
+                # a cell showing with it already, through its column, is left
+                # without a style of its own
+                if target._style_name() != style_name:
+                    target.style = style_name
 
     def sort(self, source: "str | int | tuple[Any, ...] | slice", by: int, ascending: bool = True) -> None:
         """Sort the rows of `source` (a range address, e.g. `"A2:C10"`) in
@@ -628,7 +634,7 @@ class Sheet:
                     (
                         self.rows[r][c].value,
                         self.rows[r][c].formula,
-                        self.rows[r][c].attrs.get("table:style-name"),
+                        self.rows[r][c]._style_name(),  # as in `copy`
                     )
                     for c in range(col0, col1 + 1)
                 ],
@@ -664,7 +670,8 @@ class Sheet:
                     target.formula = _shift_odf_formula(formula, drow, 0)
                 else:
                     target.value = value
-                target.style = style_name
+                if target._style_name() != style_name:  # as in `copy`
+                    target.style = style_name
 
     def create_pivot_table(
         self,
@@ -1171,6 +1178,40 @@ class Sheet:
         name = row_tag.attrs.get("table:style-name")
         tag = self.reader._find_style(name, family="table-row") if name else None
         return RowStyle(tag, sheet=self, row=row)
+
+    # what may hold `<table:table-column>` elements, and what comes after them
+    _COLUMN_GROUPS = frozenset(
+        {"table-columns", "table-header-columns", "table-column-group"}
+    )
+    _ROW_LEVEL = frozenset(
+        {"table-row", "table-rows", "table-header-rows", "table-row-group"}
+    )
+
+    def _column_default_cell_style(self, col: int) -> "str | None":
+        """The default cell style of logical column `col` - the style a cell
+        of that column with none of its own shows with, where LibreOffice
+        keeps the format of a column formatted as a whole - or `None`."""
+        seen = 0
+        for tag in self._column_definitions(self.table):
+            seen += _repeat(tag, "table:number-columns-repeated")
+            if col < seen:
+                return cast("str | None", tag.get("table:default-cell-style-name"))
+        return None
+
+    @classmethod
+    def _column_definitions(cls, parent: Tag) -> "Iterator[Tag]":
+        """The `<table:table-column>` elements of `parent`, in order, grouped
+        or not. ODF puts them before the rows, and the scan stops there:
+        looking a column up costs nothing like a pass over the sheet."""
+        for child in parent.children:
+            if not isinstance(child, Tag):
+                continue
+            if child.name in cls._ROW_LEVEL:
+                return
+            if child.name == "table-column":
+                yield child
+            elif child.name in cls._COLUMN_GROUPS:
+                yield from cls._column_definitions(child)
 
     def _find_column_tag(self, col: int) -> "Tag | None":
         """The `<table:table-column>` covering logical column `col`

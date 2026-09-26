@@ -148,6 +148,23 @@ def ods_with_sheet(path, table_xml, styles_xml=""):
     return path
 
 
+def document_in(language, country):
+    """A blank document whose default language is `language`-`country`,
+    either one absent for `None` - as `ODSReader` reads it: `save()` copies
+    `styles.xml`, where it lies, from the template."""
+    reader = ODSReader.new()
+    default = reader.styles_data.find(
+        "style:default-style", attrs={"style:family": "table-cell"}
+    )
+    props = default.find("style:text-properties")
+    for attr, value in (("fo:language", language), ("fo:country", country)):
+        if value is None:
+            props.attrs.pop(attr, None)
+        else:
+            props.attrs[attr] = value
+    return reader
+
+
 def text_cell(text):
     """A string cell, as `table_xml` for `ods_with_sheet`."""
     return (

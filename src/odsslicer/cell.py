@@ -353,9 +353,13 @@ class Cell:
             tag.attrs["office:date-value"] = _format_date_value(new_value)
             # as reading it back gives it: an aware datetime turns naive, in UTC
             new_value = _parse_date_value(tag.attrs["office:date-value"])
+            kind = "datetime" if isinstance(new_value, dt.datetime) else "date"
+            self._format_if_unformatted(kind, new_value)
+            # the cell's own format first - a date one now, unless it had one
+            # of another kind - as an example could be a cell formatted otherwise
             text = (
-                self._infer_date_display(new_value)
-                or self._render_display_from_number_format(new_value)
+                self._render_display_from_number_format(new_value)
+                or self._infer_date_display(new_value)
                 or str(new_value)  # the ISO format, a space before a time part
             )
         elif isinstance(new_value, (dt.time, dt.timedelta)):
@@ -363,9 +367,11 @@ class Cell:
             tag.attrs["office:time-value"] = _format_time_value(new_value)
             # as reading it back gives it: a time if it fits in a day, else a timedelta
             new_value = _parse_time_value(tag.attrs["office:time-value"])
-            text = (
-                self._infer_time_display(new_value)
-                or self._render_display_from_number_format(new_value)
+            kind = "duration" if isinstance(new_value, dt.timedelta) else "time"
+            self._format_if_unformatted(kind, new_value)
+            text = (  # as for a date
+                self._render_display_from_number_format(new_value)
+                or self._infer_time_display(new_value)
                 or (
                     _duration_text(new_value)
                     if isinstance(new_value, dt.timedelta)
@@ -643,8 +649,33 @@ class Cell:
         `ODSReader`/style, or no `style:data-style-name` at all."""
         if self.sheet is None or self.sheet.reader is None:
             return None
-        style = CellStyle(self.sheet.reader, self.attrs.get("table:style-name"), value=value, cell=self)
+        style = CellStyle(self.sheet.reader, self._style_name(), value=value, cell=self)
         return style.number_format
+
+    def _format_if_unformatted(self, kind: str, value: object) -> None:
+        """Give this cell the format a `kind` of date or time value gets
+        (see `dateformats`) if it shows with no number format at all, as
+        LibreOffice does to a date typed there - and leave any other format
+        alone, whatever its kind, as LibreOffice does too (issue #7).
+
+        The cell gets a style shared by every cell whose style it was, plus
+        the format - not one of its own, of which a column of dates would
+        make a thousand; a later write to its style forks one as usual."""
+        if self.sheet is None or self.sheet.reader is None:
+            return
+        if self._resolved_number_format(value) is not None:
+            return
+        reader = self.sheet.reader
+        source = self._style_name()
+        key = (source, reader._default_date_format(kind))
+        name = reader._date_formatted_styles.get(key)
+        if name is None:
+            tag = reader._new_style_tag("table-cell", self._OWN_STYLE_PREFIX)
+            self._copy_resolved_style_into(tag, source)
+            tag.attrs["style:data-style-name"] = key[1]
+            name = reader._date_formatted_styles[key] = cast(str, tag["style:name"])
+        self.attrs["table:style-name"] = name
+        self._own_style_name = None
 
     def _render_display_from_number_format(self, new_value: object) -> "str | None":
         """The display text `new_value` should have per this cell's own
@@ -761,10 +792,11 @@ class Cell:
         """This cell's resolved `CellStyle` (visual formatting + real number
         format) - writable, see `CellStyle`. `None` only if the cell has no
         owning `ODSReader` at all (nothing to resolve or create styles
-        against); a cell with no `table:style-name` yet still gets a
-        `CellStyle` back with every property `None`/`False` - setting any
+        against). A cell with no `table:style-name` shows with its column's
+        default cell style, and resolves to it; with neither, it still gets
+        a `CellStyle` back with every property `None`/`False`. Setting any
         writable property on it (e.g. `cell.style.bold = True`) gives the
-        cell its own style on the spot.
+        cell its own style on the spot, carrying its column's over.
 
         `.number_format` is already resolved against this cell's own value
         when the format is conditional (e.g. currency shown in red only when
@@ -772,7 +804,7 @@ class Cell:
         """
         if self.sheet is None or self.sheet.reader is None:
             return None
-        name = self.attrs.get("table:style-name")
+        name = self._style_name()
         return CellStyle(self.sheet.reader, name, value=self._value, cell=self)
 
     @style.setter
@@ -803,6 +835,15 @@ class Cell:
         else:
             self.attrs["table:style-name"] = name
 
+    def _style_name(self) -> "str | None":
+        """The name of the style this cell shows with: its own
+        `table:style-name`, else its column's default cell style, where
+        LibreOffice keeps the format of a column formatted as a whole."""
+        own = self.attrs.get("table:style-name")
+        if own is not None or self.sheet is None:
+            return own
+        return self.sheet._column_default_cell_style(self.col)
+
     _OWN_STYLE_PREFIX = "ocs"
 
     def _ensure_own_style(self) -> Tag:
@@ -831,7 +872,9 @@ class Cell:
             if tag is not None:
                 return tag
         tag = reader._new_style_tag("table-cell", self._OWN_STYLE_PREFIX)
-        self._copy_resolved_style_into(tag, current_name)
+        # a cell with no style of its own shows with its column's: the fork
+        # has to carry that one, or the cell would lose the column's format
+        self._copy_resolved_style_into(tag, self._style_name())
         new_name = cast(str, tag["style:name"])
         self.attrs["table:style-name"] = new_name
         self._own_style_name = new_name

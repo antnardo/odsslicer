@@ -36,6 +36,28 @@ still change between minor versions.
 - Writing into a merged cell whose range runs into columns left out of the grid — Excel
   merges notes across empty columns past the data — no longer raises `IndexError`; nor does
   undoing such a merge, or deleting or inserting rows or columns through it.
+- **A date or time written into a cell with no number format no longer shows as a number**
+  ([#7](https://github.com/antnardo/odsslicer/issues/7)). It was stored with its type but
+  no format: past the sheet's declared columns, where it grows, LibreOffice showed 2022-03-07
+  as 44627, and within them a duration of 128:45 as 08:45:00. Such a cell now gets the format
+  LibreOffice would give the value if typed there, the standard one of the document's
+  locale: `07/03/22`, `07/03/22 13:45` and `09:30:00` in a fr-FR document, `03/07/22`,
+  `03/07/22 01:45 PM` and `09:30:00 AM` in en-US, `[HH]:MM:SS` for a duration everywhere. The
+  formats of 67 locales are built in, taken from LibreOffice 25.8; any other locale, or a
+  document with no language, gets ISO 8601. A cell that has a number format keeps it, as in
+  LibreOffice, and the displayed text of a date or time now follows the cell's own format
+  first, before an example taken from another cell.
+- **A cell with no style of its own resolves to its column's default cell style**, where
+  LibreOffice keeps the formatting of a column formatted as a whole: `cell.style` reads it,
+  setting a style property on such a cell carries the column's formatting over instead of
+  dropping it, background and number format included, and `Sheet.copy` and `Sheet.sort`
+  carry it along.
+- A time format with AM/PM showed 13:45 as `13:45 PM` in the displayed text odsslicer
+  writes: it now counts the hours on a 12-hour clock, `01:45 PM`.
+- The displayed text of a date in a format LibreOffice takes from the system
+  (`number:format-source="language"`, as it saves a column in the system's short date) is no
+  longer rendered from that format's placeholder elements — `7/3/22` where LibreOffice shows
+  `07/03/2022` on a French macOS — but taken from another cell's, else written in ISO 8601.
 
 ## [0.13.0] — 2026-09-26
 
