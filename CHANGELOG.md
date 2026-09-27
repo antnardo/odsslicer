@@ -26,6 +26,16 @@ still change between minor versions.
   column definitions past the data, whose columns lost their widths. A sheet padded to its
   application's full size, 1,048,576 rows by 16,384 columns (1,024 before LibreOffice 7.4),
   still gives back what an insertion adds, so as not to exceed it.
+- **`cell.value` takes the values numpy and pandas hand out**
+  ([#11](https://github.com/antnardo/odsslicer/issues/11)): numpy's integers, booleans,
+  `datetime64` and `timedelta64` raised `TypeError`, and so did writing `df.to_numpy()` for a
+  DataFrame of integers, a numpy scalar to a range, or a `decimal.Decimal`, as database
+  drivers return them. They are written as the value they stand for, and `cell.value` gives
+  back the Python type — a numpy `float64` used to stay one.
+- **A NaN leaves the cell empty**, as pandas writes a missing value to a spreadsheet: it was
+  written as `office:value="nan"`, which LibreOffice shows as 0 and counts in sums and
+  averages. numpy's `NaT` does the same, and an infinite number raises `ValueError` instead
+  of showing as 0.
 
 ### Changed
 

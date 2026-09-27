@@ -18,6 +18,7 @@ installed in CI by default) - install LibreOffice locally to run these.
 import datetime as dt
 import re
 
+import numpy as np
 import pytest
 from conftest import (
     addresses_holding,
@@ -329,6 +330,17 @@ def test_libreoffice_shows_values_written_around_empty_columns_where_written(tmp
     table.sheet("Sheet1")["B1"].value = "b"
     table.save()
     assert libreoffice_shows(path, tmp_path) == [["a", "b", *[""] * 23, "new z"]]
+
+
+@requires_soffice
+def test_libreoffice_shows_numpy_values_and_a_nan_as_an_empty_cell(tmp_path):
+    # issue #11: numpy's integers raised TypeError, and NaN was written as
+    # office:value="nan", which LibreOffice showed as 0
+    table = ODSReader.new()
+    table.sheet("Sheet1")["A1:C1"].value = [np.int64(1250), np.float64("nan"), np.uint8(7)]
+    path = tmp_path / "numpy.ods"
+    table.save(path)
+    assert libreoffice_shows(path, tmp_path) == [["1250", "", "7"]]
 
 
 @requires_soffice

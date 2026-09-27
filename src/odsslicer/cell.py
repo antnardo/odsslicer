@@ -8,8 +8,10 @@
 
 import copy
 import datetime as dt
+import decimal
 import itertools
 import math
+import numbers
 import re
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, cast
 
@@ -43,10 +45,57 @@ if TYPE_CHECKING:
 def _is_broadcastable_scalar(value: object) -> bool:
     """True for a value that should be written as-is to every cell of a
     multi-cell selection, rather than unpacked element-wise (a `str` is
-    iterable but clearly meant as one value, not one cell per character)."""
-    return value is None or isinstance(
-        value, (str, bool, int, float, dt.date, dt.time, dt.timedelta)
+    iterable but clearly meant as one value, not one cell per character).
+    numpy's scalars count, and a numpy array of no dimension (issue #11)."""
+    return (
+        value is None
+        or isinstance(
+            value,
+            (str, numbers.Number, decimal.Decimal, np.generic, dt.date, dt.time, dt.timedelta),
+        )
+        or (isinstance(value, np.ndarray) and value.ndim == 0)
     )
+
+
+def _plain_value(value: object) -> object:
+    """`value` as one of the Python types a cell holds, when it stands for
+    one (issue #11): numpy's scalars - what pandas hands out, `df.to_numpy()`
+    of a frame of integers say - and any other number, a `decimal.Decimal`
+    from a database driver, a `fractions.Fraction`. NaN and numpy's NaT are
+    missing values: `None`, an empty cell, as pandas writes one to a
+    spreadsheet - LibreOffice reads `office:value="nan"` as 0, which sums
+    and averages then count. An infinite number has no place in a cell:
+    `ValueError`. Anything else comes back as it is.
+
+    numpy's `timedelta64` is registered as an integer, and its `item()`
+    gives an int for nanoseconds, or a date out of `datetime`'s range:
+    dates and durations go through microseconds first."""
+    if isinstance(value, np.ndarray) and value.ndim == 0:
+        value = value[()]
+    if isinstance(value, np.datetime64):
+        if np.isnat(value):
+            return None
+        days = np.datetime_data(value.dtype)[0] in ("Y", "M", "W", "D")
+        converted = value.astype("datetime64[D]" if days else "datetime64[us]").item()
+        if not isinstance(converted, dt.date):
+            raise ValueError(f"{value!r} is out of the range of datetime.date")
+        return converted
+    if isinstance(value, np.timedelta64):
+        return None if np.isnat(value) else value.astype("timedelta64[us]").item()
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, str):
+        return str(value)  # numpy's str_ too
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    if isinstance(value, (numbers.Real, decimal.Decimal)):
+        number = float(value)
+        if math.isnan(number):
+            return None
+        if math.isinf(number):
+            raise ValueError(f"a cell cannot hold an infinite number: {value!r}")
+        return number
+    return value
 
 
 class ArrayValues:
@@ -321,6 +370,7 @@ class Cell:
 
     @value.setter
     def value(self, new_value: Any) -> None:
+        new_value = _plain_value(new_value)  # before anything changes: it may raise
         self._prepare_for_write()
         tag = self.cell
 

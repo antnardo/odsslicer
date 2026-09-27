@@ -15,7 +15,10 @@ Et une section dédiée à l'écriture (Cell.value = ... / ODSReader.save()).
 import datetime as dt
 import math
 import warnings
+from decimal import Decimal
+from fractions import Fraction
 
+import numpy as np
 import pytest
 from conftest import (
     FIXTURES_DIR,
@@ -606,6 +609,115 @@ def test_write_unsupported_type_raises_typeerror(writable_reader):
     s = writable_reader.sheet("Sheet1")
     with pytest.raises(TypeError):
         s["A1"].value = Foo()
+
+
+# ---------------------------------------------------------------------------
+# Values from numpy - and so pandas - or a database (issue #11): written as
+# the value they stand for, as Python types; NaN is a missing value
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "written", "read_back"),
+    [
+        pytest.param(np.int64(1250), 1250, 1250.0, id="int64"),
+        pytest.param(np.uint8(7), 7, 7.0, id="uint8"),
+        pytest.param(np.bool_(True), True, True, id="bool_"),
+        pytest.param(np.float64(1.5), 1.5, 1.5, id="float64"),
+        pytest.param(np.float32(0.5), 0.5, 0.5, id="float32"),
+        pytest.param(np.longdouble(2.5), 2.5, 2.5, id="longdouble"),
+        pytest.param(np.str_("x"), "x", "x", id="str_"),
+        pytest.param(np.array(3), 3, 3.0, id="0-d array"),
+        pytest.param(
+            np.datetime64("2026-09-20"), dt.date(2026, 9, 20), dt.date(2026, 9, 20), id="datetime64[D]"
+        ),
+        pytest.param(
+            np.datetime64("2026-09-20T10:11:12.123456789"),
+            dt.datetime(2026, 9, 20, 10, 11, 12, 123456),
+            dt.datetime(2026, 9, 20, 10, 11, 12, 123456),
+            id="datetime64[ns]",
+        ),
+        pytest.param(np.timedelta64(90, "m"), dt.time(1, 30), dt.time(1, 30), id="timedelta64"),
+        pytest.param(
+            np.timedelta64(30, "h"),
+            dt.timedelta(hours=30),
+            dt.timedelta(hours=30),
+            id="timedelta64 past a day",
+        ),
+        pytest.param(Decimal("2310.50"), 2310.5, 2310.5, id="Decimal"),
+        pytest.param(Fraction(1, 4), 0.25, 0.25, id="Fraction"),
+    ],
+)
+def test_a_value_from_numpy_or_a_database_is_written_as_what_it_stands_for(
+    tmp_path, value, written, read_back
+):
+    # regression: TypeError, but for float64 and str_, which stayed numpy's
+    r = ODSReader.new()
+    s = r.sheet("Sheet1")
+    s["A1"].value = value
+    assert s["A1"].value == written
+    assert type(s["A1"].value) is type(written)
+    r.save(tmp_path / "out.ods")
+    back = ODSReader(tmp_path / "out.ods").sheet("Sheet1")["A1"].value
+    assert back == read_back
+    assert type(back) is type(read_back)
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(np.float64("nan"), id="float64 nan"),
+        pytest.param(Decimal("NaN"), id="Decimal NaN"),
+        pytest.param(np.datetime64("NaT", "D"), id="datetime64 NaT"),
+        pytest.param(np.timedelta64("NaT", "s"), id="timedelta64 NaT"),
+    ],
+)
+def test_a_missing_value_leaves_the_cell_empty(writable_reader, missing):
+    # regression: NaN was written as office:value="nan", which LibreOffice
+    # reads as 0 - and NaT raised TypeError
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].value = missing
+    assert s["A1"].value is None
+    assert s["A1"].is_empty
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(float("inf"), id="inf"),
+        pytest.param(-np.inf, id="-inf"),
+        pytest.param(Decimal("Infinity"), id="Decimal Infinity"),
+        pytest.param(np.datetime64("20000-01-01"), id="datetime64 past year 9999"),
+    ],
+)
+def test_a_value_no_cell_can_hold_raises_valueerror_and_writes_nothing(
+    writable_reader, value
+):
+    s = writable_reader.sheet("Sheet1")
+    before, size = s["A1"].value, s.size
+    with pytest.raises(ValueError):
+        s["A1"].value = value
+    with pytest.raises(ValueError):
+        s[size[0] + 5, 0].value = value  # past the grid, which must not grow
+    assert s["A1"].value == before
+    assert s.size == size
+
+
+def test_a_numpy_array_or_scalar_fills_a_range(tmp_path):
+    # regression: TypeError, 'numpy.int64' object is not iterable for the
+    # scalar, and for each of the array's integers
+    r = ODSReader.new()
+    s = r.sheet("Sheet1")
+    s["A1:B2"].value = np.array([[1250, 38], [1320, 41]])
+    s["C1:D2"].value = np.int64(0)
+    s["E1:E2"].value = np.array(5)  # an array of no dimension, a scalar
+    r.save(tmp_path / "out.ods")
+    back = ODSReader(tmp_path / "out.ods").sheet("Sheet1")
+    assert back["A1:E2"].to_list() == [
+        [1250.0, 38.0, 0.0, 0.0, 5.0],
+        [1320.0, 41.0, 0.0, 0.0, 5.0],
+    ]
 
 
 def test_write_widens_existing_rows(writable_reader):

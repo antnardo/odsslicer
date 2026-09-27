@@ -262,6 +262,14 @@ Accepted types: `str`, `int`/`float`, `bool`, `datetime.date`, `datetime.datetim
 already formatted as `percentage` or `currency` keeps that format. Writing over a cell that
 held a formula erases the formula (`is_formula` becomes `False`).
 
+What stands for one of those types goes too, and reads back as it: numpy's scalars — its
+integers, floats, booleans, `datetime64` and `timedelta64`, what pandas hands out, and a numpy
+array for a range (`sheet["A2:C9"].value = df.to_numpy()`) — a `decimal.Decimal`, as database
+drivers return `NUMERIC` columns, or any other number. NaN, and numpy's `NaT`, are missing
+values: they leave the cell empty, as pandas writes them to a spreadsheet — LibreOffice would
+show a NaN as 0, and count it in sums and averages. An infinite number raises `ValueError`,
+as does a `datetime64` past the year 9999.
+
 A date or time value reads back at once the way a reload would read it (see
 [Dates, times and durations](#dates-times-and-durations)): a `timedelta` within a day comes
 back as a `time`, and an aware `datetime` is written in UTC and comes back without its offset.
