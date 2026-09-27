@@ -2944,6 +2944,32 @@ def test_formula_template_rejects_unknown_names(writable_reader):
         s["A1"].formula = "{z+1}"
 
 
+@pytest.mark.parametrize(
+    "formula",
+    [
+        '"{"&A1&"}"',  # issue #26: a brace meant literally, around a reference
+        "A{1.5}",  # a number, but not a row
+        "A{r/2}",  # division: a row and a half
+        "{True}",
+    ],
+)
+def test_formula_template_refuses_what_is_not_a_row_or_column(writable_reader, formula):
+    # regression (issue #26): `{"&A1&"}` parses as a Python string, so it was
+    # substituted for its content - `'"{"&A1&"}"'` was silently stored as
+    # `of:="&A1&"`, a different formula, where an unknown name already raised.
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(ValueError, match="double the braces|unsupported expression"):
+        s["A1"].formula = formula
+
+
+def test_formula_template_says_how_to_write_a_literal_brace(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(ValueError, match=r"double the braces"):
+        s["A1"].formula = '"{"&A1&"}"'
+    s["A1"].formula = '"{{"&A1&"}}"'  # the way the message points to
+    assert s["A1"].formula == 'of:="{"&A1&"}"'  # escaped content is passed through as written'
+
+
 def test_formula_template_double_braces_escape_a_literal_array_constant(writable_reader):
     # {{...}} (as in str.format) is the escape hatch for a literal {...} -
     # e.g. an ODF/Excel array-constant like {1,2,3}, which is not a {r}/{c}

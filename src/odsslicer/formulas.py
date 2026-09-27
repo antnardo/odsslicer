@@ -407,7 +407,21 @@ def _eval_template_expr(expr: str, context: dict[str, int]) -> int:
                 f"(only {', '.join(context)} are available)"
             )
     code = compile(tree, "<formula-template>", "eval")
-    return eval(code, {"__builtins__": {}}, context)
+    try:
+        value = eval(code, {"__builtins__": {}}, context)
+    except TypeError as exc:  # e.g. {r + "a"}: arithmetic on something that isn't a number
+        raise ValueError(f"unsupported expression in formula template: {expr!r}") from exc
+    # A placeholder stands for a row or a column number. Anything else is a
+    # brace the caller meant literally: `{"&A1&"}` parses as a Python string
+    # and used to be substituted for its content, silently turning
+    # `"{"&A1&"}"` into `"&A1&"` (issue #26).
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            f"formula template {expr!r} gives {value!r}, not a row or column number - "
+            "a placeholder takes an arithmetic expression of r and c; double the braces "
+            "({{...}}) to write a literal one"
+        )
+    return value
 
 
 _ESCAPED_BRACES_RE = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
