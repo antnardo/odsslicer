@@ -100,8 +100,23 @@ jobs:
         run: |
           sudo add-apt-repository -y ppa:libreoffice/ppa
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libreoffice-calc libreoffice-script-provider-python
+          sudo apt-get install -y --no-install-recommends \
+            libreoffice-calc libreoffice-script-provider-python libreoffice-l10n-fr
           soffice --version
+
+      # A number format that names its days and months without saying in which
+      # language, and the decimal separator of a displayed time, are rendered by
+      # LibreOffice in its own locale - not the document's. The consistency tests
+      # compare those strings to what odsslicer wrote, so the locale has to be
+      # the same here as where they were written, or "dim. 27 sept." comes back
+      # as "Sun 27 Sep". Pinned rather than asserted loosely, so the test keeps
+      # checking that both agree character for character.
+      - name: Use the locale the consistency tests were written in
+        run: |
+          sudo locale-gen fr_FR.UTF-8
+          sudo update-locale LANG=fr_FR.UTF-8
+          echo "LANG=fr_FR.UTF-8" >> "$GITHUB_ENV"
+          echo "LC_ALL=fr_FR.UTF-8" >> "$GITHUB_ENV"
 
       - name: Install the package with test dependencies
         run: pip install -e ".[test]"
