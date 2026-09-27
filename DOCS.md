@@ -616,8 +616,10 @@ sheet.unmerge("B2")         # any cell in the range works, not just the master
 ```
 
 `merge` grows the sheet first if needed; raises `ValueError` for a single-cell range or if any
-cell is already part of a merge. `unmerge` raises `ValueError` if `address` isn't a single
-cell, or isn't part of any merge.
+cell is already part of another merge. A range already merged the same way is left as it is:
+code written for 0.13, where writing into a merge's master undid the merge, merges it again
+after the write. `unmerge` raises `ValueError` if `address` isn't a single cell, or isn't part
+of any merge.
 
 ---
 

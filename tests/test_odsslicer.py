@@ -3727,10 +3727,22 @@ def test_merge_single_cell_raises(writable_reader):
         s.merge("A1")
 
 
-def test_merge_already_merged_cell_raises(writable_reader):
+@pytest.mark.parametrize("address", ["A1:B2", "A1:B1", "B1:D1", "A1:D1"])
+def test_merge_already_merged_cell_raises(writable_reader, address):
     s = writable_reader.sheet("SheetFusion")
     with pytest.raises(ValueError):
-        s.merge("A1:B2")  # A1 is already the master of A1:C1
+        s.merge(address)  # A1 is already the master of A1:C1
+
+
+def test_merging_a_range_merged_the_same_way_again_leaves_it_as_it_is(writable_reader):
+    # what 0.13 had to do after writing into a merge's master, which undid it
+    s = writable_reader.sheet("SheetFusion")
+    s["A1"].value = "title"
+    s.merge("A1:C1")
+    s.merge((0, slice(0, 3)))
+    assert s["A1"].merge_range == "A1:C1" and s["A1"].value == "title"
+    assert s["B1"].is_covered and s["B1"].value == 2.0
+    assert s["C1"].is_covered and s["C1"].value == 3.0
 
 
 def test_unmerge_from_any_cell_in_the_range(writable_reader):

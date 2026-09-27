@@ -558,11 +558,21 @@ class Sheet:
 
         Grows the sheet first if `address` extends past its current
         extent. Raises `ValueError` if the range is a single cell, or if
-        any cell in it is already part of a merge (`unmerge(...)` it
-        first)."""
+        any cell in it is already part of another merge (`unmerge(...)` it
+        first). A range already merged the same way is left as it is."""
         row0, row1, col0, col1 = self._resolve_range(address)
         if row0 == row1 and col0 == col1:
             raise ValueError(f"{address!r} is a single cell - nothing to merge")
+        if (
+            row1 < self.n_rows
+            and col1 < self.n_cols
+            and self.rows[row0][col0].is_merge_master
+            and self.rows[row0][col0].merge_span == (row1 - row0 + 1, col1 - col0 + 1)
+        ):
+            # In 0.13, writing into the master undid the merge, and the documented
+            # remedy was to merge the range again after the write: now that the
+            # write keeps the merge, that code would raise here.
+            return
         self.grow_to(row1, col1)
         for r in range(row0, row1 + 1):
             for c in range(col0, col1 + 1):

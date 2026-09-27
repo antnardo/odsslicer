@@ -100,7 +100,9 @@ still change between minor versions.
   ([#19](https://github.com/antnardo/odsslicer/issues/19)), as typing into it does in
   LibreOffice. A value, a formula or a style written there undid it: a long date written into
   a title merged across three columns showed as `###`. Writing into a hidden cell of the merge
-  still undoes it, so that the value written shows.
+  still undoes it, so that the value written shows. `Sheet.merge` leaves a range already
+  merged the same way as it is, where it raised `ValueError`, so that code merging the title
+  again after the write, as 0.13 required, still runs.
 - **DOCS.md states the shapes of selections as they are**
   ([#21](https://github.com/antnardo/odsslicer/issues/21)), where it said they followed numpy:
   a column keeps its axis, `(n, 1)`, where numpy drops it, and an address spanning one row is
