@@ -42,8 +42,8 @@ from conftest import (
     with_chart,
 )
 from odsslicer import ODSReader
-from odsslicer.sheet import _repeat
 from odsslicer.classes import Border, NumberFormat
+from odsslicer.sheet import _repeat
 
 
 @requires_soffice

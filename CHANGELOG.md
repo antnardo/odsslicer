@@ -5,6 +5,32 @@ All notable changes to `odsslicer` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
 still change between minor versions.
 
+## [Unreleased]
+
+### Fixed
+
+- **Deleting the row or the column a chart, a shape or an image is anchored in no longer
+  deletes it** ([#24](https://github.com/antnardo/odsslicer/issues/24)): it moves into the cell
+  taking its place, at the same address, as LibreOffice keeps it. A frame anchored in a table's
+  own rows went with the cell it hung from — `delete_rows` left its object in the file with
+  nothing pointing at it.
+- **A row formatted as a whole keeps its formatting through a save**
+  ([#23](https://github.com/antnardo/odsslicer/issues/23)), with no edit needed to lose it
+  before: reading the sheet was enough. LibreOffice writes such a row as its cells followed by
+  one repeated to the last column, and loading clamped each row to the sheet's width, deleting
+  what followed — a cell carrying a style holds no content. It now stays in the file, out of
+  the grid, and widening the sheet takes it back with its formatting. Checked against
+  LibreOffice on its own file: 5 yellow cells left in a whole-yellow row before, 16,383 now.
+- **Inserted columns take the width of the column they push right**
+  ([#25](https://github.com/antnardo/odsslicer/issues/25)) — its visibility and the default
+  cell style of a column formatted as a whole too — where they took the default width.
+  LibreOffice gives an inserted column the format of the one it pushes.
+- **A `{...}` placeholder that is not a row or column number is refused**
+  ([#26](https://github.com/antnardo/odsslicer/issues/26)) instead of being dropped with its
+  braces: `'"{"&A1&"}"'` parses as a Python string, so it was substituted for its content and
+  stored as `of:="&A1&"`, a different formula, silently. The message points at the doubling
+  that writes a literal brace, `'"{{"&A1&"}}"'`.
+
 ## [0.14.0] — 2026-09-27
 
 ### Fixed
