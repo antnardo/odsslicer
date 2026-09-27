@@ -81,7 +81,6 @@ still change between minor versions.
   space before it in every document, `50 %` in en-US, where LibreOffice writes `50%`. And the
   text written from any percentage or currency format follows the format's own text, where a
   space before the sign or the symbol was taken for granted.
-
 ### Added
 
 - **`NumberFormat.create(..., elapsed=True)`** makes an elapsed-time format, LibreOffice's
@@ -90,6 +89,11 @@ still change between minor versions.
 
 ### Changed
 
+- **Writing into a merge's master cell keeps the merge**
+  ([#19](https://github.com/antnardo/odsslicer/issues/19)), as typing into it does in
+  LibreOffice. A value, a formula or a style written there undid it: a long date written into
+  a title merged across three columns showed as `###`. Writing into a hidden cell of the merge
+  still undoes it, so that the value written shows.
 - **DOCS.md no longer says that LibreOffice recomputes every formula on open**
   ([#18](https://github.com/antnardo/odsslicer/issues/18)). At its default setting, it
   recomputes the formulas with no cached result, the volatile ones, and those in a cell with

@@ -410,6 +410,34 @@ _NAMED_AND_FRACTIONAL = [
 
 
 @requires_soffice
+def test_libreoffice_keeps_a_merge_whose_master_was_written(tmp_path, libreoffice_export):
+    # issue #19: writing the master undid the merge, and a long date written
+    # into a title merged across B1:D1 no longer fitted: ### in LibreOffice
+    number_style, _ = _NAMED_AND_FRACTIONAL[0]
+    styles = number_style + (
+        '<style:style style:name="c1" style:family="table-cell" style:data-style-name="N1"/>'
+    )
+    xml = '<table:table-column table:number-columns-repeated="4"/>' + table_row(
+        text_cell("Date:"),
+        '<table:table-cell table:style-name="c1" table:number-columns-spanned="3"'
+        ' table:number-rows-spanned="1"/>',
+        "<table:covered-table-cell/>",
+        "<table:covered-table-cell/>",
+    )
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    path = ods_with_sheet(src_dir / "title.ods", xml, styles)
+    table = ODSReader(path)
+    table.sheet("Sheet1")["B1"].value = dt.date(2026, 9, 27)
+    table.save()
+
+    fods = BeautifulSoup(libreoffice_export(path, "fods").read_text(encoding="utf-8"), "xml")
+    title = fods.find("table:table-cell", attrs={"office:date-value": "2026-09-27"})
+    assert title["table:number-columns-spanned"] == "3"
+    assert title.find("text:p").get_text() == "Sunday, September 27, 2026"
+
+
+@requires_soffice
 def test_libreoffice_shows_created_elapsed_and_percentage_formats_as_odsslicer_writes_them(
     tmp_path,
 ):

@@ -339,8 +339,8 @@ formulas across a range.
 ODS compresses identical rows/columns into a single XML element shared between several
 `Cell`s, and represents a merge via a top-left "master" cell plus hidden
 `table:covered-table-cell` cells. Writing to one of these cells automatically "unrolls" the
-structure involved — the compressed row/column is split into individual elements, and/or the
-merge is undone — before the new value is applied:
+structure involved — the compressed row/column is split into individual elements, and/or, for
+a hidden cell, the merge is undone — before the new value is applied:
 
 ```python
 sheet["C5"].value = 42   # C5 was part of a block of 6 compressed rows: the block is split
@@ -348,11 +348,14 @@ sheet["C5"].value = 42   # C5 was part of a block of 6 compressed rows: the bloc
                           # cells in the block keep their original value
 ```
 
-Writing to a merged cell (master or hidden) undoes the whole merge: every previously hidden
-cell becomes independent again and reveals its own value — ODF already stores it internally
-under `table:covered-table-cell`, exactly as LibreOffice would when manually un-merging.
-`Cell` objects already obtained before the write remain valid and are automatically repointed
-to their new individual XML element; `sheet.size` never changes as a result of unrolling.
+Writing to a merge's master — a value, a formula, a style — keeps the merge, as typing into the
+merged cell does in LibreOffice: a long date written into a title merged across three columns
+still spans them. Writing to a hidden cell undoes the whole merge, since the value written would
+stay hidden otherwise: every previously hidden cell becomes independent again and reveals its
+own value — ODF already stores it internally under `table:covered-table-cell`, exactly as
+LibreOffice would when manually un-merging. `Cell` objects already obtained before the write
+remain valid and are automatically repointed to their new individual XML element;
+`sheet.size` never changes as a result of unrolling.
 
 ### Automatic sheet growth
 

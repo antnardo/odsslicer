@@ -373,13 +373,18 @@ class Sheet:
         return cells_bs
 
     def materialize_cell(self, row: int, col: int) -> None:
-        """Ensure the cell at (row, col) has its own, independent XML element.
+        """Ensure the cell at (row, col) has its own, independent XML element,
+        ready to be written.
 
         Repeatedly un-repeats the enclosing row, then the enclosing column, then
-        un-merges the enclosing merged range, until the cell shares nothing with
-        any other cell anymore. Each step repoints every affected `Cell` object
-        (via re-running its `__init__`) at its own new tag, so existing `Cell`
-        references obtained before the call keep working correctly afterwards.
+        un-merges the enclosing merged range if the cell is a covered one - its
+        value would stay hidden otherwise - until the cell shares nothing with
+        any other cell anymore. A merge's master keeps the merge, as LibreOffice
+        keeps it when one types into it: undoing it made a long date written
+        into a title merged across three columns show as ### (issue #19).
+        Each step repoints every affected `Cell` object (via re-running its
+        `__init__`) at its own new tag, so existing `Cell` references obtained
+        before the call keep working correctly afterwards.
         """
         for _ in range(8):  # a handful of structural layers is more than any real file has
             cell = self.rows[row][col]
@@ -391,7 +396,7 @@ class Sheet:
             if cell.attrs.get("table:number-columns-repeated", "1") != "1":
                 self._unrepeat_col(row, col)
                 continue
-            if tag.name == "covered-table-cell" or self._is_merge_master(cell):
+            if tag.name == "covered-table-cell":
                 self._unmerge(row, col)
                 continue
             return

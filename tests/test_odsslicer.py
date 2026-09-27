@@ -885,15 +885,23 @@ def test_write_sequential_cells_in_the_same_former_repeat_block(writable_reader)
     assert s.size == (9, 6)
 
 
-def test_write_merge_master_cell_reveals_covered_siblings(writable_reader):
+@pytest.mark.parametrize(
+    "write",
+    [
+        pytest.param(lambda cell: setattr(cell, "value", "nouveau maitre"), id="value"),
+        pytest.param(lambda cell: setattr(cell, "formula", "1+1"), id="formula"),
+        pytest.param(lambda cell: setattr(cell.style, "bold", True), id="style"),
+    ],
+)
+def test_writing_a_merge_master_cell_keeps_the_merge(writable_reader, write):
+    # as LibreOffice keeps it when one types into the merged cell: undoing it
+    # made a long date written into a title merged across columns show ###
     s = writable_reader.sheet("SheetFusion")
     assert s.size == (9, 4)
-    s["A1"].value = "nouveau maitre"
-    assert s["A1"].value == "nouveau maitre"
-    assert s["A1"].attrs.get("table:number-columns-spanned") is None
-    # ODF stores each covered cell's original value under it; unmerging reveals it
-    assert s["B1"].value == 2.0
-    assert s["C1"].value == 3.0
+    write(s["A1"])
+    assert s["A1"].merge_range == "A1:C1"
+    assert s["B1"].is_covered and s["C1"].is_covered
+    assert s["B1"].value == 2.0  # still hidden under the merge, as it was
     assert s["D1"].value is None  # unrelated neighbour untouched
     assert s.size == (9, 4)
 

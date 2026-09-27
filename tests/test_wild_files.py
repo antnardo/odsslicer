@@ -162,9 +162,15 @@ _S67_01_NOTE = (
 )
 # edit -> (action, {address: (value, merge range) after a save and reload})
 _MERGE_PAST_THE_GRID_EDITS = {
+    # the master: the merge stays, as when one types into it in LibreOffice
     "write": (
         lambda s: setattr(s["A17"], "value", "Notes"),
-        {"A17": ("Notes", None)},
+        {"A17": ("Notes", "A17:H17")},
+    ),
+    # a covered cell, past the grid: the merge goes, revealing it
+    "write covered": (
+        lambda s: setattr(s["C17"], "value", "Notes"),
+        {"A17": (_S67_01_NOTE, None), "C17": ("Notes", None)},
     ),
     "unmerge": (
         lambda s: s.unmerge("A17"),
