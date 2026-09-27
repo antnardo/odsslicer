@@ -5,7 +5,7 @@ All notable changes to `odsslicer` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
 still change between minor versions.
 
-## [Unreleased]
+## [0.14.0] — 2026-09-27
 
 ### Fixed
 
@@ -488,6 +488,7 @@ repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
 [Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.13.2...HEAD
+[0.14.0]: https://github.com/antnardo/odsslicer/compare/v0.13.2...v0.14.0
 [0.13.2]: https://github.com/antnardo/odsslicer/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/antnardo/odsslicer/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/antnardo/odsslicer/compare/v0.12.3...v0.13.0
