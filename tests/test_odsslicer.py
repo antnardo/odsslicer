@@ -4064,6 +4064,94 @@ def test_save_round_trip_after_delete_row_adjusts_formulas(writable_reader, tmp_
 
 
 # ---------------------------------------------------------------------------
+# References to other sheets as LibreOffice writes them (issue #14): an
+# absolute sheet, a name starting with an accent, a range's end on its
+# start's sheet
+# ---------------------------------------------------------------------------
+
+_LIBREOFFICE_REFERENCES = ["of:=[$Data.A5]", "of:=SUM([$Data.A1:.A5])", "of:=[Élèves.A5]"]
+
+
+def _with_references():
+    r = ODSReader.new()
+    data, pupils = r.add_sheet("Data"), r.add_sheet("Élèves")
+    for i in range(6):
+        data[i, 0].value = i + 1
+        pupils[i, 0].value = 10 * (i + 1)
+    for col, formula in enumerate(_LIBREOFFICE_REFERENCES):
+        r.sheet("Sheet1")[0, col].formula = formula
+    return r
+
+
+@pytest.mark.parametrize(
+    ("edit", "row", "expected"),
+    [
+        pytest.param(
+            lambda r: r.sheet("Data").insert_rows(0),
+            0,
+            ["of:=[$Data.A6]", "of:=SUM([$Data.A2:.A6])", "of:=[Élèves.A5]"],
+            id="insert_rows on Data",
+        ),
+        pytest.param(
+            lambda r: r.sheet("Élèves").insert_rows(0),
+            0,
+            ["of:=[$Data.A5]", "of:=SUM([$Data.A1:.A5])", "of:=[Élèves.A6]"],
+            id="insert_rows on Élèves",
+        ),
+        # the range's end is on Data, not on the formula's sheet
+        pytest.param(
+            lambda r: r.sheet("Sheet1").insert_rows(0), 1, _LIBREOFFICE_REFERENCES, id="insert_rows on Sheet1"
+        ),
+        pytest.param(
+            lambda r: r.sheet("Data").delete_row(4),
+            0,
+            ["of:=[#REF!]", "of:=SUM([$Data.A1:.A4])", "of:=[Élèves.A5]"],
+            id="delete_row on Data",
+        ),
+        pytest.param(
+            lambda r: r.sheet("Data").insert_columns(0),
+            0,
+            ["of:=[$Data.B5]", "of:=SUM([$Data.B1:.B5])", "of:=[Élèves.A5]"],
+            id="insert_columns on Data",
+        ),
+        pytest.param(
+            lambda r: r.rename_sheet("Data", "Figures"),
+            0,
+            ["of:=[$Figures.A5]", "of:=SUM([$Figures.A1:.A5])", "of:=[Élèves.A5]"],
+            id="rename Data",
+        ),
+        # unquoted, as LibreOffice writes a name starting with an accent
+        pytest.param(
+            lambda r: r.rename_sheet("Data", "Évolution"),
+            0,
+            ["of:=[$Évolution.A5]", "of:=SUM([$Évolution.A1:.A5])", "of:=[Élèves.A5]"],
+            id="rename Data to Évolution",
+        ),
+        pytest.param(
+            lambda r: r.rename_sheet("Élèves", "Mes élèves"),
+            0,
+            ["of:=[$Data.A5]", "of:=SUM([$Data.A1:.A5])", "of:=['Mes élèves'.A5]"],
+            id="rename Élèves",
+        ),
+    ],
+)
+def test_references_to_other_sheets_as_libreoffice_writes_them_follow_edits(edit, row, expected):
+    # regression: none of the three followed; the range's end moved with
+    # rows inserted into the formula's own sheet
+    r = _with_references()
+    edit(r)
+    assert [r.sheet("Sheet1")[row, col].formula for col in range(3)] == expected
+
+
+def test_a_friendly_formula_takes_an_absolute_sheet_and_an_accented_name():
+    # regression: left untranslated, "of:=$Data.A5*2", which no application reads
+    s = ODSReader.new().sheet("Sheet1")
+    s["A1"].formula = "$Data.A5*2+Élèves.B3+SUM($Data.A1:A5)"
+    assert s["A1"].formula == "of:=[$Data.A5]*2+[Élèves.B3]+SUM([$Data.A1:.A5])"
+    assert s["A1"].formula_friendly == "=$Data.A5*2+Élèves.B3+SUM($Data.A1:A5)"
+
+
+# ---------------------------------------------------------------------------
 # Sheet.insert_rows / insert_columns (écriture)
 # ---------------------------------------------------------------------------
 

@@ -17,8 +17,11 @@ _FORMULA_LANGUAGE_PREFIX = re.compile(r"^[A-Za-z][\w.-]*:=")
 # enough and helps the "not a function name" heuristic below.
 _CELL_REF = r"\$?[A-Za-z]{1,3}\$?[0-9]+"
 # an optional leading sheet qualifier: SheetName. or 'Sheet Name'. (the quoted
-# form allows spaces/special characters, doubled '' for a literal quote)
-_SHEET_NAME = r"(?:'(?:[^']|'')*'|[A-Za-z_]\w*)"
+# form allows spaces/special characters, doubled '' for a literal quote). As
+# LibreOffice writes them, a name may start with any letter - Élèves - and
+# carry a `$`, an absolute sheet, for a reference made by clicking a cell of
+# another sheet: missing both skipped such references (issue #14)
+_SHEET_NAME = r"(?:\$?(?:'(?:[^']|'')*'|[^\W\d]\w*))"
 _FRIENDLY_REF_RE = re.compile(
     rf"(?<![A-Za-z0-9_$'.])"
     rf"(?:(?P<sheet>{_SHEET_NAME})\.)?"
@@ -163,7 +166,9 @@ def _shift_odf_formula(formula: str, drow: int, dcol: int) -> str:
 
 def _unquote_odf_sheet_name(raw: str) -> str:
     """`'My Sheet'` -> `My Sheet` (undoing the doubled-`''` escape), or
-    `Sheet2` unchanged - the reverse of the quoting `_SHEET_NAME` matches."""
+    `Sheet2` unchanged - the reverse of the quoting `_SHEET_NAME` matches -
+    and `$Sheet2`, an absolute sheet, `Sheet2`."""
+    raw = raw.removeprefix("$")
     if raw.startswith("'") and raw.endswith("'"):
         return raw[1:-1].replace("''", "'")
     return raw
@@ -239,8 +244,9 @@ def _remap_reference(
     `remap`, keeping its `$` locks, dots and sheet names; `None` if what it
     pointed at was deleted whole, a single cell or every row or column of a
     range. Only an address resolving to `target_sheet` moves - explicitly
-    sheet-qualified, or bare when `containing_sheet` is `target_sheet` -
-    and anything that isn't a plain cell address is left as it is. Meant
+    sheet-qualified, or bare when `containing_sheet` is `target_sheet`, or
+    a range's end on its start's sheet - and anything that isn't a plain
+    cell address is left as it is. Meant
     for structural edits, where the referenced cell itself moves: unlike
     `_shift_cell_address`'s fill/copy semantics, a `$` lock is irrelevant."""
     parts = reference.split(":", 1)
@@ -248,11 +254,15 @@ def _remap_reference(
     rewritten: list[str] = []
     before: "list[tuple[int, int]]" = []
     after: "list[tuple[int, int]]" = []
+    effective_sheet = containing_sheet
     for part, edge in zip(parts, edges, strict=True):
         m = _SHEET_QUALIFIED_RE.match(part)
         assert m is not None  # the pattern matches any non-empty reference part
         ref_sheet, addr = m.group("sheet"), m.group("addr")
-        effective_sheet = _unquote_odf_sheet_name(ref_sheet) if ref_sheet else containing_sheet
+        # a range's end with no sheet name is on its start's sheet, as
+        # LibreOffice writes one on another sheet: `[$Data.A1:.A5]`
+        if ref_sheet:
+            effective_sheet = _unquote_odf_sheet_name(ref_sheet)
         dotted = addr.startswith(".")
         cell = _ODF_CELL_ADDRESS_RE.match(addr[1:] if dotted else addr)
         if effective_sheet != target_sheet or cell is None:
@@ -295,7 +305,7 @@ def _remap_odf_formula_references(
     return _ODF_BRACKET_RE.sub(lambda m: f"[{remap_bracket(m.group(1))}]", formula)
 
 
-_SIMPLE_SHEET_NAME_RE = re.compile(r"^[A-Za-z_]\w*$")
+_SIMPLE_SHEET_NAME_RE = re.compile(r"^[^\W\d]\w*$")
 
 
 def _quote_odf_sheet_name(name: str) -> str:
@@ -320,7 +330,8 @@ def _rename_odf_reference_sheet(inner: str, old_name: str, new_name: str) -> str
         ref_sheet, addr = m.group("sheet"), m.group("addr")
         if ref_sheet is None or _unquote_odf_sheet_name(ref_sheet) != old_name:
             return part
-        return f"{_quote_odf_sheet_name(new_name)}.{addr}"
+        absolute = "$" if ref_sheet.startswith("$") else ""  # stays absolute
+        return f"{absolute}{_quote_odf_sheet_name(new_name)}.{addr}"
 
     if ":" in inner:
         start, end = inner.split(":", 1)

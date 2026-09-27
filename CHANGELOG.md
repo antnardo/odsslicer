@@ -51,6 +51,14 @@ still change between minor versions.
   the columns repeated on every printed page apart, in a group, which odsslicer skipped: each
   column read the width and visibility of the one after it, and inserting or deleting columns
   moved the wrong definitions. They now count where they stand.
+- **References to other sheets written as LibreOffice writes them now follow insertions,
+  deletions and renames** ([#14](https://github.com/antnardo/odsslicer/issues/14)): an
+  absolute sheet, `$Data.A5` — what clicking a cell of another sheet gives — a name starting
+  with an accented letter, `Élèves.A5`, and a range whose end is on its start's sheet,
+  `$Data.A1:.A5`. None of them moved, and a renamed sheet left them pointing at a sheet that
+  no longer existed, `#REF!` or `#NAME?` in LibreOffice; the end of such a range moved with
+  the rows of the formula's own sheet instead. `cell.formula` takes both forms too, where
+  `"$Data.A5"` was written untranslated.
 
 ### Changed
 

@@ -369,6 +369,27 @@ def _centimetres(length):
 
 
 @requires_soffice
+def test_libreoffice_computes_references_to_other_sheets_after_edits(tmp_path):
+    # issue #14: written as LibreOffice writes them, they followed neither
+    # the rows inserted nor the rename - 4, 10, 40 then #REF!, #NAME?
+    table = ODSReader.new()
+    data, pupils = table.add_sheet("Data"), table.add_sheet("Élèves")
+    for i in range(6):
+        data[i, 0].value = i + 1
+        pupils[i, 0].value = 10 * (i + 1)
+    for col, formula in enumerate(
+        ["of:=[$Data.A5]", "of:=SUM([$Data.A1:.A5])", "of:=[Élèves.A5]"]
+    ):
+        table.sheet("Sheet1")[0, col].formula = formula
+    data.insert_rows(0)
+    pupils.insert_rows(0)
+    table.rename_sheet("Data", "Figures")
+    path = tmp_path / "references.ods"
+    table.save(path)
+    assert libreoffice_shows(path, tmp_path) == [["5", "15", "50"]]
+
+
+@requires_soffice
 def test_libreoffice_computes_formulas_whose_references_were_deleted(tmp_path):
     # issue #12: the total kept its range's end, and summed itself; a
     # reference to a deleted cell read the cell below it

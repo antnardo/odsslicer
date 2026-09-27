@@ -611,7 +611,8 @@ sheet["C3"].formula = "SUM(A1:A3)"          # ranges
 sheet["C4"].formula = "IF(A1>0,1,-1)"       # comma-separated arguments
 sheet["C5"].formula = "Sheet2.A1"           # cross-sheet
 sheet["C6"].formula = "'My Sheet'.A1:A3"    # cross-sheet, quoted name
-sheet["C7"].formula = None                  # clears the formula
+sheet["C7"].formula = "$Élèves.A1"          # an absolute sheet, as LibreOffice makes them
+sheet["C8"].formula = None                  # clears the formula
 ```
 
 Internally ODF uses `[.A1]` for references, `;` between arguments, and an `of:=` language
@@ -716,6 +717,11 @@ Several operations rewrite formulas so they keep pointing at the same cells:
 
 - `rename_sheet`: explicitly qualified references (`OldName.A1`) are rewritten to the new
   name; unqualified ones within the sheet itself need no change.
+
+All of them take references to other sheets in the forms LibreOffice writes: an absolute
+sheet (`$Sheet2.A1`, what clicking a cell of another sheet gives), a name starting with an
+accented letter, unquoted (`Élèves.A1`), and a range whose end, with no sheet name of its own,
+is on its start's sheet (`$Sheet2.A1:.A5`).
 - `copy`, `sort`, `fill_formula`: relative references shift by the displacement; `$`-anchored
   ones stay put.
 
