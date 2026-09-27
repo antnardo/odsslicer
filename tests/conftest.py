@@ -267,6 +267,21 @@ def cells_with_content(sheet):
     }
 
 
+# A, B and C 1, 2 and 3 cm wide, A a print title - "Columns to repeat" - as
+# LibreOffice writes them: its definition in a group of its own
+PRINT_TITLE_XML = (
+    '<table:table-header-columns><table:table-column table:style-name="w1"/>'
+    "</table:table-header-columns>"
+    '<table:table-column table:style-name="w2"/><table:table-column table:style-name="w3"/>'
+    + table_row(text_cell("a"), text_cell("b"), text_cell("c"))
+)
+PRINT_TITLE_WIDTHS_XML = "".join(
+    f'<style:style style:name="w{n}" style:family="table-column">'
+    f'<style:table-column-properties style:column-width="{n}cm"/></style:style>'
+    for n in (1, 2, 3)
+)
+
+
 # A1:B1 filled, rows 2 to 6 one repeated row element - as LibreOffice writes
 # a run of identical rows - and A7 filled. Something has to follow the run:
 # LibreOffice drops trailing empty rows, which is what hid issue #5.

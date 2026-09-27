@@ -43,6 +43,14 @@ still change between minor versions.
   itself, a circular reference. As in LibreOffice, a range whose first or last row is deleted
   now keeps the rows left of it, and a reference to a deleted cell, or a range deleted whole,
   becomes `#REF!`.
+- **`delete_column` no longer raises `AssertionError` past the columns a sheet declares**
+  ([#13](https://github.com/antnardo/odsslicer/issues/13)). LibreOffice declares only the
+  columns it uses, and `ODSReader.new()` a single one: a column written past them could not
+  be deleted.
+- **The print titles' columns no longer shift every column's width.** LibreOffice declares
+  the columns repeated on every printed page apart, in a group, which odsslicer skipped: each
+  column read the width and visibility of the one after it, and inserting or deleting columns
+  moved the wrong definitions. They now count where they stand.
 
 ### Changed
 

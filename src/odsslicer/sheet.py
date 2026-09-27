@@ -1094,7 +1094,15 @@ class Sheet:
         self._delete_cells_past_grid(col)  # while the grid still has a column
         for r in range(self.n_rows):
             self._unrepeat_col(r, col)
-        self._unrepeat_column_tag(col).decompose()
+        # a sheet declares only the columns it uses: one written past them
+        # has no definition to delete - asserting one did raised (issue #13)
+        if self._find_column_tag(col) is not None:
+            definition = self._unrepeat_column_tag(col)
+            group = cast(Tag, definition.parent)
+            definition.decompose()
+            # a group of definitions - the print titles' - holds one at least
+            if group is not self.table and group.find("table:table-column") is None:
+                group.decompose()
         for run in self._runs_in(self.rows):
             self.rows[run.start][col].cell.decompose()  # once for the whole run
             for r in run:
@@ -1292,9 +1300,8 @@ class Sheet:
         used to give back any definition past the data, and the formatted
         columns there lost their widths. No-op when the definitions don't
         reach `col` at all."""
-        definitions = self.table.find_all("table:table-column", recursive=False)
         seen = 0
-        for tag in definitions:
+        for tag in list(self._column_definitions(self.table)):
             n = int(tag.attrs.get("table:number-columns-repeated", "1"))
             if seen <= col < seen + n:
                 if col > seen:  # split the repeated definition at `col`
@@ -1311,7 +1318,7 @@ class Sheet:
         else:
             return
         attr = "table:number-columns-repeated"
-        definitions = self.table.find_all("table:table-column", recursive=False)
+        definitions = list(self._column_definitions(self.table))
         if sum(_repeat(t, attr) for t in definitions) - count in _FULL_WIDTHS:
             after = next(k for k, t in enumerate(definitions) if t is new_tag) + 1
             _give_back(definitions[after:], attr, count)
@@ -1401,9 +1408,12 @@ class Sheet:
 
     def _find_column_tag(self, col: int) -> "Tag | None":
         """The `<table:table-column>` covering logical column `col`
-        (accounting for `table:number-columns-repeated`), or `None`."""
+        (accounting for `table:number-columns-repeated`), or `None` - grouped
+        or not: LibreOffice groups the print-title columns' definitions in a
+        `<table:table-header-columns>`, which shifted every column after
+        them when skipped (issue #13)."""
         seen = 0
-        for col_tag in self.table.find_all("table:table-column", recursive=False):
+        for col_tag in self._column_definitions(self.table):
             n = int(col_tag.attrs.get("table:number-columns-repeated", "1"))
             if seen <= col < seen + n:
                 return col_tag
@@ -1423,7 +1433,7 @@ class Sheet:
             return col_tag
 
         seen = 0
-        for tag in self.table.find_all("table:table-column", recursive=False):
+        for tag in self._column_definitions(self.table):
             if tag is col_tag:
                 start = seen
                 break

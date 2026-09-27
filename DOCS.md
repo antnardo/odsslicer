@@ -500,8 +500,8 @@ It behaves like a spreadsheet's "insert rows above" / "insert columns before":
   `SUM(A2:A12)`); a range starting at or below the insertion point moves whole.
 - **A merge straddling the insertion point grows** to include the new rows/columns; merges
   above or below simply move.
-- **Column widths stay with their columns**: the column definitions shift too, the new
-  columns get the default width.
+- **Column widths stay with their columns**: the column definitions shift too, print titles'
+  included, the new columns get the default width.
 - **What the file holds past the grid moves too**: a chart or a shape anchored below the
   data, a formatted cell there, moves down with the rows after the insertion point, and
   sideways with the columns.
@@ -1133,8 +1133,10 @@ sheet.column_style(2).visible = False
 sheet.style.tab_color = "#FF0000"
 ```
 
-Any of the three is `None` if out of range or the `Sheet` has no owning `ODSReader`. Like
-cell styles, the first write forks a private style reused on later writes — since these don't
+Any of the three is `None` if out of range or the `Sheet` has no owning `ODSReader`; a column
+is out of range past the columns the sheet declares, which LibreOffice limits to those it
+uses. The print titles' columns count where they stand, though LibreOffice declares them
+apart, in a group of their own. Like cell styles, the first write forks a private style reused on later writes — since these don't
 chain via `parent-style-name`, the fork copies the current properties verbatim, so setting
 only `.height` doesn't reset `.visible`.
 

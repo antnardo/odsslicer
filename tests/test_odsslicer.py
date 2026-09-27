@@ -22,6 +22,8 @@ import numpy as np
 import pytest
 from conftest import (
     FIXTURES_DIR,
+    PRINT_TITLE_WIDTHS_XML,
+    PRINT_TITLE_XML,
     addresses_holding,
     cells_with_content,
     document_in,
@@ -4248,6 +4250,95 @@ def test_insert_columns_keeps_column_widths_with_their_columns(writable_reader):
     assert s.column_style(3).width == "5cm"
     assert s.column_style(1).width is None and s.column_style(2).width is None
     assert _defined_extent(s)[1] == s.n_cols
+
+
+# ---------------------------------------------------------------------------
+# Column definitions (issue #13): a sheet declares only the columns it uses,
+# and LibreOffice groups the print titles' definitions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("col", "expected"),
+    [(1, {"A1": "a", "B1": "c"}), (2, {"A1": "a"})],
+)
+def test_deleting_a_column_past_the_declared_ones(tmp_path, col, expected):
+    # regression: AssertionError, no definition covering the column
+    xml = "<table:table-column/>" + table_row(text_cell("a"))  # as LibreOffice writes it
+    path = ods_with_sheet(tmp_path / "one.ods", xml)
+    r = ODSReader(path)
+    s = r.sheet("Sheet1")
+    s["C1"].value = "c"
+    s.delete_column(col)
+    r.save()
+    assert cells_with_content(ODSReader(path).sheet("Sheet1")) == expected
+
+
+def _widths(sheet):
+    styles = [sheet.column_style(col) for col in range(sheet.n_cols)]
+    return [style.width if style else None for style in styles]
+
+
+@pytest.mark.parametrize(
+    ("edit", "widths"),
+    [
+        pytest.param(lambda s: None, ["1cm", "2cm", "3cm"], id="read"),
+        pytest.param(lambda s: s.delete_column(1), ["1cm", "3cm"], id="delete_column(1)"),
+        pytest.param(lambda s: s.delete_column(0), ["2cm", "3cm"], id="delete_column(0)"),
+        pytest.param(lambda s: s.insert_columns(1), ["1cm", None, "2cm", "3cm"], id="insert_columns(1)"),
+        pytest.param(lambda s: s.insert_columns(0), [None, "1cm", "2cm", "3cm"], id="insert_columns(0)"),
+    ],
+)
+def test_the_widths_of_print_title_columns_stay_with_their_columns(tmp_path, edit, widths):
+    # regression: the grouped definition was skipped, and every column took
+    # the width of the one after it
+    path = ods_with_sheet(tmp_path / "titles.ods", PRINT_TITLE_XML, PRINT_TITLE_WIDTHS_XML)
+    r = ODSReader(path)
+    edit(r.sheet("Sheet1"))
+    assert _widths(r.sheet("Sheet1")) == widths
+    r.save()
+    assert _widths(ODSReader(path).sheet("Sheet1")) == widths
+    # an emptied group goes: ODF wants one definition in it at least
+    for group in saved_table(path).find_all("table:table-header-columns"):
+        assert group.find("table:table-column") is not None
+
+
+@pytest.mark.parametrize(
+    ("edit", "widths"),
+    [
+        pytest.param(lambda s: s.delete_column(1), ["1cm", "3cm"], id="delete_column(1)"),
+        pytest.param(lambda s: s.insert_columns(1), ["1cm", None, "1cm", "3cm"], id="insert_columns(1)"),
+    ],
+)
+def test_a_repeated_print_title_definition_is_split_where_it_stands(tmp_path, edit, widths):
+    # A and B print titles, one definition repeated twice
+    xml = (
+        '<table:table-header-columns><table:table-column table:style-name="w1"'
+        ' table:number-columns-repeated="2"/></table:table-header-columns>'
+        '<table:table-column table:style-name="w3"/>'
+        + table_row(text_cell("a"), text_cell("b"), text_cell("c"))
+    )
+    path = ods_with_sheet(tmp_path / "titles.ods", xml, PRINT_TITLE_WIDTHS_XML)
+    r = ODSReader(path)
+    edit(r.sheet("Sheet1"))
+    r.save()
+    assert _widths(ODSReader(path).sheet("Sheet1")) == widths
+
+
+def test_a_full_width_sheet_with_print_titles_keeps_its_width(tmp_path):
+    # the print title's definition counts in the sheet's full width
+    xml = (
+        '<table:table-header-columns><table:table-column table:style-name="w1"/>'
+        "</table:table-header-columns>"
+        '<table:table-column table:style-name="w3" table:number-columns-repeated="16383"/>'
+        + table_row(text_cell("a"), text_cell("b"))
+    )
+    path = ods_with_sheet(tmp_path / "titles.ods", xml, PRINT_TITLE_WIDTHS_XML)
+    r = ODSReader(path)
+    r.sheet("Sheet1").insert_columns(1, 2)
+    r.save()
+    definitions = saved_table(path).find_all("table:table-column")
+    assert sum(_repeat(d, "table:number-columns-repeated") for d in definitions) == 16_384
 
 
 def test_insertions_stay_within_the_applications_grid(tmp_path):

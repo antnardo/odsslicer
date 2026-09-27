@@ -20,7 +20,10 @@ import re
 
 import numpy as np
 import pytest
+from bs4 import BeautifulSoup
 from conftest import (
+    PRINT_TITLE_WIDTHS_XML,
+    PRINT_TITLE_XML,
     addresses_holding,
     document_in,
     empty_cells,
@@ -330,6 +333,39 @@ def test_libreoffice_shows_values_written_around_empty_columns_where_written(tmp
     table.sheet("Sheet1")["B1"].value = "b"
     table.save()
     assert libreoffice_shows(path, tmp_path) == [["a", "b", *[""] * 23, "new z"]]
+
+
+@requires_soffice
+def test_libreoffice_gives_print_title_columns_their_widths_after_an_insertion(
+    tmp_path, libreoffice_export
+):
+    # issue #13: skipping the print title's grouped definition shifted every
+    # width onto the column before
+    path = ods_with_sheet(tmp_path / "titles.ods", PRINT_TITLE_XML, PRINT_TITLE_WIDTHS_XML)
+    table = ODSReader(path)
+    table.sheet("Sheet1").insert_columns(1)
+    table.save()
+    fods = BeautifulSoup(libreoffice_export(path, "fods").read_text(encoding="utf-8"), "xml")
+    widths = {
+        style["style:name"]: style.find("style:table-column-properties")["style:column-width"]
+        for style in fods.find_all("style:style", attrs={"style:family": "table-column"})
+    }
+    columns = [
+        widths[definition["table:style-name"]]
+        for definition in fods.find("table:table").find_all("table:table-column")
+        for _ in range(int(definition.get("table:number-columns-repeated", "1")))
+    ]
+    # LibreOffice rounds lengths its own way - 1cm may come back as 1.001cm
+    # - and writes them in inches on an American system
+    in_cm = [_centimetres(width) for width in columns[:4]]
+    assert [round(width) for width in (in_cm[0], in_cm[2], in_cm[3])] == [1, 2, 3]
+    assert round(in_cm[1], 1) not in (1.0, 2.0)  # the new column: the default
+
+
+def _centimetres(length):
+    """An ODF length, `1.001cm` or `0.3937in`, in centimetres."""
+    number, unit = re.fullmatch(r"([0-9.]+)([a-z]+)", length).groups()
+    return float(number) * {"cm": 1, "mm": 0.1, "in": 2.54, "pt": 2.54 / 72}[unit]
 
 
 @requires_soffice
