@@ -1866,7 +1866,7 @@ def test_display_falls_back_to_plain_conversion_with_no_example_and_no_style():
 def test_number_format_with_an_unsupported_date_component_falls_back_safely():
     r = _blank_document()
     s = r.sheet("Sheet1")
-    fmt = NumberFormat.create(r, "date", components=[("day-of-week", "long"), ("text", " "), ("day", "long")])
+    fmt = NumberFormat.create(r, "date", components=[("quarter", "long"), ("text", " "), ("day", "long")])
     s["A1"].style.number_format = fmt
     s["A1"].value = dt.date(2026, 3, 5)
     assert s["A1"].text == "2026-03-05"  # isoformat() fallback, not a partial/garbled render
@@ -2102,13 +2102,13 @@ def test_date_time_and_duration_display_fall_back_to_a_plain_rendering(value, te
 
 
 def _date_formatted(path, *addresses):
-    """The first sheet of `path`, `addresses` given a date format whose
-    components nothing renders - so that their text has to be learnt from
-    another cell's, the way it would for a format showing month names."""
+    """The first sheet of `path`, A2 and `addresses` given a date format
+    whose components nothing renders - a quarter - so that the text of
+    `addresses` has to be learnt from another cell of that format, A2's."""
     r = ODSReader(path)
     s = r.sheet("Sheet1")
-    fmt = NumberFormat.create(r, "date", components=[("day-of-week", "long")])
-    for address in addresses:
+    fmt = NumberFormat.create(r, "date", components=[("quarter", "long")])
+    for address in ("A2", *addresses):
         s[address].style.number_format = fmt
     return s
 
@@ -2384,6 +2384,240 @@ def test_a_date_in_a_system_format_takes_its_text_from_a_cell_libreoffice_saved(
     s["A2"].value = dt.date(2022, 3, 8)
     assert s["A2"].style.number_format.name == "Nsystem"  # kept
     assert s["A2"].text == "08/03/2022"  # not 8/3/22, as the elements read
+
+
+_SYSTEM_STYLES = (
+    '<number:date-style style:name="Nsystem" number:automatic-order="true"'
+    ' number:format-source="language"><number:day/><number:text>/</number:text>'
+    "<number:month/><number:text>/</number:text><number:year/></number:date-style>"
+    '<style:style style:name="system" style:family="table-cell" style:data-style-name="Nsystem"/>'
+    '<style:style style:name="child" style:family="table-cell" style:parent-style-name="system"/>'
+)
+
+
+def _saved_date(text, style=None):
+    style_attr = f' table:style-name="{style}"' if style else ""
+    return (
+        f'<table:table-cell{style_attr} office:value-type="date" office:date-value="2022-03-07">'
+        f"<text:p>{text}</text:p></table:table-cell>"
+    )
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        # the formats given by the columns' default cell styles
+        (
+            '<table:table-column table:default-cell-style-name="system"/>'
+            '<table:table-column table:default-cell-style-name="short"/>'
+            + table_row(_saved_date("07/03/2022"), _saved_date("03/07/22"))
+            + table_row("<table:table-cell/>", "<table:table-cell/>")
+        ),
+        # by the cells' own styles, one of them through its parent
+        (
+            '<table:table-column table:number-columns-repeated="2"/>'
+            + table_row(_saved_date("07/03/2022", "child"), _saved_date("03/07/22", "short"))
+            + table_row('<table:table-cell table:style-name="child"/>', "<table:table-cell/>")
+        ),
+    ],
+    ids=["column defaults", "parent style"],
+)
+def test_a_date_learns_its_text_only_from_a_cell_of_its_own_format(tmp_path, layout):
+    # B1, nearer to A2 than A1, shows another format: it lent its layout
+    styles = _SYSTEM_STYLES + _SHORT_DATE_STYLE
+    r = ODSReader(ods_with_sheet(tmp_path / "formats.ods", layout, styles))
+    s = r.sheet("Sheet1")
+    s["A2"].value = dt.date(2022, 3, 8)
+    assert s["A2"].text == "08/03/2022"
+
+
+# ---------------------------------------------------------------------------
+# The text of a date or a time follows the cell's own format (issue #16): the
+# names of days and months in its language, fractions of a second, a
+# duration under a day
+# ---------------------------------------------------------------------------
+
+_SHORT_DATE_STYLE = (
+    '<number:date-style style:name="Nshort"><number:month number:style="long"/>'
+    "<number:text>/</number:text><number:day number:style=\"long\"/>"
+    "<number:text>/</number:text><number:year/></number:date-style>"
+    '<style:style style:name="short" style:family="table-cell" style:data-style-name="Nshort"/>'
+)
+
+
+def _written_in(tmp_path, number_style, value):
+    """The text odsslicer writes for `value` into A2, a cell shown with
+    `number_style` - the elements of a `<number:*-style>` named N1 - in a
+    French document where A1 shows a date in a short format, an example no
+    text of A2's may be learnt from."""
+    family = "time" if isinstance(value, (dt.time, dt.timedelta)) else "date"
+    styles = (
+        _SHORT_DATE_STYLE
+        + number_style.replace("<style", f'<number:{family}-style style:name="N1"', 1)
+        .replace("</style>", f"</number:{family}-style>")
+        + '<style:style style:name="own" style:family="table-cell" style:data-style-name="N1"/>'
+    )
+    example = (
+        '<table:table-cell table:style-name="short" office:value-type="date"'
+        ' office:date-value="2026-09-13"><text:p>09/13/26</text:p></table:table-cell>'
+    )
+    xml = (
+        "<table:table-column/>"
+        + table_row(example)
+        + table_row('<table:table-cell table:style-name="own"/>')
+    )
+    r = ODSReader(ods_with_sheet(tmp_path / "formats.ods", xml, styles))
+    r.sheet("Sheet1")["A2"].value = value
+    return r.sheet("Sheet1")["A2"].text
+
+
+_DAY_LONG = '<number:day-of-week number:style="long"/>'
+_MONTH_NAME = '<number:month number:style="long" number:textual="true"/>'
+_YEAR = '<number:year number:style="long"/>'
+
+
+@pytest.mark.parametrize(
+    ("number_style", "expected"),
+    [
+        # the report's, as LibreOffice shows it: NNNN, MMMM D, YYYY
+        pytest.param(
+            f'<style number:language="en" number:country="US">{_DAY_LONG}'
+            f"<number:text>, </number:text>{_MONTH_NAME}<number:text> </number:text>"
+            f"<number:day/><number:text>, </number:text>{_YEAR}</style>",
+            "Sunday, September 27, 2026",
+            id="en-US",
+        ),
+        # no language: the document's, French
+        pytest.param(
+            f"<style>{_DAY_LONG}<number:text> </number:text><number:day/>"
+            f"<number:text> </number:text>{_MONTH_NAME}<number:text> </number:text>{_YEAR}</style>",
+            "dimanche 27 septembre 2026",
+            id="fr-FR",
+        ),
+        pytest.param(
+            '<style number:language="en" number:country="US"><number:day-of-week/>'
+            '<number:text>, </number:text><number:month number:textual="true"/>'
+            "<number:text> </number:text><number:day/></style>",
+            "Sun, Sep 27",
+            id="abbreviated",
+        ),
+        # a month next to a day is declined in Polish, and alone is not
+        pytest.param(
+            f'<style number:language="pl" number:country="PL"><number:day/>'
+            f"<number:text> </number:text>{_MONTH_NAME}<number:text> </number:text>{_YEAR}</style>",
+            "27 września 2026",
+            id="pl-PL with a day",
+        ),
+        pytest.param(
+            f'<style number:language="pl" number:country="PL">{_MONTH_NAME}'
+            f"<number:text> </number:text>{_YEAR}</style>",
+            "wrzesień 2026",
+            id="pl-PL alone",
+        ),
+        # a language without names: ISO 8601, never A1's layout
+        pytest.param(
+            f'<style number:language="tlh">{_DAY_LONG}<number:text> </number:text>'
+            "<number:day/></style>",
+            "2026-09-27",
+            id="unknown language",
+        ),
+    ],
+)
+def test_a_date_is_written_in_its_own_format_with_its_names(tmp_path, number_style, expected):
+    # regression: the names could not be rendered, and A1's 09/13/26 lent
+    # its layout: 09/27/26
+    assert _written_in(tmp_path, number_style, dt.date(2026, 9, 27)) == expected
+
+
+_HMS_STYLE = (
+    '<number:hours number:style="long"/><number:text>:</number:text>'
+    '<number:minutes number:style="long"/><number:text>:</number:text>'
+)
+
+
+@pytest.mark.parametrize(
+    ("number_style", "value", "expected"),
+    [
+        # as LibreOffice shows them, through its number formatter
+        pytest.param(
+            '<style number:language="en" number:country="US"><number:minutes number:style="long"/>'
+            '<number:text>:</number:text><number:seconds number:style="long"'
+            ' number:decimal-places="2"/></style>',
+            dt.timedelta(minutes=1, seconds=24, microseconds=750000),
+            "01:24.75",
+            id="MM:SS.00",
+        ),
+        pytest.param(
+            f'<style number:language="en" number:country="US">{_HMS_STYLE}'
+            '<number:seconds number:style="long" number:decimal-places="2"/></style>',
+            dt.time(8, 15, 42, 250000),
+            "08:15:42.25",
+            id="HH:MM:SS.00",
+        ),
+        pytest.param(
+            f'<style number:language="en" number:country="US">{_HMS_STYLE}'
+            '<number:seconds number:style="long" number:decimal-places="1"/></style>',
+            dt.timedelta(seconds=84, microseconds=750000),
+            "00:01:24.8",
+            id="rounded",
+        ),
+        # rounded but never carried into the seconds, in a clock format...
+        pytest.param(
+            '<style number:language="en" number:country="US"><number:minutes number:style="long"/>'
+            '<number:text>:</number:text><number:seconds number:style="long"'
+            ' number:decimal-places="2"/></style>',
+            dt.timedelta(seconds=59, microseconds=996000),
+            "00:59.99",
+            id="no carry",
+        ),
+        # ... where an elapsed-time one rounds the whole duration
+        pytest.param(
+            f'<style number:language="en" number:country="US" number:truncate-on-overflow="false">'
+            f'{_HMS_STYLE}<number:seconds number:style="long" number:decimal-places="2"/></style>',
+            dt.timedelta(seconds=59, microseconds=996000),
+            "00:01:00.00",
+            id="elapsed carry",
+        ),
+        # the document's separator: French
+        pytest.param(
+            '<style><number:minutes number:style="long"/><number:text>:</number:text>'
+            '<number:seconds number:style="long" number:decimal-places="2"/></style>',
+            dt.timedelta(minutes=1, seconds=24, microseconds=750000),
+            "01:24,75",
+            id="fr-FR",
+        ),
+        # without decimals, seconds are cut
+        pytest.param(
+            f'<style number:language="en" number:country="US">{_HMS_STYLE}'
+            '<number:seconds number:style="long"/></style>',
+            dt.time(12, 30, 15, 500000),
+            "12:30:15",
+            id="cut",
+        ),
+    ],
+)
+def test_fractions_of_a_second_show_as_libreoffice_shows_them(
+    tmp_path, number_style, value, expected
+):
+    # regression: the fraction was dropped, 01:24 for 01:24.75
+    assert _written_in(tmp_path, number_style, value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (dt.timedelta(hours=7, minutes=30), "07:30:00"),
+        (dt.timedelta(minutes=1, seconds=23, microseconds=450000), "00:01:23"),
+    ],
+)
+def test_a_duration_under_a_day_shows_as_a_duration(value, text):
+    # regression: it was given the format of a time of day, and showed as
+    # one in an American document: 07:30:00 AM
+    r = document_in("en", "US")
+    cell = r.sheet("Sheet1")["A1"]
+    cell.value = value
+    assert cell.text == text
+    assert cell.style.number_format._tag.get("number:truncate-on-overflow") == "false"
 
 
 # ---------------------------------------------------------------------------

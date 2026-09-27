@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, cast
 
 from bs4 import Tag
 
+from .datenames import _date_names
 from .datetimes import _ONE_DAY, _as_datetime, _as_timedelta, _clock_parts
 from .xmlutils import _blank_template, _ensure_style_child
 
@@ -297,51 +298,123 @@ def _render_date_time_from_format(
     family: str,
 ) -> "str | None":
     """Render `value` (a `datetime.date` or `datetime.datetime`, a
-    `datetime.time` or a `datetime.timedelta`) by walking
-    `number_format.components` - the same ordered layout `.components`
-    itself exposes on read. `None` if `number_format` isn't a `family`
-    format, has no `.components`, or uses a component this doesn't know
-    how to render (`day-of-week`/`week-of-year`/`quarter`/`era`) - safer
-    to fall back than to silently drop part of the layout.
+    `datetime.time` or a `datetime.timedelta`) by walking the elements of
+    `number_format` - the ordered layout `.components` exposes on read. `None`
+    if `number_format` isn't a `family` format, has no `.components`, or uses
+    a component this doesn't know how to render (`week-of-year`/`quarter`/
+    `era`) - safer to fall back than to silently drop part of the layout.
 
     As LibreOffice shows them: a date in a format with a time part reads
     as its midnight, and a duration wraps around the clock in an ordinary
     time format (128:45 shows as 08:45) but counts in full, sign included,
     in an elapsed-time one (`[HH]:MM:SS`, flagged
-    `number:truncate-on-overflow="false"`)."""
+    `number:truncate-on-overflow="false"`). Days of the week and textual
+    months are named in the format's language, the document's if it gives
+    none (see `datenames`, issue #16); a language without names gives
+    `None`. Seconds show their decimals, in the locale's separator: rounded,
+    but never carried into the seconds - LibreOffice shows 59.996 as
+    `00:59.99` - except in an elapsed-time format, where the whole duration
+    rounds: `[HH]:MM:SS.00` shows it as `00:01:00.00`. Without decimals,
+    seconds are cut, never rounded."""
     if number_format is None or number_format.family != family or not number_format.components:
         return None
+    tag = number_format._tag
     # `number:format-source="language"`: LibreOffice shows the system's own
     # short date or date-time instead, whatever the elements - on macOS, the
     # one set in its regional settings. Nothing here can render that.
-    if number_format._tag.get("number:format-source") == "language":
+    if tag.get("number:format-source") == "language":
         return None
-    kinds = {kind for kind, _ in number_format.components}
-    sign, fields = "", cast(Any, value)
+    children = [
+        child for child in tag.find_all(True, recursive=False) if child.name in _DATE_TIME_COMPONENT_NAMES
+    ]
+    kinds = {child.name for child in children}
+    named = any(
+        child.name == "day-of-week" or (child.name == "month" and child.get("number:textual") == "true")
+        for child in children
+    )
+    decimals = max(
+        (int(child.get("number:decimal-places", "0")) for child in children if child.name == "seconds"),
+        default=0,
+    )
+    names = None
+    if named or decimals:
+        language = tag.get("number:language")
+        locale = (
+            (language, tag.get("number:country"))
+            if language
+            else number_format._reader._document_locale()
+            if number_format._reader is not None
+            else (None, None)
+        )
+        names = _date_names(*locale)
+        if named and (names is None or not isinstance(value, dt.date)):
+            return None
+    sign, fields, fraction = "", cast(Any, value), 0
     if isinstance(value, (dt.time, dt.timedelta)):
         # a time of day too: an elapsed [MM]:SS format shows 02:05:03 as 125:03
         delta = _as_timedelta(value)
-        if number_format._tag.get("number:truncate-on-overflow") == "false":
+        if tag.get("number:truncate-on-overflow") == "false":
+            if decimals:
+                delta = _rounded(delta, decimals)
             sign, fields = _elapsed_fields(delta, kinds)
+            fraction = abs(delta).microseconds
         else:
             fields = (dt.datetime.min + delta % _ONE_DAY).time()
+            fraction = fields.microsecond
     elif isinstance(value, dt.date) and kinds & _TIME_OF_DAY_COMPONENT_NAMES:
         fields = _as_datetime(value)
+        fraction = fields.microsecond
     parts = []
-    for kind, style in number_format.components:
+    for child in children:
+        kind, style = child.name, child.get("number:style", "short")
         if kind == "text":
-            parts.append(style)
+            parts.append(child.get_text())
         elif kind == "am-pm":
             parts.append("PM" if fields.hour >= 12 else "AM")
         elif kind == "hours" and "am-pm" in kinds:  # 13:45 shows as 01:45 PM
             hour = fields.hour % 12 or 12
             parts.append(f"{hour:02d}" if style == "long" else str(hour))
+        elif kind == "day-of-week":
+            assert names is not None  # checked above, for a date
+            days = names.days if style == "long" else names.short_days
+            parts.append(days[(fields.weekday() + 1) % 7])  # Sunday first
+        elif kind == "month" and child.get("number:textual") == "true":
+            assert names is not None
+            if "day" in kinds:  # declined next to a day, in some languages
+                months = names.months_with_day if style == "long" else names.short_months_with_day
+            else:
+                months = names.months if style == "long" else names.short_months
+            parts.append(months[fields.month - 1])
         elif kind in _DATE_TIME_RENDER_LONG:
             renderer = _DATE_TIME_RENDER_LONG if style == "long" else _DATE_TIME_RENDER_SHORT
             parts.append(renderer[kind](fields))
+            places = int(child.get("number:decimal-places", "0")) if kind == "seconds" else 0
+            if places:
+                separator = names.decimal if names is not None else "."
+                parts.append(separator + _fraction_digits(fraction, places))
         else:
             return None
     return sign + "".join(parts)
+
+
+def _rounded(value: dt.timedelta, places: int) -> dt.timedelta:
+    """`value` rounded half up to `places` decimals of a second, carrying
+    over into the seconds, minutes and hours."""
+    unit = 10 ** (6 - places)
+    microseconds = abs(value) // dt.timedelta(microseconds=1)
+    rounded = (microseconds + unit // 2) // unit * unit
+    return dt.timedelta(microseconds=rounded if value >= dt.timedelta(0) else -rounded)
+
+
+def _fraction_digits(microseconds: int, places: int) -> str:
+    """The `places` digits of a fraction of a second, rounded half up - but
+    cut where rounding would carry into the seconds, which LibreOffice never
+    does in a clock format: 59.996 shows as 59.99."""
+    unit = 10 ** (6 - places)
+    digits = (microseconds + unit // 2) // unit
+    if digits == 10**places:
+        digits = microseconds // unit
+    return f"{digits:0{places}d}"
 
 
 def _elapsed_fields(

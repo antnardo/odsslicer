@@ -370,6 +370,77 @@ def _centimetres(length):
     return float(number) * {"cm": 1, "mm": 0.1, "in": 2.54, "pt": 2.54 / 72}[unit]
 
 
+# (number style elements, value): dates naming days and months, in their
+# own language or the document's (French), times with fractions of a second
+_NAMED_AND_FRACTIONAL = [
+    (
+        '<number:date-style style:name="N1" number:language="en" number:country="US">'
+        '<number:day-of-week number:style="long"/><number:text>, </number:text>'
+        '<number:month number:style="long" number:textual="true"/><number:text> </number:text>'
+        '<number:day/><number:text>, </number:text><number:year number:style="long"/>'
+        "</number:date-style>",
+        dt.date(2026, 9, 27),
+    ),
+    (
+        '<number:date-style style:name="N2"><number:day-of-week/><number:text> </number:text>'
+        '<number:day/><number:text> </number:text><number:month number:textual="true"/>'
+        "</number:date-style>",
+        dt.date(2026, 9, 27),
+    ),
+    (
+        '<number:date-style style:name="N3" number:language="pl" number:country="PL">'
+        '<number:day/><number:text> </number:text>'
+        '<number:month number:style="long" number:textual="true"/></number:date-style>',
+        dt.date(2026, 9, 27),
+    ),
+    (
+        '<number:time-style style:name="N4"><number:minutes number:style="long"/>'
+        '<number:text>:</number:text><number:seconds number:style="long"'
+        ' number:decimal-places="2"/></number:time-style>',
+        dt.timedelta(seconds=59, microseconds=996000),
+    ),
+    (
+        '<number:time-style style:name="N5" number:truncate-on-overflow="false">'
+        '<number:hours number:style="long"/><number:text>:</number:text>'
+        '<number:minutes number:style="long"/><number:text>:</number:text>'
+        '<number:seconds number:style="long" number:decimal-places="2"/></number:time-style>',
+        dt.timedelta(hours=26, seconds=59, microseconds=996000),
+    ),
+]
+
+
+@requires_soffice
+def test_libreoffice_shows_named_and_fractional_dates_as_odsslicer_writes_them(tmp_path):
+    # issue #16: a long date took another cell's layout, and a fraction of a
+    # second was dropped
+    styles = "".join(
+        number_style
+        + f'<style:style style:name="c{n}" style:family="table-cell" style:data-style-name="N{n}"/>'
+        for n, (number_style, _) in enumerate(_NAMED_AND_FRACTIONAL, start=1)
+    )
+    xml = '<table:table-column table:number-columns-repeated="5"/>' + table_row(
+        *(
+            f'<table:table-cell table:style-name="c{n}"/>'
+            for n in range(1, len(_NAMED_AND_FRACTIONAL) + 1)
+        )
+    )
+    path = ods_with_sheet(tmp_path / "named.ods", xml, styles)
+    table = ODSReader(path)
+    sheet = table.sheet("Sheet1")
+    for col, (_, value) in enumerate(_NAMED_AND_FRACTIONAL):
+        sheet[0, col].value = value
+    table.save()
+    written = [sheet[0, col].text for col in range(len(_NAMED_AND_FRACTIONAL))]
+    assert written == [
+        "Sunday, September 27, 2026",
+        "dim. 27 sept.",
+        "27 września",
+        "00:59,99",
+        "26:01:00,00",
+    ]
+    assert libreoffice_shows(path, tmp_path) == [written]
+
+
 @requires_soffice
 def test_libreoffice_reads_a_chart_stretched_by_an_insertion(tmp_path, libreoffice_export):
     # issue #15: the chart kept B2:B7 and its end cell, and LibreOffice drew

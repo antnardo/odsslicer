@@ -19,7 +19,7 @@ import numpy as np
 from bs4 import BeautifulSoup, Tag
 
 from .addresses import string_address
-from .constants import EMPTY_CELL_BS, FORMATS
+from .constants import EMPTY_CELL_BS, FORMATS, TAG_CELL
 from .datetimes import (
     _as_datetime,
     _duration_text,
@@ -407,21 +407,26 @@ class Cell:
             self._format_if_unformatted(kind, new_value)
             # the cell's own format first - a date one now, unless it had one
             # of another kind - as an example could be a cell formatted otherwise
+            same_format = self._has_date_time_format(new_value)
             text = (
                 self._render_display_from_number_format(new_value)
-                or self._infer_date_display(new_value)
+                or self._infer_date_display(new_value, same_format)
                 or str(new_value)  # the ISO format, a space before a time part
             )
         elif isinstance(new_value, (dt.time, dt.timedelta)):
             fmt = "time"
+            # the kind written, not the one read back: 7 h 30 written as a
+            # duration shows as one, 07:30:00, where the format of a time of
+            # day showed 07:30:00 AM in an en-US document (issue #16)
+            kind = "duration" if isinstance(new_value, dt.timedelta) else "time"
             tag.attrs["office:time-value"] = _format_time_value(new_value)
             # as reading it back gives it: a time if it fits in a day, else a timedelta
             new_value = _parse_time_value(tag.attrs["office:time-value"])
-            kind = "duration" if isinstance(new_value, dt.timedelta) else "time"
             self._format_if_unformatted(kind, new_value)
+            same_format = self._has_date_time_format(new_value)
             text = (  # as for a date
                 self._render_display_from_number_format(new_value)
-                or self._infer_time_display(new_value)
+                or self._infer_time_display(new_value, same_format)
                 or (
                     _duration_text(new_value)
                     if isinstance(new_value, dt.timedelta)
@@ -573,7 +578,47 @@ class Cell:
         " ".join(pair) for pair in itertools.product(_DATE_PATTERNS, _TIME_PATTERNS)
     )
 
-    def _format_template_candidates(self, fmt: "str | None", raw_attr: str) -> Iterator[tuple[str, str]]:
+    def _has_date_time_format(self, value: object) -> bool:
+        """Whether this cell shows `value` with a date or time format. Only a
+        cell shown with the same format is then an example to learn from -
+        see `_format_template_candidates`."""
+        number_format = self._resolved_number_format(value)
+        return number_format is not None and number_format.family in ("date", "time")
+
+    def _number_format_at(self, tag: Tag) -> "str | None":
+        """The name of the number format the cell element `tag` shows with:
+        its own style's, else its column's default cell style's, following
+        the styles' parents."""
+        reader = self.sheet.reader
+        name = cast("str | None", tag.get("table:style-name"))
+        if name is None:
+            table = tag.find_parent("table:table")
+            if table is None:
+                return None
+            col = sum(
+                int(cast(Tag, cell).attrs.get("table:number-columns-repeated", "1"))
+                for cell in tag.find_previous_siblings(TAG_CELL)
+            )
+            seen = 0
+            for definition in self.sheet._column_definitions(table):
+                seen += int(definition.attrs.get("table:number-columns-repeated", "1"))
+                if col < seen:
+                    name = cast("str | None", definition.get("table:default-cell-style-name"))
+                    break
+        visited: "set[str]" = set()
+        while name and name not in visited:
+            visited.add(name)
+            style = reader._find_style(name, family="table-cell")
+            if style is None:
+                return None
+            if "style:data-style-name" in style.attrs:
+                return cast(str, style["style:data-style-name"])
+            name = cast("str | None", style.get("style:parent-style-name"))
+        return None
+
+    def _format_template_candidates(
+        self, fmt: "str | None", raw_attr: str, same_format: bool = False
+    ) -> Iterator[tuple[str, str]]:
         """Other cells with the same ODF format (this cell's own pre-write state
         first, then the rest of the document) to learn a display pattern from,
         as (raw attribute value, displayed text) pairs.
@@ -586,9 +631,15 @@ class Cell:
         found backwards), so yielding lazily keeps the forward scan from
         running at all in the common case. Building the list eagerly made
         every write of a format with no example anywhere in the document
-        cost two full scans - ~33 ms per cell on a 10,000-row sheet."""
+        cost two full scans - ~33 ms per cell on a 10,000-row sheet.
+
+        With `same_format`, another cell counts only if it shows with the
+        number format this one does: a long date took the layout of a short
+        one, `09/27/26` for "Sunday, September 27, 2026" (issue #16). Past
+        50 cells shown otherwise, the search stops in that direction."""
         if self.format == fmt and self.raw_value is not None and self.text is not None:
             yield (self.raw_value, self.text)
+        wanted = self._number_format_at(self.cell) if same_format else None
 
         def matches(tag: Any) -> bool:
             return (
@@ -598,13 +649,20 @@ class Cell:
                 and tag is not self.cell
             )
 
-        for finder in (self.cell.find_previous, self.cell.find_next):
-            match = finder(matches)
-            if match is None:
-                continue
-            p = cast("Tag | None", cast(Tag, match).find("text:p", recursive=False))
-            if p is not None and p.string is not None:
-                yield (cast(str, match.attrs.get(raw_attr)), str(p.string))
+        for elements in (self.cell.previous_elements, self.cell.next_elements):
+            skipped = 0
+            for match in elements:
+                if not matches(match):
+                    continue
+                if wanted is not None and self._number_format_at(cast(Tag, match)) != wanted:
+                    skipped += 1
+                    if skipped == 50:
+                        break
+                    continue
+                p = cast("Tag | None", cast(Tag, match).find("text:p", recursive=False))
+                if p is not None and p.string is not None:
+                    yield (cast(str, cast(Tag, match).attrs.get(raw_attr)), str(p.string))
+                break
 
     def _infer_number_display(self, fmt: str, new_value: float) -> "str | None":
         """Render `new_value` the way another float/percentage/currency cell in
@@ -651,11 +709,13 @@ class Cell:
                 return render(new_value)
         return None
 
-    def _infer_date_display(self, new_value: dt.date) -> "str | None":
+    def _infer_date_display(self, new_value: dt.date, same_format: bool = False) -> "str | None":
         # dates and date-times alike go through as date-times: a date-time
         # pattern then also covers a date - LibreOffice saves a date-time
         # falling on midnight as a bare date - and a date pattern a date-time
-        for template_raw, template_text in self._format_template_candidates("date", "office:date-value"):
+        for template_raw, template_text in self._format_template_candidates(
+            "date", "office:date-value", same_format
+        ):
             try:
                 template_value = _as_datetime(_parse_date_value(template_raw))
             except (TypeError, ValueError):
@@ -665,13 +725,17 @@ class Cell:
                     return _as_datetime(new_value).strftime(pattern)
         return None
 
-    def _infer_time_display(self, new_value: "dt.time | dt.timedelta") -> "str | None":
+    def _infer_time_display(
+        self, new_value: "dt.time | dt.timedelta", same_format: bool = False
+    ) -> "str | None":
         # a duration past a day shows wrapped in a clock format (08:45:00) but
         # not in an elapsed-time one (128:45:00), and an example within a day
         # looks the same in both: only the cell's own format can tell
         if isinstance(new_value, dt.timedelta):
             return None
-        for template_raw, template_text in self._format_template_candidates("time", "office:time-value"):
+        for template_raw, template_text in self._format_template_candidates(
+            "time", "office:time-value", same_format
+        ):
             try:
                 template_value = _parse_time_value(template_raw)
             except (TypeError, ValueError):

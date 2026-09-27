@@ -2,16 +2,17 @@
 (issue #7), and the LibreOffice format codes they are written in."""
 
 import datetime as dt
-from types import SimpleNamespace
 
 import pytest
+from bs4 import BeautifulSoup
 
 from odsslicer.dateformats import (
     _STANDARD_FORMATS,
     _default_format_code,
     _format_code_components,
 )
-from odsslicer.styles import _render_date_time_from_format
+from odsslicer.styles import NumberFormat, _render_date_time_from_format
+from odsslicer.xmlutils import _ODF_NAMESPACES
 
 _DMY = [("day", "long"), ("text", "/"), ("month", "long"), ("text", "/")]
 
@@ -91,14 +92,24 @@ def test_every_standard_format_parses(tag):
 
 
 def _render(code, value):
+    """`value` rendered in the number format of `code`, built as a document
+    holds it: a `<number:*-style>` of one element per component."""
     components, elapsed = _format_code_components(code)
     family = "time" if isinstance(value, (dt.time, dt.timedelta)) else "date"
-    number_format = SimpleNamespace(
-        family=family,
-        components=[(kind, style or "short") for kind, style in components],
-        _tag={"number:truncate-on-overflow": "false"} if elapsed else {},
+    children = "".join(
+        f"<number:text>{style}</number:text>"
+        if kind == "text"
+        else f'<number:{kind} number:style="{style or "short"}"/>'
+        for kind, style in components
     )
-    return _render_date_time_from_format(number_format, value, family)
+    overflow = ' number:truncate-on-overflow="false"' if elapsed else ""
+    xml = (
+        f'<number:{family}-style xmlns:number="{_ODF_NAMESPACES["number"]}"'
+        f' xmlns:style="{_ODF_NAMESPACES["style"]}" style:name="N1"{overflow}>'
+        f"{children}</number:{family}-style>"
+    )
+    tag = BeautifulSoup(xml, "xml").find(f"number:{family}-style")
+    return _render_date_time_from_format(NumberFormat(tag), value, family)
 
 
 _SAMPLE = dt.datetime(2022, 3, 7, 13, 45, 30)

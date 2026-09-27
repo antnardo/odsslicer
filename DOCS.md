@@ -285,6 +285,7 @@ number (44627), and wraps a duration of 128 hours around the clock (08:45:00).
 | `datetime(2022, 3, 7, 13, 45, 30)` | `07/03/22 13:45` | `03/07/22 01:45 PM` | `2022-03-07 13:45:30` |
 | `time(9, 30)` | `09:30:00` | `09:30:00 AM` | `09:30:00` |
 | `timedelta(hours=128, minutes=45)` | `128:45:00` | `128:45:00` | `128:45:00` |
+| `timedelta(hours=7, minutes=30)` | `07:30:00` | `07:30:00` | `07:30:00` |
 
 The formats of 67 locales are built in, as LibreOffice 25.8 defines them; any other locale
 gets ISO 8601, as does a document with no language. A cell that already has a number format
@@ -424,9 +425,18 @@ that applies wins — except for dates and times, which try the second one first
 
    A duration is shown as LibreOffice shows it: wrapped around the clock by a time format
    (`128:45` shows as `08:45:00`), counted in full by an elapsed-time `[HH]:MM:SS` one. A
-   format with AM/PM counts the hours on a 12-hour clock (`01:45 PM`). A format LibreOffice
-   writes with `number:format-source="language"` shows as the system's regional settings say,
-   not as its elements do: its text comes from an example instead, else from the third layer.
+   format with AM/PM counts the hours on a 12-hour clock (`01:45 PM`). Days of the week and
+   months named in full or abbreviated come in the format's language, else the document's —
+   `Sunday, September 27, 2026`, `dim. 27 sept.`, and declined next to a day in the languages
+   that decline them, Polish `27 września` — from LibreOffice's own names for 67 locales.
+   Fractions of a second come as the format asks, in the locale's separator, and rounded as
+   LibreOffice rounds them: never carried into the seconds by a clock format (59.996 s shows
+   as `00:59.99`), carried by an elapsed-time one (`00:01:00.00`); without decimals, seconds
+   are cut. A format LibreOffice writes with `number:format-source="language"` shows as the
+   system's regional settings say, not as its elements do, and a format naming days or months
+   in a language outside those 67 cannot be rendered either: its text comes from an example
+   instead — a cell shown with the very same format, not merely holding a date — else from
+   the third layer.
 
 3. **Plain Python conversion**, only if neither layer applies — ISO for dates and date-times,
    hours in full for a duration (`128:45:00`). For a date or time, that now means a cell

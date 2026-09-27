@@ -65,6 +65,17 @@ still change between minor versions.
   its chart, and a renamed sheet left the chart with no range at all in LibreOffice. The cell
   a chart's frame ends in, from which LibreOffice sizes it on open, stayed too, so that a row
   inserted above a chart made it a row shorter.
+- **The text of a date or a time follows its cell's format**
+  ([#16](https://github.com/antnardo/odsslicer/issues/16)), as `cell.text` reads it and as
+  readers that do not recompute it show it. A format naming days or months — `NNNN, MMMM D,
+  YYYY` — could not be rendered, and the text took another cell's layout: `09/27/26` for
+  "Sunday, September 27, 2026". The names now come in the format's language, the document's
+  if it gives none, from LibreOffice's for 67 locales; an example is taken only from a cell
+  of the same format. Fractions of a second were dropped, `01:24` for `01:24.75`: they come
+  as the format asks, rounded as LibreOffice rounds them.
+- **A duration under a day shows as a duration.** Written into a cell with no format, it got
+  the format of a time of day, `07:30:00 AM` in an en-US document; it gets `[HH]:MM:SS`, as a
+  longer one does. It still reads back as a `time`.
 
 ### Changed
 
