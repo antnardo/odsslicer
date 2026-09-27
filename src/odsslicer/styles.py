@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, cast
 
 from bs4 import Tag
 
+from .dateformats import _STANDARD_FORMATS
 from .datenames import _date_names
 from .datetimes import _ONE_DAY, _as_datetime, _as_timedelta, _clock_parts
 from .xmlutils import _blank_template, _ensure_style_child
@@ -38,6 +39,38 @@ _DATE_TIME_COMPONENT_NAMES = (
     "hours", "minutes", "seconds", "am-pm", "text",
 )
 _TIME_OF_DAY_COMPONENT_NAMES = frozenset({"hours", "minutes", "seconds", "am-pm"})
+
+# The text around the sign of LibreOffice's standard percentage format, by
+# locale, where it is not a bare "%" after the number: a space in French, a
+# no-break space in German, the sign first in Turkish (issue #17). Generated
+# from LibreOffice 25.8 - `getStandardFormat(PERCENT)` for the locales of
+# `dateformats` - as `(before the number, after it)`.
+_PERCENT_AFFIXES: "dict[str, tuple[str, str]]" = {
+    "cs-CZ": ("", " %"),
+    "da-DK": ("", "\xa0%"),
+    "de-AT": ("", "\xa0%"),
+    "de-DE": ("", "\xa0%"),
+    "de-LU": ("", "\xa0%"),
+    "es-AR": ("", "\xa0%"),
+    "es-CL": ("", "\xa0%"),
+    "es-ES": ("", "\xa0%"),
+    "es-PE": ("", "\xa0%"),
+    "es-US": ("", "\xa0%"),
+    "eu-ES": ("%", ""),
+    "fi-FI": ("", " %"),
+    "fr-BE": ("", "\xa0%"),
+    "fr-CA": ("", " %"),
+    "fr-FR": ("", " %"),
+    "fr-LU": ("", " %"),
+    "is-IS": ("", "\xa0%"),
+    "lt-LT": ("", "\xa0%"),
+    "ro-RO": ("", "\xa0%"),
+    "sk-SK": ("", " %"),
+    "sl-SI": ("", "\xa0%"),
+    "sv-FI": ("", " %"),
+    "sv-SE": ("", " %"),
+    "tr-TR": ("%", ""),
+}
 
 
 _CONDITION_RE = re.compile(r"^value\(\)\s*(<=|>=|!=|<|>|=)\s*(-?\d+(?:\.\d+)?)$")
@@ -114,6 +147,8 @@ class NumberFormat:
         # for date/time styles: the ordered sequence of components/literal
         # text making up the layout, e.g. [("day", "long"), ("text", "/"), ...]
         self.components = None
+        # a time counted in full, [HH]:MM, rather than around the clock
+        self.elapsed = tag.get("number:truncate-on-overflow") == "false"
         if self.family in ("date", "time"):
             self.components = [
                 (
@@ -157,6 +192,7 @@ class NumberFormat:
         currency_symbol: "str | None" = None,
         components: "list[tuple[str, str]] | None" = None,
         font_color: "str | None" = None,
+        elapsed: bool = False,
     ) -> "NumberFormat":
         """Build a brand new `<number:*-style>` from scratch and register
         it in the document's automatic styles, returning a `NumberFormat`
@@ -177,6 +213,14 @@ class NumberFormat:
         formatting (see `add_condition`): a plain black format for the
         base, and a `font_color="#FF0000"` variant applied when
         `"value()<0"` matches.
+
+        `elapsed=True` makes a `"time"` format count the time in full, as
+        LibreOffice's `[HH]:MM` does, where it wraps it around the clock: a
+        duration of 26 hours shows as 26:00, not 02:00 (issue #17). A
+        percentage's sign sits where the document's locale puts it in
+        LibreOffice's standard format - `50%` in en-US, `50 %` in fr-FR,
+        with a no-break space in de-DE - bare after the number for a locale
+        LibreOffice does not know.
         """
         if family not in cls._FAMILY_TAGS:
             raise ValueError(
@@ -186,6 +230,8 @@ class NumberFormat:
             raise ValueError("family='currency' requires currency_symbol")
         if family in ("date", "time") and not components:
             raise ValueError(f"family={family!r} requires components")
+        if elapsed and family != "time":
+            raise ValueError(f"elapsed=True applies to family='time', not {family!r}")
 
         tag = _blank_template(reader.data, cls._FAMILY_TAGS[family])
         tag.attrs["style:name"] = reader._new_style_name("N")
@@ -204,9 +250,15 @@ class NumberFormat:
                 number_child.attrs["number:grouping"] = "true"
             tag.append(number_child)
             if family == "percentage":
-                text_child = _blank_template(reader.data, "number:text")
-                text_child.string = " %"
-                tag.append(text_child)
+                # a space before the sign always, where en-US has none
+                for text, before in zip(_percent_affixes(reader), (True, False), strict=True):
+                    if text:
+                        text_child = _blank_template(reader.data, "number:text")
+                        text_child.string = text
+                        if before:
+                            number_child.insert_before(text_child)
+                        else:
+                            tag.append(text_child)
             elif family == "currency":
                 assert currency_symbol is not None  # validated above
                 separator = _blank_template(reader.data, "number:text")
@@ -218,6 +270,8 @@ class NumberFormat:
         elif family == "boolean":
             tag.append(_blank_template(reader.data, "number:boolean"))
         else:  # date / time
+            if elapsed:
+                tag.attrs["number:truncate-on-overflow"] = "false"
             for kind, value in components:
                 if kind == "text":
                     child = _blank_template(reader.data, "number:text")
@@ -279,17 +333,32 @@ def _render_number_from_format(number_format: "NumberFormat | None", value: floa
     Renders with a plain `.`/`,` (decimal/grouping) convention - the
     document's actual locale isn't captured by `NumberFormat` - so this
     is only ever tried as a fallback once no example cell is available to
-    learn the real locale-specific separators from."""
+    learn the real locale-specific separators from. The rest of the text is
+    the format's own, in its order: the text around a percentage's sign or
+    a currency's symbol, where a space before either was taken for granted,
+    `50 %` for the `50%` of an en-US format (issue #17)."""
     if number_format is None or number_format.family not in ("number", "percentage", "currency"):
         return None
     scale = 100 if number_format.family == "percentage" else 1
     decimals = number_format.decimal_places or 0
     rendered = f"{value * scale:,.{decimals}f}" if number_format.grouping else f"{value * scale:.{decimals}f}"
-    if number_format.family == "percentage":
-        return f"{rendered} %"
-    if number_format.family == "currency" and number_format.currency_symbol:
-        return f"{rendered} {number_format.currency_symbol}"
-    return rendered
+    parts = []
+    for child in number_format._tag.find_all(True, recursive=False):
+        if child.name == "number":
+            parts.append(rendered)
+        elif child.name in ("text", "currency-symbol"):
+            parts.append(child.get_text())
+    return "".join(parts) if rendered in parts else rendered
+
+
+def _percent_affixes(reader: "ODSReader") -> "tuple[str, str]":
+    """The text before and after the number of a percentage, in the
+    document's locale - see `_PERCENT_AFFIXES`."""
+    language, country = reader._document_locale()
+    locale = f"{language}-{country}"
+    if locale not in _STANDARD_FORMATS:  # the language's first country's
+        locale = next((code for code in _STANDARD_FORMATS if code.startswith(f"{language}-")), "")
+    return _PERCENT_AFFIXES.get(locale, ("", "%"))
 
 
 def _render_date_time_from_format(

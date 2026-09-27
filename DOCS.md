@@ -1086,7 +1086,8 @@ lost. `diagonal_bl_tr`/`diagonal_tl_br` resolve independently: `None` removes th
 `.number_format` has `.family` (`"number"`/`"percentage"`/`"currency"`/`"date"`/`"time"`/
 `"boolean"`/`"text"`), `.decimal_places`, `.grouping`, `.currency_symbol`, `.font_color`, and
 for date/time styles `.components` (the ordered layout, e.g. `[("day", "long"), ("text",
-"/"), ("month", "long"), ...]`).
+"/"), ("month", "long"), ...]`) and `.elapsed`, true for a time counted in full, `[HH]:MM`,
+rather than around the clock.
 
 Assign an existing one (from another cell, or by style name), or build one from scratch:
 
@@ -1099,12 +1100,18 @@ dmy = NumberFormat.create(table, "date", components=[
     ("day", "long"), ("text", "/"), ("month", "long"), ("text", "/"), ("year", "long"),
 ])
 hm = NumberFormat.create(table, "time", components=[("hours", "long"), ("text", "h"), ("minutes", "long")])
+hours = NumberFormat.create(table, "time", components=[("hours", "long"), ("text", ":"),
+                                                       ("minutes", "long")], elapsed=True)
 sheet["C1"].style.number_format = pct
 ```
 
 `create(reader, family, ...)` accepts `decimal_places`/`grouping`/`min_integer_digits` for
 numeric families, `currency_symbol` (required for `"currency"`), `components` (required for
-`"date"`/`"time"`), and `font_color` for any family. `sheet["C1"].style.number_format = None`
+`"date"`/`"time"`), `elapsed=True` for a `"time"` format counting in full — `[HH]:MM`, where
+26 hours show as 26:00 rather than 02:00 — and `font_color` for any family. A percentage's
+sign goes where LibreOffice's standard format for the document's locale puts it: `50%` in
+en-US, `50 %` in fr-FR, a no-break space before it in de-DE, `%50` in tr-TR, and bare after
+the number for a locale LibreOffice does not know. `sheet["C1"].style.number_format = None`
 removes the format.
 
 ### Conditional number formats

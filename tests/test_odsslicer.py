@@ -4122,6 +4122,66 @@ def test_create_a_percentage_format(writable_reader):
     assert fmt.decimal_places == 1
 
 
+@pytest.mark.parametrize(
+    ("language", "country", "text"),
+    [
+        # where LibreOffice's standard percentage format puts the sign
+        ("en", "US", "50%"),
+        ("fr", "FR", "50 %"),
+        ("de", "DE", "50\xa0%"),
+        ("tr", "TR", "%50"),
+        ("de", None, "50\xa0%"),  # a language alone: its first country's
+        ("zxx", None, "50%"),  # a locale LibreOffice does not know
+        (None, None, "50%"),
+    ],
+)
+def test_a_percentage_format_puts_its_sign_where_the_locale_does(language, country, text):
+    # regression: a space before the sign in every document, 50 % in en-US
+    r = document_in(language, country)
+    fmt = NumberFormat.create(r, "percentage", decimal_places=0)
+    cell = r.sheet("Sheet1")["A1"]
+    cell.style.number_format = fmt
+    cell.value = 0.5
+    assert cell.text == text
+
+
+def test_the_text_of_a_percentage_follows_its_format(tmp_path):
+    # regression: always a space before the sign, whatever the format said:
+    # 50.00 % in an en-US 0.00% cell
+    styles = (
+        '<number:percentage-style style:name="Npct"><number:number number:decimal-places="2"'
+        ' number:min-decimal-places="2" number:min-integer-digits="1"/><number:text>%</number:text>'
+        "</number:percentage-style>"
+        '<style:style style:name="pct" style:family="table-cell" style:data-style-name="Npct"/>'
+    )
+    xml = "<table:table-column/>" + table_row('<table:table-cell table:style-name="pct"/>')
+    r = ODSReader(ods_with_sheet(tmp_path / "pct.ods", xml, styles))
+    r.sheet("Sheet1")["A1"].value = 0.5
+    assert r.sheet("Sheet1")["A1"].text == "50.00%"
+
+
+def test_create_an_elapsed_time_format():
+    # regression: no way to make [HH]:MM - 26 hours showed as 02:00
+    r = ODSReader.new()
+    fmt = NumberFormat.create(
+        r, "time", components=[("hours", "long"), ("text", ":"), ("minutes", "long")], elapsed=True
+    )
+    assert fmt.elapsed
+    cell = r.sheet("Sheet1")["A1"]
+    cell.style.number_format = fmt
+    cell.value = dt.timedelta(hours=26)
+    assert cell.text == "26:00"
+    wrapping = NumberFormat.create(
+        r, "time", components=[("hours", "long"), ("text", ":"), ("minutes", "long")]
+    )
+    assert not wrapping.elapsed
+
+
+def test_only_a_time_format_is_elapsed():
+    with pytest.raises(ValueError):
+        NumberFormat.create(ODSReader.new(), "date", components=[("day", "long")], elapsed=True)
+
+
 def test_create_a_currency_format(writable_reader):
     fmt = NumberFormat.create(writable_reader, "currency", decimal_places=2, currency_symbol="$")
     assert fmt.family == "currency"

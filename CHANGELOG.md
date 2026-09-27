@@ -76,6 +76,17 @@ still change between minor versions.
 - **A duration under a day shows as a duration.** Written into a cell with no format, it got
   the format of a time of day, `07:30:00 AM` in an en-US document; it gets `[HH]:MM:SS`, as a
   longer one does. It still reads back as a `time`.
+- **A percentage's sign goes where the document's locale puts it**
+  ([#17](https://github.com/antnardo/odsslicer/issues/17)): `NumberFormat.create` wrote a
+  space before it in every document, `50 %` in en-US, where LibreOffice writes `50%`. And the
+  text written from any percentage or currency format follows the format's own text, where a
+  space before the sign or the symbol was taken for granted.
+
+### Added
+
+- **`NumberFormat.create(..., elapsed=True)`** makes an elapsed-time format, LibreOffice's
+  `[HH]:MM`, where 26 hours show as 26:00 rather than 02:00, and `NumberFormat.elapsed`
+  reads it ([#17](https://github.com/antnardo/odsslicer/issues/17)).
 
 ### Changed
 

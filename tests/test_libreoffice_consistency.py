@@ -410,6 +410,34 @@ _NAMED_AND_FRACTIONAL = [
 
 
 @requires_soffice
+def test_libreoffice_shows_created_elapsed_and_percentage_formats_as_odsslicer_writes_them(
+    tmp_path,
+):
+    # issue #17: no elapsed-time format could be created, 26 hours showing as
+    # 02:00; and a percentage had a space before its sign in every locale
+    table = document_in("en", "US")
+    sheet = table.sheet("Sheet1")
+    hours = NumberFormat.create(
+        table, "time", components=[("hours", "long"), ("text", ":"), ("minutes", "long")], elapsed=True
+    )
+    percent = NumberFormat.create(table, "percentage", decimal_places=1)
+    sheet["A1"].style.number_format = hours
+    sheet["A1"].value = dt.timedelta(hours=26, minutes=15)
+    sheet["B1"].style.number_format = percent
+    sheet["B1"].value = 0.256
+    path = tmp_path / "created.ods"
+    table.save(path)
+    written = [sheet["A1"].text, sheet["B1"].text]
+    assert written == ["26:15", "25.6%"]
+    (hours_shown, percent_shown), = libreoffice_shows(path, tmp_path)
+    assert hours_shown == "26:15"
+    # the sign where odsslicer puts it; the decimal separator is the system's
+    # for a format naming no language - "," on a French machine - which the
+    # text odsslicer writes does not follow (see Known limitations)
+    assert percent_shown.replace(",", ".") == "25.6%"
+
+
+@requires_soffice
 def test_libreoffice_shows_named_and_fractional_dates_as_odsslicer_writes_them(tmp_path):
     # issue #16: a long date took another cell's layout, and a fraction of a
     # second was dropped
