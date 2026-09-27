@@ -1374,6 +1374,19 @@ reading *and rewriting* documents whose formatting must survive.
   or renaming a sheet, has formulas and charts follow the cells — a chart's ranges, and the
   cell its frame ends in — but leaves pivot-table source ranges, named ranges, and
   conditional-format or validation ranges as they were.
+- **Deleting the row or column a chart or shape is anchored in deletes it**
+  ([#24](https://github.com/antnardo/odsslicer/issues/24)) — LibreOffice keeps it, anchored at
+  the same address. Insertions, and deletions elsewhere, move it as they should (see above);
+  it is the anchor's own row or column that takes it away, its object left unreferenced in the
+  file. Move such a frame before deleting its anchor.
+- **A whole row's formatting is dropped on save**
+  ([#23](https://github.com/antnardo/odsslicer/issues/23)), with no edit at all: reading the
+  sheet is enough. LibreOffice writes a row formatted as a whole — a background, a border —
+  as its cells followed by one repeated up to the sheet's last column, and loading clamps each
+  row to the sheet's width. The formatting of the cells past that width goes with it.
+- **Inserted columns take the default width**
+  ([#25](https://github.com/antnardo/odsslicer/issues/25)), where LibreOffice gives them the
+  width of the columns they push right.
 - **Partial rich text** (one bold word inside a sentence, a link on part of a cell's text) is
   flattened on read and not writable.
 - **Not covered:** data validation / drop-down lists, autofilters, frozen panes, sheet-level
