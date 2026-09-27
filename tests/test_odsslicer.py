@@ -26,6 +26,8 @@ from conftest import (
     PRINT_TITLE_XML,
     addresses_holding,
     cells_with_content,
+    chart_frame,
+    chart_ranges,
     document_in,
     empty_cells,
     note_cell,
@@ -34,6 +36,7 @@ from conftest import (
     shape_cell,
     table_row,
     text_cell,
+    with_chart,
 )
 
 from odsslicer import ODSReader
@@ -1507,6 +1510,162 @@ def test_inserting_columns_keeps_the_definitions_past_the_data(tmp_path):
     s = ODSReader(path).sheet("Sheet1")
     styles = [s.column_style(col) for col in (4, 5, 19, 20)]
     assert [style.width if style else None for style in styles] == [None, "5cm", "5cm", None]
+
+
+# ---------------------------------------------------------------------------
+# Charts follow structural edits (issue #15): their ranges, in their own part
+# of the package and listed on their object, and the cell their frame ends in
+# ---------------------------------------------------------------------------
+
+# a header in A1:B1, days in A2:A7, visits in B2:B7, a chart anchored at D1
+# and ending in F10 plotting them - the report's layout - and a footer in
+# A12, so that the grid reaches the chart's end
+_CHART_SHEET_XML = (
+    '<table:table-column table:number-columns-repeated="6"/>'
+    + table_row(
+        text_cell("Day"),
+        text_cell("Visits"),
+        empty_cells(),
+        "<table:table-cell>"
+        + chart_frame("Sheet1.A2:Sheet1.A7 Sheet1.B1:Sheet1.B1 Sheet1.B2:Sheet1.B7", "Sheet1.F10")
+        + "</table:table-cell>",
+        empty_cells(2),
+    )
+    + "".join(
+        table_row(text_cell(day), text_cell(visits), empty_cells(4))
+        for day, visits in zip(
+            ("mon", "tue", "wed", "thu", "fri", "sat"),
+            ("10", "20", "30", "40", "50", "60"),
+            strict=True,
+        )
+    )
+    + table_row(empty_cells(6), repeat=4)
+    + table_row(text_cell("footer"), empty_cells(5))
+)
+
+
+def _chart_workbook(tmp_path, sheet="Sheet1"):
+    xml = _CHART_SHEET_XML.replace("Sheet1.", f"{sheet}.")
+    path = ods_with_sheet(tmp_path / "chart.ods", xml)
+    return with_chart(
+        path,
+        plot=f"{sheet}.A1:{sheet}.B7",
+        categories=f"{sheet}.A2:{sheet}.A7",
+        values=f"{sheet}.B2:{sheet}.B7",
+        label=f"{sheet}.B1:{sheet}.B1",
+    )
+
+
+def _ranges(plot, categories, values, label, end):
+    return {
+        "table:cell-range-address": plot,
+        "categories": categories,
+        "chart:values-cell-range-address": values,
+        "chart:label-cell-address": label,
+        "notify": f"{categories} {label} {values}",
+        "end": end,
+    }
+
+
+# edit -> the ranges LibreOffice gives the chart for the same edit, through
+# its UNO API, on the report this sheet reproduces
+_CHART_EDITS = {
+    "insert_rows(4)": (
+        lambda s: s.insert_rows(4),  # inside the days: they stretch
+        _ranges("Sheet1.A1:Sheet1.B8", "Sheet1.A2:Sheet1.A8", "Sheet1.B2:Sheet1.B8",
+                "Sheet1.B1:Sheet1.B1", "Sheet1.F11"),
+    ),
+    "insert_rows(0)": (
+        lambda s: s.insert_rows(0),  # above everything: all moves down
+        _ranges("Sheet1.A2:Sheet1.B8", "Sheet1.A3:Sheet1.A8", "Sheet1.B3:Sheet1.B8",
+                "Sheet1.B2:Sheet1.B2", "Sheet1.F11"),
+    ),
+    "delete_rows([3])": (
+        lambda s: s.delete_rows([3]),
+        _ranges("Sheet1.A1:Sheet1.B6", "Sheet1.A2:Sheet1.A6", "Sheet1.B2:Sheet1.B6",
+                "Sheet1.B1:Sheet1.B1", "Sheet1.F9"),
+    ),
+    # every day deleted: a chart has no #REF!, its ranges keep their address
+    "delete_rows(days)": (
+        lambda s: s.delete_rows(range(1, 7)),
+        _ranges("Sheet1.A1:Sheet1.B1", "Sheet1.A2:Sheet1.A7", "Sheet1.B2:Sheet1.B7",
+                "Sheet1.B1:Sheet1.B1", "Sheet1.F4"),
+    ),
+    "insert_columns(1)": (
+        lambda s: s.insert_columns(1),
+        _ranges("Sheet1.A1:Sheet1.C7", "Sheet1.A2:Sheet1.A7", "Sheet1.C2:Sheet1.C7",
+                "Sheet1.C1:Sheet1.C1", "Sheet1.G10"),
+    ),
+    "delete_column(1)": (
+        lambda s: s.delete_column(1),  # the visits, deleted whole
+        _ranges("Sheet1.A1:Sheet1.A7", "Sheet1.A2:Sheet1.A7", "Sheet1.B2:Sheet1.B7",
+                "Sheet1.B1:Sheet1.B1", "Sheet1.E10"),
+    ),
+    # the chart's end cell deleted: it keeps its address, the cell taking its
+    # place, as LibreOffice keeps it when the row or the column goes
+    "delete_rows([9])": (
+        lambda s: s.delete_rows([9]),
+        _ranges("Sheet1.A1:Sheet1.B7", "Sheet1.A2:Sheet1.A7", "Sheet1.B2:Sheet1.B7",
+                "Sheet1.B1:Sheet1.B1", "Sheet1.F10"),
+    ),
+    "delete_column(5)": (
+        lambda s: s.delete_column(5),
+        _ranges("Sheet1.A1:Sheet1.B7", "Sheet1.A2:Sheet1.A7", "Sheet1.B2:Sheet1.B7",
+                "Sheet1.B1:Sheet1.B1", "Sheet1.F10"),
+    ),
+    # two edits in a row: the chart is read once, and the second starts
+    # where the first left it
+    "insert_rows(4), insert_columns(1)": (
+        lambda s: (s.insert_rows(4), s.insert_columns(1)),
+        _ranges("Sheet1.A1:Sheet1.C8", "Sheet1.A2:Sheet1.A8", "Sheet1.C2:Sheet1.C8",
+                "Sheet1.C1:Sheet1.C1", "Sheet1.G11"),
+    ),
+}
+
+
+@pytest.mark.parametrize("edit", list(_CHART_EDITS))
+def test_a_chart_follows_rows_and_columns_as_libreoffice_has_it(tmp_path, edit):
+    # regression: its ranges and its end stayed as they were - an inserted
+    # day was left out of the chart, which shrank by a row on open
+    change, expected = _CHART_EDITS[edit]
+    path = _chart_workbook(tmp_path)
+    r = ODSReader(path)
+    change(r.sheet("Sheet1"))
+    r.save()
+    assert chart_ranges(path) == expected
+
+
+def test_a_chart_follows_its_sheet_renamed(tmp_path):
+    # regression: it pointed at the old name, and LibreOffice found no range
+    path = _chart_workbook(tmp_path)
+    r = ODSReader(path)
+    r.rename_sheet("Sheet1", "Report")
+    r.save()
+    assert chart_ranges(path) == _ranges(
+        "Report.A1:Report.B7", "Report.A2:Report.A7", "Report.B2:Report.B7",
+        "Report.B1:Report.B1", "Report.F10",
+    )
+
+
+def test_a_chart_follows_the_rows_of_another_sheet(tmp_path):
+    # the chart stands on Sheet1, its data on Data: an edit of Data moves it
+    path = _chart_workbook(tmp_path, sheet="Data")
+    r = ODSReader(path)
+    data = r.add_sheet("Data")
+    data.insert_rows(0)
+    r.save()
+    ranges = chart_ranges(path)
+    assert ranges["chart:values-cell-range-address"] == "Data.B3:Data.B8"
+    assert ranges["end"] == "Data.F11"
+
+
+def test_a_chart_is_saved_as_it_was_when_no_edit_moves_it(tmp_path):
+    path = _chart_workbook(tmp_path)
+    before = chart_ranges(path)
+    r = ODSReader(path)
+    r.sheet("Sheet1")["A9"].value = "no move"
+    r.save()
+    assert chart_ranges(path) == before
 
 
 def test_save_round_trip(writable_reader, tmp_path):

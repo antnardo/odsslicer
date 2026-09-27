@@ -25,6 +25,7 @@ from conftest import (
     PRINT_TITLE_WIDTHS_XML,
     PRINT_TITLE_XML,
     addresses_holding,
+    chart_frame,
     document_in,
     empty_cells,
     libreoffice_shows,
@@ -35,6 +36,7 @@ from conftest import (
     shape_cell,
     table_row,
     text_cell,
+    with_chart,
 )
 
 from odsslicer import ODSReader
@@ -366,6 +368,53 @@ def _centimetres(length):
     """An ODF length, `1.001cm` or `0.3937in`, in centimetres."""
     number, unit = re.fullmatch(r"([0-9.]+)([a-z]+)", length).groups()
     return float(number) * {"cm": 1, "mm": 0.1, "in": 2.54, "pt": 2.54 / 72}[unit]
+
+
+@requires_soffice
+def test_libreoffice_reads_a_chart_stretched_by_an_insertion(tmp_path, libreoffice_export):
+    # issue #15: the chart kept B2:B7 and its end cell, and LibreOffice drew
+    # it without the day inserted, a row shorter
+    days = zip(("mon", "tue", "wed", "thu", "fri", "sat"), (10, 20, 30, 40, 50, 60), strict=True)
+    xml = (
+        '<table:table-column table:number-columns-repeated="6"/>'
+        + table_row(
+            text_cell("Day"),
+            text_cell("Visits"),
+            empty_cells(),
+            "<table:table-cell>"
+            + chart_frame("Sheet1.A2:Sheet1.A7 Sheet1.B1:Sheet1.B1 Sheet1.B2:Sheet1.B7", "Sheet1.F10")
+            + "</table:table-cell>",
+            empty_cells(2),
+        )
+        + "".join(
+            table_row(
+                text_cell(day),
+                f'<table:table-cell office:value-type="float" office:value="{visits}">'
+                f"<text:p>{visits}</text:p></table:table-cell>",
+                empty_cells(4),
+            )
+            for day, visits in days
+        )
+    )
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    path = with_chart(
+        ods_with_sheet(src_dir / "chart.ods", xml),
+        plot="Sheet1.A1:Sheet1.B7",
+        categories="Sheet1.A2:Sheet1.A7",
+        values="Sheet1.B2:Sheet1.B7",
+        label="Sheet1.B1:Sheet1.B1",
+    )
+    table = ODSReader(path)
+    table.sheet("Sheet1").insert_rows(4)
+    table.sheet("Sheet1")["A5:B5"].value = ["thu bis", 35]
+    table.save()
+
+    fods = BeautifulSoup(libreoffice_export(path, "fods").read_text(encoding="utf-8"), "xml")
+    series = fods.find("chart:series")
+    assert series["chart:values-cell-range-address"] == "Sheet1.B2:Sheet1.B8"
+    assert fods.find("chart:categories")["table:cell-range-address"] == "Sheet1.A2:Sheet1.A8"
+    assert fods.find("draw:frame")["table:end-cell-address"] == "Sheet1.F11"
 
 
 @requires_soffice

@@ -238,7 +238,11 @@ def _insertion_remap(
 
 
 def _remap_reference(
-    reference: str, target_sheet: str, containing_sheet: "str | None", remap: _Remap
+    reference: str,
+    target_sheet: str,
+    containing_sheet: "str | None",
+    remap: _Remap,
+    edge: "str | None" = None,
 ) -> "str | None":
     """One reference - `.A1`, `Sheet2.$A$1`, or a range, `.A1:.B3` - through
     `remap`, keeping its `$` locks, dots and sheet names; `None` if what it
@@ -246,11 +250,12 @@ def _remap_reference(
     range. Only an address resolving to `target_sheet` moves - explicitly
     sheet-qualified, or bare when `containing_sheet` is `target_sheet`, or
     a range's end on its start's sheet - and anything that isn't a plain
-    cell address is left as it is. Meant
-    for structural edits, where the referenced cell itself moves: unlike
-    `_shift_cell_address`'s fill/copy semantics, a `$` lock is irrelevant."""
+    cell address is left as it is. Meant for structural edits, where the
+    referenced cell itself moves: unlike `_shift_cell_address`'s fill/copy
+    semantics, a `$` lock is irrelevant. `edge` is a single reference's
+    when it stands for one: a drawing's last cell."""
     parts = reference.split(":", 1)
-    edges: "list[str | None]" = [None] if len(parts) == 1 else ["start", "end"]
+    edges: "list[str | None]" = [edge] if len(parts) == 1 else ["start", "end"]
     rewritten: list[str] = []
     before: "list[tuple[int, int]]" = []
     after: "list[tuple[int, int]]" = []
@@ -282,6 +287,25 @@ def _remap_reference(
     if ordered and (after[0][0] > after[1][0] or after[0][1] > after[1][1]):
         return None  # every row, or every column, of the range deleted
     return ":".join(rewritten)
+
+
+def _remap_range_list(
+    ranges: str, target_sheet: str, remap: _Remap, edge: "str | None" = None
+) -> str:
+    """A list of cell ranges as charts and drawings hold them - separated by
+    spaces, each sheet-qualified: `Report.A5:Report.A11 Report.B4:Report.B4`
+    - through `remap` (see `_remap_reference`), as LibreOffice has a chart's
+    ranges follow a structural edit (issue #15): a range shrinks with the
+    rows or columns it loses, and one deleted whole keeps its address, a
+    chart having no #REF! to show."""
+    return " ".join(
+        _remap_reference(item, target_sheet, None, remap, edge) or item for item in ranges.split()
+    )
+
+
+def _rename_range_list(ranges: str, old_name: str, new_name: str) -> str:
+    """`_remap_range_list`'s counterpart for a sheet renamed."""
+    return " ".join(_rename_odf_reference_sheet(item, old_name, new_name) for item in ranges.split())
 
 
 def _remap_odf_formula_references(

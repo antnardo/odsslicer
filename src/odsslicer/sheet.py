@@ -1331,11 +1331,12 @@ class Sheet:
         `_insertion_remap`), so each reference still points at the cell it
         did before.
 
-        Only formulas are covered: pivot-table source ranges, named ranges,
-        conditional-format and validation ranges are left as they are. No-op
-        if this sheet has no owning `ODSReader` (nothing else to scan). One
-        full-document sweep per call - which is why `delete_rows` batches N
-        rows into one call.
+        Charts follow too, their ranges and the cell their frame ends in
+        (see `ODSReader._remap_drawing_references`, issue #15); pivot-table
+        source ranges, named ranges, conditional-format and validation
+        ranges are left as they are. No-op if this sheet has no owning
+        `ODSReader` (nothing else to scan). One full-document sweep per call
+        - which is why `delete_rows` batches N rows into one call.
         """
         if self.reader is None:
             return
@@ -1347,6 +1348,7 @@ class Sheet:
                     adjusted = _remap_odf_formula_references(cell._formula, self.name, sheet.name, remap)
                     if adjusted != cell._formula:
                         cell.formula = adjusted
+        self.reader._remap_drawing_references(self.name, remap)
 
     def __repr__(self) -> str:
         return f"Sheet(name='{self.name}', size[rows, cols]={self.size})"

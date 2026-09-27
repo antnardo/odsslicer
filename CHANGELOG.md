@@ -59,6 +59,12 @@ still change between minor versions.
   no longer existed, `#REF!` or `#NAME?` in LibreOffice; the end of such a range moved with
   the rows of the formula's own sheet instead. `cell.formula` takes both forms too, where
   `"$Data.A5"` was written untranslated.
+- **Charts follow inserted and deleted rows and columns, and a renamed sheet**
+  ([#15](https://github.com/antnardo/odsslicer/issues/15)), as LibreOffice has them follow.
+  A chart's ranges stayed as they were: a day inserted in a report's table was left out of
+  its chart, and a renamed sheet left the chart with no range at all in LibreOffice. The cell
+  a chart's frame ends in, from which LibreOffice sizes it on open, stayed too, so that a row
+  inserted above a chart made it a row shorter.
 
 ### Changed
 

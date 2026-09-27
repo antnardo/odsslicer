@@ -210,6 +210,80 @@ def shape_cell(name):
     )
 
 
+_CHART_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+ xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0"
+ xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+ xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" office:version="1.3">
+ <office:body><office:chart>
+  <chart:chart svg:width="8cm" svg:height="4cm" chart:class="chart:bar">
+   <chart:plot-area table:cell-range-address="{plot}">
+    <chart:axis chart:dimension="x" chart:name="primary-x">
+     <chart:categories table:cell-range-address="{categories}"/>
+    </chart:axis>
+    <chart:axis chart:dimension="y" chart:name="primary-y"/>
+    <chart:series chart:values-cell-range-address="{values}" chart:label-cell-address="{label}"
+     chart:class="chart:bar"/>
+   </chart:plot-area>
+  </chart:chart>
+ </office:chart></office:body>
+</office:document-content>
+"""
+
+
+def chart_frame(ranges, end):
+    """A chart anchored to a cell, as the content of that cell - LibreOffice
+    writes its frame there, with the cell it ends in - its ranges listed on
+    its object, as LibreOffice lists them."""
+    return (
+        f'<draw:frame table:end-cell-address="{end}" table:end-x="0cm" table:end-y="0cm"'
+        ' draw:name="Chart" svg:width="8cm" svg:height="4cm" svg:x="0cm" svg:y="0cm">'
+        f'<draw:object draw:notify-on-update-of-ranges="{ranges}" xlink:href="./Object 1"'
+        ' xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>'
+    )
+
+
+def with_chart(path, **ranges):
+    """Add to the workbook at `path` the chart part a `chart_frame` points
+    at, `Object 1/content.xml`, with `ranges` (`plot`, `categories`,
+    `values`, `label`) and the manifest's entries for it."""
+    with zipfile.ZipFile(path) as package:
+        members = [(item, package.read(item.filename)) for item in package.infolist()]
+    entries = (
+        ' <manifest:file-entry manifest:full-path="Object 1/"'
+        ' manifest:media-type="application/vnd.oasis.opendocument.chart"/>\n'
+        ' <manifest:file-entry manifest:full-path="Object 1/content.xml"'
+        ' manifest:media-type="text/xml"/>\n</manifest:manifest>'
+    )
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as package:
+        for item, data in members:
+            if item.filename == "META-INF/manifest.xml":
+                data = data.decode("utf-8").replace("</manifest:manifest>", entries).encode("utf-8")
+            package.writestr(item, data)
+        package.writestr("Object 1/content.xml", _CHART_XML.format(**ranges))
+    return path
+
+
+def chart_ranges(path):
+    """The ranges of the chart part of `path`, `Object 1/content.xml`, by
+    attribute, and those its object lists, as saved."""
+    with zipfile.ZipFile(path) as package:
+        chart = BeautifulSoup(package.read("Object 1/content.xml"), "xml")
+    ranges = {
+        attr: chart.find(attrs={attr: True})[attr]
+        for attr in (
+            "table:cell-range-address",
+            "chart:values-cell-range-address",
+            "chart:label-cell-address",
+        )
+    }
+    ranges["categories"] = chart.find("chart:categories")["table:cell-range-address"]
+    table = saved_table(path)
+    ranges["notify"] = table.find("draw:object")["draw:notify-on-update-of-ranges"]
+    ranges["end"] = table.find("draw:frame")["table:end-cell-address"]
+    return ranges
+
+
 def saved_table(path, index=0):
     """The `<table:table>` element number `index` of the file at `path`, as
     saved: parsed from its content.xml, where `ODSReader` would first clamp

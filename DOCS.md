@@ -722,6 +722,11 @@ All of them take references to other sheets in the forms LibreOffice writes: an 
 sheet (`$Sheet2.A1`, what clicking a cell of another sheet gives), a name starting with an
 accented letter, unquoted (`Élèves.A1`), and a range whose end, with no sheet name of its own,
 is on its start's sheet (`$Sheet2.A1:.A5`).
+
+Charts follow the same edits, as LibreOffice has them follow: their ranges stretch, shrink
+and move with the rows and columns, a range deleted whole keeping its address — a chart has
+no `#REF!` to show — and the cell a chart's frame ends in, from which LibreOffice sizes it
+on open, moves too. A renamed sheet is renamed in them.
 - `copy`, `sort`, `fill_formula`: relative references shift by the displacement; `$`-anchored
   ones stay put.
 
@@ -1319,13 +1324,15 @@ reading *and rewriting* documents whose formatting must survive.
   `NumberFormat` renders numbers with a fixed `.`/`,` convention: it doesn't read the
   format's own `number:language`/`number:country`, so a number's separators may differ from
   the rest of the document. Real applications recompute display text on open.
-- **Structural edits only rewrite formulas.** Inserting or deleting rows/columns leaves
-  pivot-table source ranges, named ranges, and conditional-format or validation ranges as
-  they were.
+- **Structural edits rewrite formulas and charts only.** Inserting or deleting rows/columns,
+  or renaming a sheet, has formulas and charts follow the cells — a chart's ranges, and the
+  cell its frame ends in — but leaves pivot-table source ranges, named ranges, and
+  conditional-format or validation ranges as they were.
 - **Partial rich text** (one bold word inside a sentence, a link on part of a cell's text) is
   flattened on read and not writable.
 - **Not covered:** data validation / drop-down lists, autofilters, frozen panes, sheet-level
-  protection, row/column grouping, charts and embedded images, page layout/printing.
+  protection, row/column grouping, charts and embedded images — which structural edits keep
+  where they belong, see above — page layout/printing.
 - **Padding after the data is not loaded.** Empty rows repeated more than 1,000 times at the
   bottom of a sheet (LibreOffice and Excel declare its full 1,048,576-row height that way) and
   more than 10 empty columns at its right stay out of the grid, of `sheet.size` and of full

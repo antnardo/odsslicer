@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup, Tag
 
 from .dateformats import _default_format_code, _format_code_components
 from .fileutils import _replacing
-from .formulas import _rename_odf_formula_sheet
+from .formulas import _Remap, _remap_range_list, _rename_odf_formula_sheet, _rename_range_list
 from .libreoffice import _recalculate_file
 from .properties import DocumentProperties
 from .sheet import Sheet
@@ -97,6 +97,11 @@ class ODSReader:
         # styles carrying them, shared by every cell (see Cell.value)
         self._default_date_formats: dict[str, str] = {}
         self._date_formatted_styles: dict[tuple[str | None, str], str] = {}
+        # the package's other parts parsed on demand - the content of the
+        # charts, for their cell ranges - which save() writes back; None
+        # for an embedded object that is no chart
+        self._parts: dict[str, BeautifulSoup | None] = {}
+        self._drawing_tags: tuple[list[Tag], list[Tag]] | None = None  # see _drawings
         logger.log(self._log_level, "    %r", self)
 
     def __repr__(self) -> str:
@@ -303,6 +308,9 @@ class ODSReader:
             "content.xml": self.data.encode("utf-8"),
             "meta.xml": self.meta_data.encode("utf-8"),
         }
+        regenerated.update(
+            (name, part.encode("utf-8")) for name, part in self._parts.items() if part is not None
+        )
         with ZipFile(self.file) as src:
             entries = [(item, regenerated.get(item.filename, src.read(item.filename))) for item in src.infolist()]
         # a regenerated part absent from the source package (every part but
@@ -318,6 +326,90 @@ class ODSReader:
         if recalculate:
             # the parameter shadows the module function
             _recalculate_file(path, timeout=timeout, update_links=update_links)
+
+    # A chart's attributes holding cell ranges, in its own content.xml
+    _CHART_RANGE_ATTRS = (
+        "table:cell-range-address",
+        "chart:values-cell-range-address",
+        "chart:label-cell-address",
+        "chart:error-lower-range",
+        "chart:error-upper-range",
+    )
+
+    def _drawings(self) -> "tuple[list[Tag], list[Tag]]":
+        """The elements of `content.xml` recording the cell they end in,
+        `table:end-cell-address`, and the embedded objects, `<draw:object>`,
+        looked for once: a structural edit would otherwise scan the whole
+        document for them, which took a dozen times longer than the edit on
+        a 10,000-row sheet. odsslicer never creates any, and one deleted
+        with its row is only left detached. A document holding neither, as
+        its raw text shows, skips the scan."""
+        if self._drawing_tags is None:
+            if b"table:end-cell-address" in self.content or b"draw:object" in self.content:
+                self._drawing_tags = (
+                    self.data.find_all(attrs={"table:end-cell-address": True}),
+                    self.data.find_all("draw:object"),
+                )
+            else:
+                self._drawing_tags = ([], [])
+        return self._drawing_tags
+
+    def _charts(self) -> "list[BeautifulSoup]":
+        """The content of every chart embedded in the document, each the
+        `content.xml` of an object of the package (`Object 1/`...) that a
+        `<draw:object>` points at, parsed once and kept for save()."""
+        wanted = []
+        for tag in self._drawings()[1]:
+            href = cast(str, tag.get("xlink:href", "")).removeprefix("./").rstrip("/")
+            if href:
+                wanted.append(f"{href}/content.xml")
+        missing = [name for name in wanted if name not in self._parts]
+        if missing:
+            with ZipFile(self.file) as package:
+                members = set(package.namelist())
+                for name in missing:
+                    part = BeautifulSoup(package.read(name), "xml") if name in members else None
+                    self._parts[name] = part if part and part.find("office:chart") else None
+        return [part for name in wanted if (part := self._parts[name]) is not None]
+
+    def _remap_drawing_references(self, target_sheet: str, remap: _Remap) -> None:
+        """After a structural edit of `target_sheet`, have what drawings hold
+        of its cells follow them, as LibreOffice has them follow (issue #15):
+        a chart's ranges - in its own content, and listed again on its
+        `<draw:object>` for LibreOffice to know when to redraw it - and the
+        cell a drawing anchored to a cell ends in, `table:end-cell-address`,
+        from which LibreOffice sizes a chart on open. They used to stay as
+        they were: a row inserted in a chart's data left the last day out
+        of it, and the chart shrank by a row."""
+        ended, objects = self._drawings()
+        for tag in ended:
+            ends = cast(str, tag["table:end-cell-address"])
+            # deleted, the end keeps its address - the cell taking its place -
+            # as LibreOffice keeps it: that of a range's first cell
+            tag["table:end-cell-address"] = _remap_range_list(ends, target_sheet, remap, "start")
+        for tag in objects:
+            if "draw:notify-on-update-of-ranges" in tag.attrs:
+                ranges = cast(str, tag["draw:notify-on-update-of-ranges"])
+                tag["draw:notify-on-update-of-ranges"] = _remap_range_list(ranges, target_sheet, remap)
+        for chart in self._charts():
+            for attr in self._CHART_RANGE_ATTRS:
+                for tag in chart.find_all(attrs={attr: True}):
+                    tag[attr] = _remap_range_list(cast(str, tag[attr]), target_sheet, remap)
+
+    def _rename_drawing_references(self, old_name: str, new_name: str) -> None:
+        """`_remap_drawing_references`' counterpart for a sheet renamed."""
+        ended, objects = self._drawings()
+        for tag in ended:
+            ends = cast(str, tag["table:end-cell-address"])
+            tag["table:end-cell-address"] = _rename_range_list(ends, old_name, new_name)
+        for tag in objects:
+            if "draw:notify-on-update-of-ranges" in tag.attrs:
+                ranges = cast(str, tag["draw:notify-on-update-of-ranges"])
+                tag["draw:notify-on-update-of-ranges"] = _rename_range_list(ranges, old_name, new_name)
+        for chart in self._charts():
+            for attr in self._CHART_RANGE_ATTRS:
+                for tag in chart.find_all(attrs={attr: True}):
+                    tag[attr] = _rename_range_list(cast(str, tag[attr]), old_name, new_name)
 
     def export_content_xml(self, pretty: bool = True) -> None:
         if pretty:
@@ -421,6 +513,7 @@ class ODSReader:
                     renamed = _rename_odf_formula_sheet(cell.formula, old_name, new_name)
                     if renamed != cell.formula:
                         cell.formula = renamed
+        self._rename_drawing_references(old_name, new_name)
 
     def move_sheet(self, name: str, index: int) -> None:
         """Move sheet `name` to position `index` (0-based) among the
