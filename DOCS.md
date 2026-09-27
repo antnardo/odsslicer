@@ -89,11 +89,14 @@ sheet.name                  # "Sheet1"
 `ODSReader` parses `content.xml`, `styles.xml` and `meta.xml` (via BeautifulSoup/lxml) into
 in-memory trees. `ODSReader.sheet(name)` raises `KeyError` for an unknown name.
 
-`sheet.size` covers the data, empty rows and columns between it included. What applications
-write after it, to declare the sheet's full size or to format columns past the data, is left
-out: an empty last row, more than 1,000 repeated empty rows at the bottom, more than 10 empty
-columns at the right. It stays in the file, and writing past the data reuses it (see
-[Automatic sheet growth](#automatic-sheet-growth)).
+`sheet.size` covers the data, empty rows and columns between it included. A note counts as
+data, as in LibreOffice: the grid reaches a note on an empty cell, however far. What
+applications write after the data, to declare the sheet's full size or to format rows and
+columns past it, is left out: a last row holding no data, more than 1,000 repeated empty rows
+at the bottom, more than 10 empty columns at the right. It stays in the file, with the charts
+and shapes anchored there, whatever the edit: writing past the data reuses it (see [Automatic
+sheet growth](#automatic-sheet-growth)), and inserting or deleting rows and columns moves it
+as LibreOffice would.
 
 Progress and warnings go through the standard `logging` module (logger name `"odsslicer"`):
 load-time details are logged at `DEBUG` (`INFO` when a reader/sheet is created with
@@ -358,8 +361,10 @@ A plain read (`sheet["Z1"].value` with no assignment) never grows anything — o
 triggers growth. New rows/cells don't inherit any particular style.
 
 Growing first takes back what the file holds past `sheet.size`: with columns D to R empty
-but formatted, writing to D1 lands in D1 and keeps D1's formatting. A run of repeated rows is
-widened once for all its rows, and writing into it then unrolls it, as above.
+but formatted, writing to D1 lands in D1 and keeps D1's formatting. So with the rows below
+the data: a chart anchored in row 16, past the grid, stays there when a footer is written in
+row 18. A run of repeated rows is widened once for all its rows, and writing into it then
+unrolls it, as above.
 
 ### Displayed text: how `.text` is produced on write
 
@@ -474,7 +479,7 @@ table.delete_sheet("Data")
 ```python
 sheet.insert_row(2)              # one blank row before row 2 (0-based): row 2 moves to 3
 sheet.insert_rows(2, 5)          # five blank rows at once
-sheet.insert_rows(sheet.n_rows)  # the sheet's height as position: append at the bottom
+sheet.insert_rows(sheet.n_rows)  # the sheet's height as position: below the data
 sheet.insert_column(1)           # one blank column before column B
 sheet.insert_columns(1, 3)
 ```
@@ -489,13 +494,17 @@ It behaves like a spreadsheet's "insert rows above" / "insert columns before":
   above or below simply move.
 - **Column widths stay with their columns**: the column definitions shift too, the new
   columns get the default width.
+- **What the file holds past the grid moves too**: a chart or a shape anchored below the
+  data, a formatted cell there, moves down with the rows after the insertion point, and
+  sideways with the columns.
 - The new rows/columns are **blank** — no values, no styles. Use [`copy`](#copying-cells-and-ranges)
   to bring formatting onto them.
 
 Raises `IndexError` for a position outside `0..n_rows` (or `0..n_cols`), `ValueError` for a
 `count` below 1. Files written by LibreOffice or Excel declare the whole 16,384 × 1,048,576
-grid through trailing filler rows and columns; insertions give that filler back, so the
-document never exceeds the application's maximum (which would make it drop data on open).
+grid through trailing filler rows and columns (1,024 columns before LibreOffice 7.4); on such
+a file, insertions give that filler back, so the document never exceeds the application's
+maximum, which would make it drop data on open. A smaller sheet grows.
 
 ### Deleting rows and columns
 
@@ -1303,9 +1312,11 @@ reading *and rewriting* documents whose formatting must survive.
 - **Padding after the data is not loaded.** Empty rows repeated more than 1,000 times at the
   bottom of a sheet (LibreOffice and Excel declare its full 1,048,576-row height that way) and
   more than 10 empty columns at its right stay out of the grid, of `sheet.size` and of full
-  reads, though not out of the file. Empty rows and columns between data are always loaded,
-  however many: a sheet with something in row 1,000,000 costs a million rows of memory. A
-  warning is logged if a row-length inconsistency remains after that cleanup.
+  reads, though not out of the file — so does a last row holding no data: `cell.style` does
+  not read the formatting there. Empty rows and
+  columns between data are always loaded, however many: a sheet with a value or a note in row
+  1,000,000 costs a million rows of memory. A warning is logged if a row-length inconsistency
+  remains after that cleanup.
 
 ---
 
@@ -1325,7 +1336,9 @@ issue it was reported in.
    `p.get_text()`.
 3. **Growing an empty sheet (or one with a trailing empty row) could corrupt it on the next
    save/reload** — `load()` discarded such rows from memory but not from the XML, and
-   `grow_to` appended after them. Fixed: stray rows are discarded first.
+   `grow_to` appended after them. Fixed: stray rows were discarded first — and are now taken
+   back into the grid instead, since they can hold charts or formatting
+   ([#10](https://github.com/antnardo/odsslicer/issues/10)).
 4. **A formula-only cell was wrongly `is_empty`**, so `load()`'s trailing-empty-row trim could
    silently drop it. Fixed: `is_empty` now checks the formula.
 5. **Writing to the only sheet of a minimal document failed** — nothing anywhere to copy a

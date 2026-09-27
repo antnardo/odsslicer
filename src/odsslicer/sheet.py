@@ -9,6 +9,7 @@ delete, copy, sort, merge), pivot definitions, row/column/table style access."""
 
 import copy
 import functools
+import itertools
 import logging
 import warnings
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, Tuple, Union, cast
@@ -58,6 +59,48 @@ def _repeat(tag: Tag, attr: str) -> int:
     return int(tag.attrs.get(attr, "1"))
 
 
+def _holds_content(cell: Cell) -> bool:
+    """Whether `cell` holds what LibreOffice counts in a sheet's used area,
+    formatting aside: a value, a text or a formula (see `Cell.is_empty`), or
+    a note (issue #10). The grid reaches every such cell. Formatting stays
+    out on purpose: files carry it in the rows padding a sheet to its full
+    height, down to the millionth, and a formatted row the grid leaves out
+    stays in the file all the same (see `grow_to`)."""
+    return (
+        not cell.is_empty
+        or cell.cell.find("office:annotation", recursive=False) is not None
+    )
+
+
+# the namespaces of what a cell may hold anchored to it: shapes, charts and
+# images (draw:frame), 3D scenes
+_DRAWING_PREFIXES = frozenset({"draw", "dr3d"})
+
+
+# The sizes applications pad a sheet to with repeated blank rows and cells:
+# 1,048,576 rows - 65,536 before LibreOffice 3.3 and Excel 2007 - and 16,384
+# columns - 1,024 before LibreOffice 7.4. A sheet padded to one of them keeps
+# it through insertions: LibreOffice drops what an insertion pushed past its
+# maximum on open, with a warning. Any other size is no maximum, and grows.
+_FULL_HEIGHTS = frozenset({65_536, 1_048_576})
+_FULL_WIDTHS = frozenset({1_024, 16_384})
+
+
+def _give_back(tags: "list[Tag]", attr: str, count: int) -> None:
+    """Take `count` repetitions (`attr`) off the elements of `tags` - rows,
+    cells or column definitions past the grid - from the last, each keeping
+    one: what an insertion pushed past a sheet's full size comes off the
+    padding at its end. Only a blank element is repeated there: a chart, a
+    note, a value stands in one cell of one row."""
+    for tag in reversed(tags):
+        if count == 0:
+            return
+        n = _repeat(tag, attr)
+        taken = min(count, n - 1)
+        _set_repeat(tag, attr, n - taken)
+        count -= taken
+
+
 class Sheet:
     def __init__(self, table: Tag, verbose: bool = False, reader: "ODSReader | None" = None) -> None:
         self.verbose = verbose
@@ -102,7 +145,7 @@ class Sheet:
         def content_width(cells_bs: "list[Tag]") -> "tuple[int, Tag | None]":
             """(width up to the first huge trailing empty cell, that cell)."""
             suffix_start = len(cells_bs)
-            while suffix_start > 0 and Cell(cells_bs[suffix_start - 1]).is_empty:
+            while suffix_start > 0 and not _holds_content(Cell(cells_bs[suffix_start - 1])):
                 suffix_start -= 1
             width, first_big = 0, None
             for k, cell in enumerate(cells_bs):
@@ -120,7 +163,7 @@ class Sheet:
         # are real, however many: leaving them out would move every row
         # below them up (issue #6). The grid ends at the first filler.
         def is_empty_row(row: Tag) -> bool:
-            return all(Cell(c).is_empty for c in row.find_all(TAG_CELL))
+            return not any(_holds_content(Cell(c)) for c in row.find_all(TAG_CELL))
 
         last_content = len(rows) - 1
         while last_content >= 0 and is_empty_row(rows[last_content]):
@@ -165,19 +208,21 @@ class Sheet:
         # CLEAN UP
         # What the grid leaves out below stays in the file, and must stay out
         # of the elements the grid points at: `_unrepeat_row` gives a copy
-        # to every repetition of an element, and `grow_to` appends rows
-        # after the last element of the grid (issue #5).
+        # to every repetition of an element, and `grow_to` takes rows back
+        # from the element after the grid's last (issues #5, #10).
         if not table or not table[0]:
             return []
         # The empty row trimmed here is the sheet's last, which LibreOffice
         # writes apart - after the filler, if there is one. The grid ends
-        # before, and has nothing to trim: its last row is a real one.
+        # before, and has nothing to trim: its last row is a real one. A row
+        # with no content may still hold a chart or formatting: it stays in
+        # the file, past the grid.
         after_filler = rows[end + 1 :]
         written_apart = any(
             _repeat(row, "table:number-rows-repeated") <= MAX_REPEAT_ROWS
             for row in after_filler
         )
-        if not written_apart and all(cell.is_empty for cell in table[-1]):
+        if not written_apart and not any(_holds_content(cell) for cell in table[-1]):
             row_tag = cast(Tag, table[-1][0].cell.parent)
             keep = len(self._run_in(table, len(table) - 1)) - 1
             table.pop()
@@ -195,7 +240,7 @@ class Sheet:
         # them back as the sheet grows.
         n_cols = len(table[0])
         width = n_cols
-        while width > 0 and all(row[width - 1].is_empty for row in table):
+        while width > 0 and not any(_holds_content(row[width - 1]) for row in table):
             width -= 1
         if n_cols - width > MAX_REPEAT_COLS:
             logger.log(
@@ -290,7 +335,7 @@ class Sheet:
         cell. Rows already the right width come back untouched. Returns the
         row's cell tags after the rewrite."""
         suffix_start = len(cells_bs)
-        while suffix_start > 0 and Cell(cells_bs[suffix_start - 1]).is_empty:
+        while suffix_start > 0 and not _holds_content(Cell(cells_bs[suffix_start - 1])):
             suffix_start -= 1
         width = 0
         for k, cell in enumerate(cells_bs):
@@ -792,7 +837,8 @@ class Sheet:
         new cells, as `load` would have them (issue #5). The cells a row
         already has past the grid - trailing empty columns `load` left out
         of it - are taken back before any new one is added, formatting and
-        all (issue #6).
+        all (issue #6), and so are the rows the file holds below the grid
+        (issue #10).
         """
         target_cols = max(col + 1, self.n_cols)
         if target_cols > self.n_cols:
@@ -807,23 +853,151 @@ class Sheet:
             self.n_cols = target_cols
 
         if row >= self.n_rows:
-            # Captured *before* discarding whatever stray row currently sits in
-            # the XML: on a sheet that's the only one in the whole document
-            # (nothing else to fall back on), that stray row may be the only
-            # namespace-template source available at all.
-            row_template = self._empty_row_template(self.n_cols)
-            self._discard_stray_rows()
-            while row >= self.n_rows:
-                new_row_tag = copy.deepcopy(row_template)
+            self._take_back_rows(row + 1)
+
+        self.size = (self.n_rows, self.n_cols)
+
+    def _take_back_rows(self, n_rows: int) -> None:
+        """Grow the grid to `n_rows` rows, first with the rows the file holds
+        below it - what `load` left out: a last row with no content, the
+        filler padding the sheet to its full height, the rows past it - then
+        with new blank rows.
+
+        Those rows keep what they hold: a chart or a shape anchored to one of
+        their cells, a formatted cell. They used to be deleted instead, and a
+        chart anchored below the data went as soon as the sheet grew (issue
+        #10). A repeated element is split, as `load` splits a run, so that
+        the grid takes only the rows it needs; each row is split at the
+        grid's edge, as `load` splits the grid's, what lies past it staying
+        in the file - a filler row is as wide as the sheet."""
+        previous = cast(Tag, self.rows[-1][0].cell.parent) if self.n_rows else None
+        for row_tag in self._rows_past_grid():
+            if self.n_rows >= n_rows:
+                return
+            self._split_row_element(row_tag, n_rows - self.n_rows)
+            tags = self._cells_between(row_tag, 0, self.n_cols)
+            for _ in range(_repeat(row_tag, "table:number-rows-repeated")):
+                self.rows.append(
+                    [Cell(tag, row=self.n_rows, col=c, sheet=self) for c, tag in enumerate(tags)]
+                )
+                self.n_rows += 1
+            previous = row_tag
+        template = self._empty_row_template(self.n_cols)
+        while self.n_rows < n_rows:
+            new_row_tag = copy.deepcopy(template)
+            if previous is None:
                 self.table.append(new_row_tag)
-                new_cells = [
+            else:
+                previous.insert_after(new_row_tag)
+            previous = new_row_tag
+            self.rows.append(
+                [
                     Cell(cell_tag, row=self.n_rows, col=c, sheet=self)
                     for c, cell_tag in enumerate(new_row_tag.find_all(TAG_CELL))
                 ]
-                self.rows.append(new_cells)
-                self.n_rows += 1
+            )
+            self.n_rows += 1
 
-        self.size = (self.n_rows, self.n_cols)
+    def _rows_past_grid(self) -> "list[Tag]":
+        """The `<table:table-row>` elements the file holds after the grid's
+        last row, in order, grouped or not: what `load` left out below the
+        grid. It never looks inside a row: a cell may hold a table of its
+        own."""
+        found: list[Tag] = []
+
+        def collect(parent: Tag) -> None:
+            for child in parent.children:
+                if not isinstance(child, Tag):
+                    continue
+                if child.name == "table-row":
+                    found.append(child)
+                elif child.name in self._ROW_LEVEL:  # a group of rows
+                    collect(child)
+
+        if self.n_rows == 0:
+            collect(self.table)
+            return found
+        node: Tag | None = self.rows[-1][0].cell.parent
+        while node is not None and node is not self.table:
+            for sibling in node.next_siblings:
+                if not isinstance(sibling, Tag):
+                    continue
+                if sibling.name == "table-row":
+                    found.append(sibling)
+                elif sibling.name in self._ROW_LEVEL:
+                    collect(sibling)
+            node = node.parent
+        return found
+
+    def _give_back_rows(self, count: int) -> None:
+        """Keep the sheet's height after `count` rows were inserted, if it was
+        padded to an application's full height (see `_FULL_HEIGHTS`), with
+        the rows padding it below the grid (see `_give_back`)."""
+        attr = "table:number-rows-repeated"
+        below = self._rows_past_grid()
+        if self.n_rows + sum(_repeat(r, attr) for r in below) - count in _FULL_HEIGHTS:
+            _give_back(below, attr, count)
+
+    @staticmethod
+    def _give_back_cells(row_tag: Tag, count: int, start: int = 0) -> None:
+        """Keep the width of `row_tag` after `count` cells were inserted into
+        it, if it was padded to an application's full width, with its blank
+        cells from logical column `start` on - past the grid, whose cells
+        must keep their elements."""
+        attr = "table:number-columns-repeated"
+        cells = row_tag.find_all(TAG_CELL, recursive=False)
+        positions = list(itertools.accumulate((_repeat(c, attr) for c in cells), initial=0))
+        if positions[-1] - count in _FULL_WIDTHS:
+            _give_back([c for c, p in zip(cells, positions[:-1], strict=True) if p >= start], attr, count)
+
+    def _insert_cells_past_grid(self, col: int, count: int) -> None:
+        """Insert `count` blank cells before logical column `col` in every
+        row the file holds below the grid, so that what those rows hold moves
+        sideways with the columns of the grid, as LibreOffice moves a chart
+        anchored there (issue #10). A row ending before `col` has nothing to
+        move."""
+        for row_tag in self._rows_past_grid():
+            self._split_cells_at(row_tag, col)
+            position = 0
+            for cell_tag in row_tag.find_all(TAG_CELL, recursive=False):
+                if position == col:
+                    new_tag = self._empty_cell_template()
+                    _set_repeat(new_tag, "table:number-columns-repeated", count)
+                    cell_tag.insert_before(new_tag)
+                    self._give_back_cells(row_tag, count)
+                    break
+                position += _repeat(cell_tag, "table:number-columns-repeated")
+
+    def _delete_cells_past_grid(self, col: int) -> None:
+        """Delete logical column `col` from every row the file holds below
+        the grid - see `_insert_cells_past_grid`.
+
+        A chart or a shape anchored to a deleted cell stays where it was, in
+        the cell that takes its place, as LibreOffice keeps it; a note goes
+        with its cell. A row left with no cell gets a blank one: ODF wants at
+        least one."""
+        for row_tag in self._rows_past_grid():
+            for position in (col, col + 1, col + 2):  # the next cell alone too
+                self._split_cells_at(row_tag, position)
+            cells = row_tag.find_all(TAG_CELL, recursive=False)
+            position = 0
+            for k, cell_tag in enumerate(cells):
+                if position == col:
+                    drawings = [
+                        child
+                        for child in cell_tag.find_all(True, recursive=False)
+                        if child.prefix in _DRAWING_PREFIXES
+                    ]
+                    if drawings or len(cells) == 1:
+                        heir = cells[k + 1] if k + 1 < len(cells) else None
+                        if heir is None:
+                            heir = self._empty_cell_template()
+                            cell_tag.insert_after(heir)
+                        for drawing in drawings:
+                            heir.append(drawing.extract())
+                    cell_tag.decompose()
+                    break
+                position += _repeat(cell_tag, "table:number-columns-repeated")
 
     def _cells_between(self, row_tag: Tag, start: int, stop: int) -> "list[Tag]":
         """The cell elements of `row_tag` for logical columns `start` to
@@ -848,24 +1022,6 @@ class Sheet:
             row_tag.append(pad)
             tags += [pad] * (stop - max(position, start))
         return tags
-
-    def _discard_stray_rows(self) -> None:
-        """Remove any `<table:table-row>` physically present in the XML beyond
-        what `self.rows` accounts for.
-
-        `load()`'s cleanup (a lone blank row, a trimmed trailing empty row, a
-        huge repeated block of empty rows at the bottom...) only leaves rows
-        out of the in-memory `self.rows` view - they stay in the XML, split
-        off any element the grid still points at. Appending new rows without
-        first clearing these out would silently leave them in place, ready to
-        resurface as extra "phantom" rows the next time the file is parsed.
-        """
-        anchor = self.rows[-1][0].cell.parent if self.n_rows > 0 else None
-        stray = anchor.find_next_sibling("table:table-row") if anchor else self.table.find("table:table-row")
-        while stray is not None:
-            following = stray.find_next_sibling("table:table-row")
-            stray.decompose()
-            stray = following
 
     def delete_row(self, row: int) -> None:
         """Remove logical row `row` entirely, shifting every row below it
@@ -922,7 +1078,9 @@ class Sheet:
 
         Any merge intersecting `col` is undone first, same as
         `delete_row`; formula references elsewhere in the document are
-        adjusted the same way too - see `_remap_formula_references`.
+        adjusted the same way too - see `_remap_formula_references`. The
+        rows the file holds below the grid lose the column too (see
+        `_delete_cells_past_grid`).
         """
         if col < 0 or col >= self.n_cols:
             raise IndexError(f"column {col} out of range (sheet has {self.n_cols} columns)")
@@ -932,6 +1090,7 @@ class Sheet:
                 self._unmerge(r, col)
             r += 1
 
+        self._delete_cells_past_grid(col)  # while the grid still has a column
         for r in range(self.n_rows):
             self._unrepeat_col(r, col)
         self._unrepeat_column_tag(col).decompose()
@@ -953,7 +1112,8 @@ class Sheet:
     def insert_rows(self, row: int, count: int = 1) -> None:
         """Insert `count` blank rows before logical row `row`, shifting it
         and every row below it down (`sheet.size` grows accordingly);
-        `row == sheet.n_rows` appends them at the bottom.
+        `row == sheet.n_rows` inserts them below the grid, above whatever
+        the file holds there.
 
         Behaves like a spreadsheet's "insert rows above":
 
@@ -963,7 +1123,11 @@ class Sheet:
           straddles the insertion point stretches, see
           `_remap_formula_references`;
         - a merged range straddling the insertion point grows to include
-          the new rows rather than being undone.
+          the new rows rather than being undone;
+        - what the file holds below the grid - a chart or a shape anchored
+          to a cell there, a formatted cell - moves down with the rows
+          after `row` (issue #10). A sheet padded to its application's
+          full height keeps it, its padding giving back the rows inserted.
 
         The new rows are blank: no values, no cell or row styles (copy
         formatting onto them with `copy` if needed). A formula whose
@@ -975,35 +1139,51 @@ class Sheet:
             raise ValueError(f"count must be at least 1, got {count}")
         if row < 0 or row > self.n_rows:
             raise IndexError(f"row {row} out of range for insertion (sheet has {self.n_rows} rows)")
+        if self.n_cols == 0 and self.n_rows > 0:  # every column deleted
+            self.grow_to(self.n_rows - 1, 0)
         straddling = [
             (master.row, master.col, span_rows, span_cols)
             for master, span_rows, span_cols in self._merge_masters()
             if master.row < row < master.row + span_rows
         ]
 
-        if row == self.n_rows:
-            self.grow_to(row + count - 1, max(self.n_cols, 1) - 1)
-        else:
+        # What the file holds below the grid moves down with the rows after
+        # the insertion point, as LibreOffice moves a chart anchored there -
+        # it used to be deleted (issue #10) - and the filler padding the
+        # sheet to its full height gives back the rows inserted
+        after: Tag | None = None
+        before: Tag | None = None
+        if row < self.n_rows:
             self._unrepeat_row(row)
-            anchor = cast(Tag, self.rows[row][0].cell.parent)
-            template = self._empty_row_template(self.n_cols)
-            # whatever sits past the data in the XML (typically an empty row
-            # repeated up to the application's maximum, see `load`) goes, or
-            # the inserted rows would push the document over that maximum
-            self._discard_stray_rows()
-            new_rows = []
-            for k in range(count):
-                row_tag = copy.deepcopy(template)
-                anchor.insert_before(row_tag)
-                new_rows.append(
-                    [Cell(t, row=row + k, col=c, sheet=self) for c, t in enumerate(row_tag.find_all(TAG_CELL))]
-                )
-            self.rows[row:row] = new_rows
-            for r in range(row + count, len(self.rows)):
-                for cell in self.rows[r]:
-                    cell.row = r
-            self.n_rows = len(self.rows)
-            self.size = (self.n_rows, self.n_cols)
+            before = cast(Tag, self.rows[row][0].cell.parent)
+        else:
+            below = self._rows_past_grid()
+            if below:
+                before = below[0]
+            elif self.n_rows:
+                after = cast(Tag, self.rows[-1][0].cell.parent)
+        self.n_cols = max(self.n_cols, 1)  # a row holds a cell at least
+        template = self._empty_row_template(self.n_cols)
+        new_rows = []
+        for k in range(count):
+            row_tag = copy.deepcopy(template)
+            if before is not None:
+                before.insert_before(row_tag)
+            elif after is not None:
+                after.insert_after(row_tag)
+                after = row_tag
+            else:
+                self.table.append(row_tag)
+            new_rows.append(
+                [Cell(t, row=row + k, col=c, sheet=self) for c, t in enumerate(row_tag.find_all(TAG_CELL))]
+            )
+        self.rows[row:row] = new_rows
+        for r in range(row + count, len(self.rows)):
+            for cell in self.rows[r]:
+                cell.row = r
+        self.n_rows = len(self.rows)
+        self.size = (self.n_rows, self.n_cols)
+        self._give_back_rows(count)
 
         for m_row, m_col, span_rows, span_cols in straddling:
             self._grow_merge(m_row, m_col, span_rows + count, span_cols)
@@ -1020,10 +1200,11 @@ class Sheet:
         accordingly); `col == sheet.n_cols` appends them on the right.
 
         Same semantics as `insert_rows`: formula references follow the cells
-        they point at, a merged range straddling the insertion point grows.
-        The column definitions (`<table:table-column>`, which carry widths
-        and visibility) are shifted too, so every existing column keeps its
-        own width; the new columns get default ones. Raises `IndexError` if
+        they point at, a merged range straddling the insertion point grows,
+        what the file holds below the grid moves too, sideways. The column
+        definitions (`<table:table-column>`, which carry widths and
+        visibility) are shifted too, so every existing column keeps its own
+        width; the new columns get default ones. Raises `IndexError` if
         `col` is out of `0..n_cols`, `ValueError` if `count < 1`."""
         if count < 1:
             raise ValueError(f"count must be at least 1, got {count}")
@@ -1054,9 +1235,12 @@ class Sheet:
             self.rows[r][col:col] = [Cell(t, row=r, col=col + k, sheet=self) for k, t in enumerate(new_tags)]
             for c in range(col + count, len(self.rows[r])):
                 self.rows[r][c].col = c
+            row_tag = cast(Tag, self.rows[r][0].cell.parent)
+            self._give_back_cells(row_tag, count, self.n_cols + count)
         if self.n_rows > 0:
             self.n_cols += count
             self.size = (self.n_rows, self.n_cols)
+        self._insert_cells_past_grid(col, count)
         self._insert_column_definitions(col, count)
 
         for m_row, m_col, span_rows, span_cols in straddling:
@@ -1101,9 +1285,12 @@ class Sheet:
 
         Applications declare definitions up to the sheet's maximum width
         (an empty one repeated thousands of times after the last used
-        column): that trailing filler gives back the columns just added, or
-        the document would exceed the maximum and be truncated on open. No-op
-        when the definitions don't reach `col` at all."""
+        column): if they reach it, the definitions at the end give back the
+        columns just added, or the document would exceed the maximum and be
+        truncated on open (see `_FULL_WIDTHS`). Short of it, they stay: they
+        used to give back any definition past the data, and the formatted
+        columns there lost their widths. No-op when the definitions don't
+        reach `col` at all."""
         definitions = self.table.find_all("table:table-column", recursive=False)
         seen = 0
         for tag in definitions:
@@ -1122,13 +1309,11 @@ class Sheet:
             seen += n
         else:
             return
-        *head, last = self.table.find_all("table:table-column", recursive=False)
-        last_start = sum(int(t.attrs.get("table:number-columns-repeated", "1")) for t in head)
-        last_n = int(last.attrs.get("table:number-columns-repeated", "1"))
-        # only a filler lying entirely past the data (`n_cols` already counts
-        # the new columns) gives columns back, and it must keep at least one
-        if last is not new_tag and last_start >= self.n_cols and last_n > count:
-            _set_repeat(last, "table:number-columns-repeated", last_n - count)
+        attr = "table:number-columns-repeated"
+        definitions = self.table.find_all("table:table-column", recursive=False)
+        if sum(_repeat(t, attr) for t in definitions) - count in _FULL_WIDTHS:
+            after = next(k for k, t in enumerate(definitions) if t is new_tag) + 1
+            _give_back(definitions[after:], attr, count)
 
     def _remap_formula_references(self, remap: "Callable[[int, int], tuple[int, int]]") -> None:
         """After a structural edit of this sheet (rows or columns deleted or

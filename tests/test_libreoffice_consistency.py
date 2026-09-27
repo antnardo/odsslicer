@@ -20,11 +20,15 @@ import re
 
 import pytest
 from conftest import (
+    addresses_holding,
     document_in,
     empty_cells,
     libreoffice_shows,
+    note_cell,
     ods_with_sheet,
     requires_soffice,
+    saved_table,
+    shape_cell,
     table_row,
     text_cell,
 )
@@ -325,6 +329,39 @@ def test_libreoffice_shows_values_written_around_empty_columns_where_written(tmp
     table.sheet("Sheet1")["B1"].value = "b"
     table.save()
     assert libreoffice_shows(path, tmp_path) == [["a", "b", *[""] * 23, "new z"]]
+
+
+@requires_soffice
+def test_libreoffice_finds_what_lay_below_the_data_where_the_edits_moved_it(
+    tmp_path, libreoffice_export
+):
+    # issue #10: a note on A5 and a shape anchored at A6, in the last rows,
+    # went as soon as the sheet grew or rows were inserted
+    xml = (
+        '<table:table-column table:number-columns-repeated="3"/>'
+        + "".join(table_row(text_cell(str(v)), empty_cells(2)) for v in (1, 2, 3))
+        + table_row(empty_cells(3))
+        + table_row(note_cell("My note"), empty_cells(2))
+        + table_row(shape_cell("Box"), empty_cells(2))
+    )
+    src_dir = tmp_path / "src"  # the ods->ods conversion outputs into tmp_path
+    src_dir.mkdir()
+    path = ods_with_sheet(src_dir / "below.ods", xml)
+    table = ODSReader(path)
+    sheet = table.sheet("Sheet1")
+    sheet.insert_rows(1)  # the note to A6, the shape to A7
+    sheet.insert_columns(0)  # to B6 and B7
+    sheet["A10"].value = "below"
+    table.save()
+
+    exported = libreoffice_export(path, "ods")
+    shapes = addresses_holding(
+        saved_table(exported), lambda cell: cell.find("draw:rect", recursive=False) is not None
+    )
+    assert shapes == ["B7"]
+    reread = ODSReader(exported).sheet("Sheet1")
+    assert reread["B6"].comment.text == "My note"
+    assert reread["A10"].value == "below"
 
 
 @requires_soffice

@@ -19,10 +19,14 @@ import warnings
 import pytest
 from conftest import (
     FIXTURES_DIR,
+    addresses_holding,
     cells_with_content,
     document_in,
     empty_cells,
+    note_cell,
     ods_with_sheet,
+    saved_table,
+    shape_cell,
     table_row,
     text_cell,
 )
@@ -1094,6 +1098,301 @@ def _logical_cells_styled(path, style_name):
         for cell in r.find_all(TAG_CELL, recursive=False)
         if cell.get("table:style-name") == style_name
     )
+
+
+# ---------------------------------------------------------------------------
+# What the file holds below the grid (issue #10): a shape or a chart anchored
+# to a cell, a formatted cell, in rows the grid leaves out since no cell of
+# theirs holds content. It stays in the file whatever the edit, where
+# LibreOffice would have it. A note is content: the grid reaches it.
+# ---------------------------------------------------------------------------
+
+
+def _data_then_row_5(*cells):
+    """1, 2, 3 in A1:A3, row 4 empty and `cells` in row 5, as LibreOffice
+    writes a sheet whose last row holds no content: no filler after it."""
+    return (
+        '<table:table-column table:number-columns-repeated="3"/>'
+        + "".join(table_row(text_cell(str(v)), empty_cells(2)) for v in (1, 2, 3))
+        + table_row(empty_cells(3))
+        + table_row(*cells)
+    )
+
+
+def _is_shape(cell):
+    return cell.find("draw:rect", recursive=False) is not None
+
+
+def _is_yellow(cell):
+    return cell.get("table:style-name") == "yellow"
+
+
+def _is_note(cell):
+    return cell.find("office:annotation", recursive=False) is not None
+
+
+# edit -> where LibreOffice has a shape anchored at A5, a note on A5 and a
+# yellow C5 after the same edit, as its own UNO API makes it
+_ROW_5_EDITS = {
+    "write A8": (lambda s: setattr(s["A8"], "value", 8), "A5", "A5", "C5"),
+    "insert_rows(1)": (lambda s: s.insert_rows(1), "A6", "A6", "C6"),
+    "insert_rows(4)": (lambda s: s.insert_rows(4), "A6", "A6", "C6"),
+    "insert_rows(1, 3)": (lambda s: s.insert_rows(1, 3), "A8", "A8", "C8"),
+    "insert_columns(0)": (lambda s: s.insert_columns(0), "B5", "B5", "D5"),
+    "insert_columns(1, 2)": (lambda s: s.insert_columns(1, 2), "A5", "A5", "E5"),
+    # a shape stays at its address, in the cell taking the deleted one's
+    # place, and a note goes with its cell
+    "delete_column(0)": (lambda s: s.delete_column(0), "A5", None, "B5"),
+    "delete_rows([0])": (lambda s: s.delete_rows([0]), "A4", "A4", "C4"),
+}
+
+
+@pytest.mark.parametrize("edit", list(_ROW_5_EDITS))
+def test_a_shape_below_the_data_stays_where_libreoffice_has_it(tmp_path, edit):
+    # regression: writing past the data or inserting rows deleted it
+    change, shape_at, _, _ = _ROW_5_EDITS[edit]
+    xml = _data_then_row_5(shape_cell("Box"), empty_cells(2))
+    path = ods_with_sheet(tmp_path / "shape.ods", xml)
+    r = ODSReader(path)
+    assert r.sheet("Sheet1").size == (4, 3)  # row 5 holds no content
+    change(r.sheet("Sheet1"))
+    r.save()
+    assert addresses_holding(saved_table(path), _is_shape) == [shape_at]
+
+
+@pytest.mark.parametrize("edit", list(_ROW_5_EDITS))
+def test_a_formatted_cell_below_the_data_stays_where_libreoffice_has_it(tmp_path, edit):
+    change, _, _, yellow_at = _ROW_5_EDITS[edit]
+    xml = _data_then_row_5(empty_cells(2), empty_cells(style="yellow"))
+    path = ods_with_sheet(tmp_path / "yellow.ods", xml, _YELLOW_XML)
+    r = ODSReader(path)
+    change(r.sheet("Sheet1"))
+    r.save()
+    assert addresses_holding(saved_table(path), _is_yellow) == [yellow_at]
+
+
+@pytest.mark.parametrize("edit", list(_ROW_5_EDITS))
+def test_a_note_below_the_data_stays_where_libreoffice_has_it(tmp_path, edit):
+    change, _, note_at, _ = _ROW_5_EDITS[edit]
+    xml = _data_then_row_5(note_cell("My note"), empty_cells(2))
+    path = ods_with_sheet(tmp_path / "note.ods", xml)
+    r = ODSReader(path)
+    change(r.sheet("Sheet1"))
+    r.save()
+    expected = [note_at] if note_at else []
+    assert addresses_holding(saved_table(path), _is_note) == expected
+
+
+def test_a_note_below_the_data_is_in_the_grid(tmp_path):
+    # regression: its row was left out of the grid, and the note unreadable
+    xml = _data_then_row_5(note_cell("My note"), empty_cells(2))
+    s = ODSReader(ods_with_sheet(tmp_path / "note.ods", xml)).sheet("Sheet1")
+    assert s.size == (5, 3)
+    assert s["A5"].comment.text == "My note"
+    assert s["A5"].is_empty  # a note is not a value
+
+
+@pytest.mark.parametrize("gap", [24, 2000])
+def test_a_note_right_of_the_data_is_in_the_grid(tmp_path, gap):
+    # regression: more than 10 empty columns before it left it out of the
+    # grid, more than 1,000 out of the file
+    xml = (
+        f'<table:table-column table:number-columns-repeated="{gap + 2}"/>'
+        + table_row(text_cell("a"), empty_cells(gap), note_cell("far right"))
+        + table_row(text_cell("b"), empty_cells(gap + 1))
+    )
+    path = ods_with_sheet(tmp_path / "note.ods", xml)
+    r = ODSReader(path)
+    assert r.sheet("Sheet1").size == (2, gap + 2)
+    assert [len(row) for row in r.sheet("Sheet1").rows] == [gap + 2, gap + 2]
+    assert r.sheet("Sheet1")[0, gap + 1].comment.text == "far right"
+    r.save()
+    assert addresses_holding(saved_table(path), _is_note) == [
+        Sheet.string_address(0, gap + 1)
+    ]
+
+
+def test_a_note_far_below_the_data_is_in_the_grid(tmp_path):
+    xml = (
+        "<table:table-column/>"
+        + table_row(text_cell("a"))
+        + table_row(empty_cells(), repeat=1498)
+        + table_row(note_cell("far below"))
+    )
+    s = ODSReader(ods_with_sheet(tmp_path / "note.ods", xml)).sheet("Sheet1")
+    assert s.size == (1500, 1)
+    assert s["A1500"].comment.text == "far below"
+
+
+def test_writing_past_the_data_takes_back_the_rows_below_it(tmp_path):
+    xml = _data_then_row_5(shape_cell("Box"), empty_cells(2))
+    path = ods_with_sheet(tmp_path / "shape.ods", xml)
+    r = ODSReader(path)
+    r.sheet("Sheet1")["B5"].value = "beside"
+    r.sheet("Sheet1")["A8"].value = 8
+    r.save()
+    reread = ODSReader(path)
+    data = {"A1": "1", "A2": "2", "A3": "3"}
+    assert cells_with_content(reread.sheet("Sheet1")) == {**data, "B5": "beside", "A8": 8.0}
+    assert addresses_holding(saved_table(path), _is_shape) == ["A5"]
+
+
+# more than 1,000 empty rows between the data and a shape, which LibreOffice
+# writes as one element: the grid ends above them
+_FAR_BELOW_XML = (
+    "<table:table-column/>"
+    + table_row(text_cell("a"))
+    + table_row(empty_cells(), repeat=1498)
+    + table_row(shape_cell("Box"))
+)
+
+
+@pytest.mark.parametrize(
+    ("edit", "size", "shape_at"),
+    [
+        pytest.param(lambda s: s.insert_rows(0, 2), (3, 1), "A1502", id="insert_rows(0, 2)"),
+        # at the grid's end, before the rows it leaves out
+        pytest.param(lambda s: s.insert_rows(1, 2), (3, 1), "A1502", id="insert_rows(1, 2)"),
+        # taking back only the rows needed from the run of empty rows
+        pytest.param(lambda s: setattr(s["A10"], "value", "b"), (10, 1), "A1500", id="write A10"),
+        pytest.param(
+            lambda s: setattr(s["A1500"], "value", "b"), (1500, 1), "A1500", id="write A1500"
+        ),
+    ],
+)
+def test_a_shape_far_below_the_data_stays_where_libreoffice_has_it(
+    tmp_path, edit, size, shape_at
+):
+    # regression: deleted; and the empty rows above it must not give back the
+    # rows inserted, which would move it up: the sheet is far from full
+    path = ods_with_sheet(tmp_path / "far.ods", _FAR_BELOW_XML)
+    r = ODSReader(path)
+    assert r.sheet("Sheet1").size == (1, 1)
+    edit(r.sheet("Sheet1"))
+    assert r.sheet("Sheet1").size == size
+    r.save()
+    assert addresses_holding(saved_table(path), _is_shape) == [shape_at]
+
+
+@pytest.mark.parametrize("grouped", ["the grid's last row", "the rows past it"])
+@pytest.mark.parametrize(
+    ("edit", "shape_at", "content"),
+    [
+        pytest.param(
+            lambda s: s.insert_rows(1), "A6", {"A1": "1", "A3": "2", "A4": "3"}, id="insert_rows(1)"
+        ),
+        pytest.param(
+            lambda s: setattr(s["A8"], "value", 8),
+            "A5",
+            {"A1": "1", "A2": "2", "A3": "3", "A8": 8.0},
+            id="write A8",
+        ),
+        pytest.param(
+            lambda s: s.insert_columns(0),
+            "B5",
+            {"B1": "1", "B2": "2", "B3": "3"},
+            id="insert_columns(0)",
+        ),
+    ],
+)
+def test_a_shape_below_the_data_in_a_group_of_rows(tmp_path, grouped, edit, shape_at, content):
+    # LibreOffice writes rows grouped with Data > Group inside an element of
+    # their own: what lies past the grid is looked for across groups
+    data = "".join(table_row(text_cell(str(v)), empty_cells(2)) for v in (1, 2, 3))
+    row_4, row_5 = table_row(empty_cells(3)), table_row(shape_cell("Box"), empty_cells(2))
+    if grouped == "the grid's last row":
+        rows = data + f"<table:table-row-group>{row_4}</table:table-row-group>" + row_5
+    else:
+        rows = data + row_4 + f"<table:table-row-group>{row_5}</table:table-row-group>"
+    xml = '<table:table-column table:number-columns-repeated="3"/>' + rows
+    path = ods_with_sheet(tmp_path / "grouped.ods", xml)
+    r = ODSReader(path)
+    assert r.sheet("Sheet1").size == (4, 3)
+    edit(r.sheet("Sheet1"))
+    r.save()
+    assert addresses_holding(saved_table(path), _is_shape) == [shape_at]
+    assert cells_with_content(ODSReader(path).sheet("Sheet1")) == content
+
+
+def test_insertions_keep_a_full_size_sheet_full_size(tmp_path):
+    # rows and columns padded to 1,048,576 x 16,384 as LibreOffice and Excel
+    # write them: the rows past the grid used to be skipped by column
+    # insertions, and deleted by row insertions
+    xml = (
+        '<table:table-column table:number-columns-repeated="16384"/>'
+        + table_row(text_cell("a"), empty_cells(16383))
+        + table_row(empty_cells(16384), repeat=1_048_574)
+        + table_row(empty_cells(16384))
+    )
+    path = ods_with_sheet(tmp_path / "full.ods", xml)
+    r = ODSReader(path)
+    s = r.sheet("Sheet1")
+    s.insert_rows(0, 2)
+    s["B10"].value = "b"  # rows 4 to 10 taken back from the filler, full width
+    s.insert_columns(0, 3)
+    r.save()
+    assert cells_with_content(ODSReader(path).sheet("Sheet1")) == {"D3": "a", "E10": "b"}
+    rows = saved_table(path).find_all("table:table-row")
+    assert sum(_repeat(row, "table:number-rows-repeated") for row in rows) == 1_048_576
+    widths = [
+        sum(_repeat(c, "table:number-columns-repeated") for c in row.find_all(TAG_CELL, recursive=False))
+        for row in rows
+    ]
+    # the rows taken back into the grid, from the filler, are full width too
+    assert widths[3:] == [16_384] * (len(rows) - 3)
+
+
+def test_inserting_columns_keeps_the_formatted_cells_past_the_data(tmp_path):
+    # far from the sheet's maximum width, the rows give nothing back
+    path = ods_with_sheet(
+        tmp_path / "formatted.ods", _FORMATTED_PAST_DATA_XML, _YELLOW_XML
+    )
+    r = ODSReader(path)
+    r.sheet("Sheet1").insert_columns(0, 2)
+    r.save()
+    yellow = addresses_holding(saved_table(path), _is_yellow)
+    # D:R moved to F:T, on both rows
+    assert yellow == [Sheet.string_address(r, c) for r in (0, 1) for c in range(5, 20)]
+
+
+def test_inserting_a_column_into_a_row_as_wide_as_the_sheet_keeps_the_grid(tmp_path):
+    # a note in XFD, the last column: nothing lies past the grid to give
+    # back, and the grid's own cells must keep their elements
+    xml = '<table:table-column table:number-columns-repeated="16384"/>' + table_row(
+        text_cell("a"), empty_cells(16382), note_cell("last column")
+    )
+    path = ods_with_sheet(tmp_path / "wide.ods", xml)
+    r = ODSReader(path)
+    s = r.sheet("Sheet1")
+    assert s.size == (1, 16384)
+    s.insert_columns(0)
+    r.save()
+    reread = ODSReader(path).sheet("Sheet1")
+    assert reread.size == s.size == (1, 16385)
+    assert reread[0, 1].value == "a"
+    assert reread[0, 16384].comment.text == "last column"
+
+
+def test_inserting_columns_keeps_the_definitions_past_the_data(tmp_path):
+    # regression: the last definition gave the inserted columns back though
+    # the sheet was far from its maximum width, and the columns it defines
+    # lost their width
+    xml = (
+        '<table:table-column table:number-columns-repeated="3"/>'
+        '<table:table-column table:style-name="wide" table:number-columns-repeated="15"/>'
+        + table_row(text_cell("a"), text_cell("b"), text_cell("c"), empty_cells(15))
+    )
+    wide = (
+        '<style:style style:name="wide" style:family="table-column">'
+        '<style:table-column-properties style:column-width="5cm"/></style:style>'
+    )
+    path = ods_with_sheet(tmp_path / "wide.ods", xml, wide)
+    r = ODSReader(path)
+    r.sheet("Sheet1").insert_columns(0, 2)
+    r.save()
+    s = ODSReader(path).sheet("Sheet1")
+    styles = [s.column_style(col) for col in (4, 5, 19, 20)]
+    assert [style.width if style else None for style in styles] == [None, "5cm", "5cm", None]
 
 
 def test_save_round_trip(writable_reader, tmp_path):

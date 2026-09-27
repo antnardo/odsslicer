@@ -3,6 +3,7 @@ import csv
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 # Make the `odsslicer` package importable when running `pytest` straight from a
@@ -14,6 +15,7 @@ import pytest
 from bs4 import BeautifulSoup, Tag
 
 from odsslicer import ODSReader
+from odsslicer.addresses import string_address
 from odsslicer.xmlutils import _ODF_NAMESPACES
 
 FIXTURES_DIR = Path(__file__).resolve().parent
@@ -128,10 +130,19 @@ def libreoffice_shows(ods_path, outdir):
         return list(csv.reader(f))
 
 
+# the namespaces `_fragment` declares on top of odsslicer's own: those of what
+# a cell may hold anchored to it, which the blank document declares too
+_FRAGMENT_NAMESPACES = {
+    **_ODF_NAMESPACES,
+    "draw": "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0",
+    "svg": "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0",
+}
+
+
 def _fragment(xml):
     """The top-level elements of an ODF XML fragment, detached."""
     declarations = " ".join(
-        f'xmlns:{prefix}="{uri}"' for prefix, uri in _ODF_NAMESPACES.items()
+        f'xmlns:{prefix}="{uri}"' for prefix, uri in _FRAGMENT_NAMESPACES.items()
     )
     soup = BeautifulSoup(f"<fragment {declarations}>{xml}</fragment>", "xml")
     root = soup.find("fragment")
@@ -179,6 +190,57 @@ def text_cell(text):
         '<table:table-cell office:value-type="string">'
         f"<text:p>{text}</text:p></table:table-cell>"
     )
+
+
+def note_cell(text):
+    """An empty cell with a note, as `table_xml` for `ods_with_sheet`."""
+    return (
+        "<table:table-cell><office:annotation><dc:creator>me</dc:creator>"
+        f"<text:p>{text}</text:p></office:annotation></table:table-cell>"
+    )
+
+
+def shape_cell(name):
+    """An empty cell with a rectangle anchored to it, as LibreOffice writes a
+    shape or a chart anchored "to cell"."""
+    return (
+        f'<table:table-cell><draw:rect draw:name="{name}" svg:width="3cm"'
+        ' svg:height="1cm" svg:x="0cm" svg:y="0cm"><text:p/></draw:rect>'
+        "</table:table-cell>"
+    )
+
+
+def saved_table(path, index=0):
+    """The `<table:table>` element number `index` of the file at `path`, as
+    saved: parsed from its content.xml, where `ODSReader` would first clamp
+    the rows of the grid to its width."""
+    with zipfile.ZipFile(path) as package:
+        content = BeautifulSoup(package.read("content.xml"), "xml")
+    return content.find_all("table:table")[index]
+
+
+def addresses_holding(table, test):
+    """The addresses of the cells of `table`, a `<table:table>` element, whose
+    element passes `test`, where the file lays them out: a repeated element
+    counts once for every row and column it stands for."""
+    found = []
+    row = 0
+    for row_tag in table.find_all("table:table-row"):
+        rows = int(row_tag.get("table:number-rows-repeated", "1"))
+        col = 0
+        for cell in row_tag.find_all(
+            ["table:table-cell", "table:covered-table-cell"], recursive=False
+        ):
+            cols = int(cell.get("table:number-columns-repeated", "1"))
+            if test(cell):
+                found += [
+                    string_address(r, c)
+                    for r in range(row, row + rows)
+                    for c in range(col, col + cols)
+                ]
+            col += cols
+        row += rows
+    return found
 
 
 def empty_cells(repeat=1, style=None):

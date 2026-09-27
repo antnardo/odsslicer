@@ -7,6 +7,26 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Fixed
+
+- **What the rows below the data hold is no longer deleted when the sheet grows or rows are
+  inserted** ([#10](https://github.com/antnardo/odsslicer/issues/10)). A last row where no
+  cell holds a value — one with a chart or a shape anchored to a cell, a formatted cell — was
+  left out of the grid, then deleted from the file as soon as the sheet grew or a row was
+  inserted, anywhere; so was whatever lay below more than 1,000 empty rows. A report template
+  lost the chart anchored below its table as soon as a day was added. Writing past the data
+  now takes those rows back with what they hold, and inserting rows moves them down; inserting
+  or deleting columns moves what they hold sideways, where it stayed put. Everything lands
+  where LibreOffice puts it for the same edit.
+- **A note counts as content, as in LibreOffice**: the grid reaches a note on an empty cell
+  below or right of the data, and `cell.comment` reads it, where it gave `None` — `sheet.size`
+  grows accordingly. A note more than 1,000 empty columns right of the data was deleted from
+  the file by a plain save.
+- Inserting columns into a sheet far from its maximum width no longer takes them off the
+  column definitions past the data, whose columns lost their widths. A sheet padded to its
+  application's full size, 1,048,576 rows by 16,384 columns (1,024 before LibreOffice 7.4),
+  still gives back what an insertion adds, so as not to exceed it.
+
 ### Changed
 
 - The PyPI page lists the same keywords as the repository's GitHub topics, so a search for
