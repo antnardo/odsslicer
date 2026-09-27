@@ -932,6 +932,7 @@ class CellStyle:
         if fmt is None:
             tag.attrs.pop("style:data-style-name", None)
             self._number_format = None
+            self._cell._read_by_format()
             return
         if isinstance(fmt, NumberFormat):
             name = fmt.name
@@ -944,6 +945,7 @@ class CellStyle:
             raise ValueError(f"no number format named {name!r} exists in this document")
         tag.attrs["style:data-style-name"] = name
         self._number_format = NumberFormat(number_tag, reader=self._cell.sheet.reader)
+        self._cell._read_by_format()
 
     def __repr__(self) -> str:
         return (

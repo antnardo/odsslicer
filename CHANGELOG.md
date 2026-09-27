@@ -101,8 +101,8 @@ still change between minor versions.
   length** ([#20](https://github.com/antnardo/odsslicer/issues/20)): 7 h 30 in a `[HH]:MM`
   cell read as `time(7, 30)`, as any value within a day did, so that a timesheet's column of
   durations mixed `time` and `timedelta`. A `timedelta` written into a cell with no format,
-  which gets `[HH]:MM:SS`, now reads back as a `timedelta`. A value within a day in any other
-  format still reads as a `time`. `Sheet.copy` and `Sheet.sort` give a cell its format before
+  which gets `[HH]:MM:SS`, now reads back as a `timedelta`, and giving a cell another format
+  reads its value again. A value within a day in any other format still reads as a `time`. `Sheet.copy` and `Sheet.sort` give a cell its format before
   its value, which reads back through it.
 - **Writing into a merge's master cell keeps the merge**
   ([#19](https://github.com/antnardo/odsslicer/issues/19)), as typing into it does in

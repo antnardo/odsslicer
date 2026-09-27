@@ -2098,6 +2098,43 @@ def test_a_time_value_reads_as_its_format_says(tmp_path):
     assert [s[0, col].value for col in range(5)] == [duration, clock, clock, duration, duration]
 
 
+@pytest.mark.parametrize(
+    ("change", "address", "expected"),
+    [
+        pytest.param(
+            lambda s: setattr(s["B1"].style, "number_format", "Nelapsed"),
+            "B1",
+            dt.timedelta(hours=7, minutes=30),
+            id="number_format made [HH]:MM",
+        ),
+        pytest.param(
+            lambda s: setattr(s["A1"].style, "number_format", "Nclock"),
+            "A1",
+            dt.time(7, 30),
+            id="number_format made HH:MM",
+        ),
+        pytest.param(
+            lambda s: setattr(s["A1"].style, "number_format", None),
+            "A1",
+            dt.time(7, 30),
+            id="number_format cleared",
+        ),
+        pytest.param(
+            lambda s: setattr(s["B1"], "style", s["A1"]), "B1", dt.timedelta(hours=7, minutes=30), id="style"
+        ),
+        pytest.param(lambda s: setattr(s["A1"], "style", None), "A1", dt.time(7, 30), id="style cleared"),
+    ],
+)
+def test_a_time_value_reads_as_its_new_format_says(tmp_path, change, address, expected):
+    # regression: the value kept the type its first format gave it until the
+    # file was saved and read again
+    xml = table_row(_time_cell("elapsed"), _time_cell("clock"))
+    s = ODSReader(ods_with_sheet(tmp_path / "times.ods", xml, _ELAPSED_STYLES)).sheet("Sheet1")
+    change(s)
+    assert s[address].value == expected
+    assert type(s[address].value) is type(expected)
+
+
 def test_an_aware_datetime_is_written_in_utc(writable_reader):
     s = writable_reader.sheet("Sheet1")
     s["A8"].value = dt.datetime(

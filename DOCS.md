@@ -183,7 +183,8 @@ reads as a time of day when it is shorter than one and its format shows a time o
 - A duration reads as a `timedelta` in a format counting time in full — `[HH]:MM:SS`, as
   LibreOffice writes an elapsed time, and as odsslicer formats a `timedelta` written into a
   cell with no format — and whenever it is 24 hours or more, or negative; as a `time` when it
-  lies within a day, in any other format. A `timedelta` written reads back as one.
+  lies within a day, in any other format. A `timedelta` written reads back as one, and a
+  new format — `cell.style.number_format`, `cell.style` — reads the value again.
 - One column can therefore mix `time` and `timedelta`, and a column of date-times can mix
   `datetime` and `date`: LibreOffice saves a date-time falling on midnight as a bare date.
   `Sheet.sort` orders either mix.

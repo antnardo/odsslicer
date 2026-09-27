@@ -640,6 +640,17 @@ class Cell:
             reader._elapsed_formats[name] = elapsed
         return reader._elapsed_formats[name]
 
+    def _read_by_format(self) -> None:
+        """Read a time value again once the cell's format has changed, as
+        `__init__` reads it: a duration in a format counting time in full,
+        and a time of day if it fits in a day in any other (issue #20)."""
+        if self.format != "time" or self.raw_value is None or self._unreadable is not None:
+            return
+        value: Any = _parse_time_value(self.raw_value)
+        if isinstance(value, dt.time) and self._counts_elapsed_time():
+            value = _as_timedelta(value)
+        self._value = value
+
     def _number_format_at(self, tag: Tag) -> "str | None":
         """The name of the number format the cell element `tag` shows with:
         its own style's, else its column's default cell style's, following
@@ -994,6 +1005,7 @@ class Cell:
             self.attrs.pop("table:style-name", None)
         else:
             self.attrs["table:style-name"] = name
+        self._read_by_format()
 
     def _style_name(self) -> "str | None":
         """The name of the style this cell shows with: its own
