@@ -90,6 +90,11 @@ still change between minor versions.
 
 ### Changed
 
+- **DOCS.md no longer says that LibreOffice recomputes every formula on open**
+  ([#18](https://github.com/antnardo/odsslicer/issues/18)). At its default setting, it
+  recomputes the formulas with no cached result, the volatile ones, and those in a cell with
+  no style at all: a total in bold whose inputs `odsslicer` changed shows its old result
+  without `save(recalculate=True)`.
 - The PyPI page lists the same keywords as the repository's GitHub topics, so a search for
   what the package does finds it.
 

@@ -871,14 +871,15 @@ follows was verified with LibreOffice 25.8.4 on macOS, and against its source co
   Convert into another folder, check that the output exists, then move it over the original.
 - **What gets recalculated on load.** Formulas without a cached result — every formula whose
   text `odsslicer` rewrote — and volatile functions (`NOW()`, `RAND()`, `INDIRECT()`,
-  `OFFSET()`…) always are. The others depend on *Tools > Options > LibreOffice Calc > Formula >
-  Recalculation on File Load > ODF spreadsheet (not saved by LibreOffice)*, which defaults to
-  *Never recalculate*. *Always recalculate* (`ODFRecalcMode` = `0` in the profile) forces a
-  full recalculation of every ODF file on load — files saved by LibreOffice included, whatever
-  the label says: only *Prompt user* looks at which program saved the file. LibreOffice 25.8.4
-  recomputed every formula even without it in our tests, but its documentation says a file it
-  saved itself keeps its cached results under *Never recalculate*: set *Always recalculate*
-  rather than rely on either. No command-line switch sets it; it lives in the user profile.
+  `OFFSET()`…) always are, and so are formulas in a cell with no style at all, of its own or of
+  its column: LibreOffice computes them to find them a number format. The others keep their
+  cached results — stale, if `odsslicer` changed a value they read: a total in bold, a formula
+  in a column formatted as a whole — unless *Tools > Options > LibreOffice Calc > Formula >
+  Recalculation on File Load > ODF spreadsheet (not saved by LibreOffice)* says otherwise; it
+  defaults to *Never recalculate*. *Always recalculate* (`ODFRecalcMode` = `0` in the profile)
+  forces a full recalculation of every ODF file on load — files saved by LibreOffice included,
+  whatever the label says: only *Prompt user* looks at which program saved the file. No
+  command-line switch sets it; it lives in the user profile.
 - **A profile of its own.** `-env:UserInstallation=file:///…` points LibreOffice at a separate
   profile: that is how to pass the setting above without changing your own, and it keeps the
   run independent of a LibreOffice already open on your desktop.
@@ -1328,8 +1329,11 @@ reading *and rewriting* documents whose formatting must survive.
   evaluated by `odsslicer` (`.value` is `None` until a spreadsheet application recalculates),
   and pivot tables are written as definitions only. Use
   [`recalculate()` / `save(recalculate=True)`](#7-recalculating-with-libreoffice) to have a
-  local LibreOffice compute both; without it, a real application recomputes formulas on open,
-  but a pivot table needs an explicit refresh. Formulas that read another workbook come back
+  local LibreOffice compute both. Without it, LibreOffice recomputes on open only the formulas
+  with no cached result — those `odsslicer` wrote or rewrote — the volatile ones, and those in
+  a cell with no style at all, its own or its column's: a styled total whose inputs changed
+  shows its old result, unless LibreOffice is set to recalculate on load (see [From the
+  command line](#from-the-command-line)). A pivot table needs an explicit refresh. Formulas that read another workbook come back
   as `Err:540` from a headless recalculation, unless `recalculate()` updates links
   (`update_links=True`, for workbooks you trust) — see
   [References to other workbooks](#references-to-other-workbooks).
