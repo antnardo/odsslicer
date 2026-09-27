@@ -78,6 +78,14 @@ def _holds_content(cell: Cell) -> bool:
 _DRAWING_PREFIXES = frozenset({"draw", "dr3d"})
 
 
+def _carries_formatting(cell_tag: Tag) -> bool:
+    """True if the element says anything about the cell beyond how many
+    columns it stands for - a style, most of all. Such a cell holds no
+    content, yet deleting it loses the formatting of a row formatted as a
+    whole (issue #23)."""
+    return bool(set(cell_tag.attrs) - {"table:number-columns-repeated"})
+
+
 def _drawings_in(cell_tag: Tag) -> "list[Tag]":
     """What is anchored in `cell_tag`: a chart, a shape, an image."""
     return [
@@ -353,10 +361,17 @@ class Sheet:
     ) -> "list[Tag]":
         """Rewrite one row's XML so its total width is exactly `real_width`
         cells, touching only its trailing run of *empty* cells: a huge grid
-        filler (see `load`) has its repeat count reduced (cells beyond it
-        removed), and a row that falls short is padded with a blank repeated
-        cell. Rows already the right width come back untouched. Returns the
-        row's cell tags after the rewrite."""
+        filler (see `load`) has its repeat count reduced, and a row that falls
+        short is padded with a blank repeated cell. Rows already the right
+        width come back untouched. Returns the row's cell tags of the grid,
+        after the rewrite.
+
+        What a trailing cell says about itself is kept: one carrying a style
+        stays in the file, out of the grid, where it used to be deleted -
+        LibreOffice writes a row formatted as a whole as its cells followed by
+        one repeated to the last column, and a plain save dropped that
+        formatting (issue #23). `grow_to` takes such a cell back into the grid,
+        formatting and all, when the sheet widens (issue #6)."""
         suffix_start = len(cells_bs)
         while suffix_start > 0 and not _holds_content(Cell(cells_bs[suffix_start - 1])):
             suffix_start -= 1
@@ -378,13 +393,20 @@ class Sheet:
             )
             keep = cells_bs[:k]
             if missing > 0:
-                if missing == 1:
-                    cell.attrs.pop("table:number-columns-repeated", None)
-                else:
-                    cell.attrs["table:number-columns-repeated"] = str(missing)
+                _set_repeat(cell, "table:number-columns-repeated", missing)
                 keep.append(cell)
-            for extra in cells_bs[k if missing <= 0 else k + 1:]:
-                extra.decompose()
+                remainder = n_cols - missing
+                if remainder > 0 and _carries_formatting(cell):
+                    # the part past the grid keeps saying what it says
+                    tail = copy.deepcopy(cell)
+                    _set_repeat(tail, "table:number-columns-repeated", remainder)
+                    cell.insert_after(tail)
+                dropped = cells_bs[k + 1 :]
+            else:
+                dropped = cells_bs[k:]
+            for extra in dropped:
+                if not _carries_formatting(extra):
+                    extra.decompose()
             return keep
         if width < real_width:
             pad = self._empty_cell_template()

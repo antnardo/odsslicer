@@ -22,6 +22,7 @@ import pytest
 from bs4 import BeautifulSoup
 
 from conftest import (
+    FIXTURES_DIR,
     PRINT_TITLE_WIDTHS_XML,
     PRINT_TITLE_XML,
     addresses_holding,
@@ -41,6 +42,7 @@ from conftest import (
     with_chart,
 )
 from odsslicer import ODSReader
+from odsslicer.sheet import _repeat
 from odsslicer.classes import Border, NumberFormat
 
 
@@ -501,6 +503,39 @@ def test_libreoffice_shows_named_and_fractional_dates_as_odsslicer_writes_them(t
         "26:01:00,00",
     ]
     assert libreoffice_shows(path, tmp_path) == [written]
+
+
+@requires_soffice
+@pytest.mark.parametrize("edit", ["none", "read", "write past the row"])
+def test_libreoffice_still_sees_a_whole_row_and_column_formatted(tmp_path, libreoffice_export, edit):
+    # issue #23: loading clamped each row to the sheet's width and deleted what
+    # followed, so a plain save dropped the formatting of a row formatted as a
+    # whole - LibreOffice writes it as the row's cells plus one repeated to the
+    # last column. WHOLEROW.ods is LibreOffice's own file: numbers in A1:C3,
+    # the whole of row 1 yellow, the whole of column F green.
+    source = FIXTURES_DIR / "WHOLEROW.ods"
+    out = tmp_path / "wholerow.ods"
+    out.write_bytes(source.read_bytes())
+    table = ODSReader(out)
+    if edit != "none":
+        table.sheets[0]["A1"].value  # noqa: B018  - loading the sheet is the edit
+    if edit == "write past the row":
+        table.sheets[0]["H1"].value = "x"
+    table.save()
+
+    fods = BeautifulSoup(libreoffice_export(out, "fods").read_text(encoding="utf-8"), "xml")
+    backgrounds = {
+        style["style:name"]: style.find("style:table-cell-properties").get("fo:background-color")
+        for style in fods.find_all("style:style", attrs={"style:family": "table-cell"})
+        if style.find("style:table-cell-properties") is not None
+    }
+    rows = fods.find("table:table").find_all("table:table-row")
+    yellow = sum(
+        _repeat(cell, "table:number-columns-repeated")
+        for cell in rows[0].find_all(["table:table-cell", "table:covered-table-cell"])
+        if backgrounds.get(cell.get("table:style-name")) == "#ffff00"
+    )
+    assert yellow > 16000, f"LibreOffice sees {yellow} yellow cells in row 1"
 
 
 @requires_soffice

@@ -1309,6 +1309,65 @@ def test_a_shape_inside_the_data_survives_the_deletion_of_its_row_or_column(tmp_
     assert addresses_holding(saved_table(path), _is_shape) == [shape_at]
 
 
+_WHOLE_ROW_YELLOW = (
+    '<style:style style:name="yellow" style:family="table-cell">'
+    '<style:table-cell-properties fo:background-color="#ffff00"/></style:style>'
+)
+
+
+def _whole_row_yellow_sheet(tmp_path, name="wholerow.ods"):
+    """A sheet whose first row is yellow as a whole, as LibreOffice writes it:
+    its three cells, then one repeated to the sheet's last column."""
+    xml = '<table:table-column table:number-columns-repeated="3"/>' + table_row(
+        text_cell("a"), text_cell("b"), text_cell("c"), empty_cells(16381, style="yellow")
+    ) + table_row(text_cell("d"), empty_cells(2))
+    return ods_with_sheet(tmp_path / name, xml, _WHOLE_ROW_YELLOW)
+
+
+def _yellow_count(path):
+    return len(addresses_holding(saved_table(path), _is_yellow))
+
+
+def test_a_whole_rows_formatting_survives_a_plain_save(tmp_path):
+    # regression (issue #23): loading clamps a row to the sheet's width and
+    # used to delete what followed - a formatted cell holding nothing counted
+    # as empty, so reading a sheet and saving it dropped the formatting of a
+    # row formatted as a whole. No edit needed: reading was enough.
+    path = _whole_row_yellow_sheet(tmp_path)
+    assert _yellow_count(path) == 16381
+    table = ODSReader(path)
+    assert table.sheet("Sheet1").size == (2, 3)  # the formatting stays out of the grid
+    table.save()
+    assert _yellow_count(path) == 16381
+
+
+def test_a_whole_rows_formatting_comes_back_into_the_grid_when_it_widens(tmp_path):
+    # the counterpart: what the file keeps past the grid is taken back with
+    # its formatting when the sheet widens (issue #6's machinery)
+    path = _whole_row_yellow_sheet(tmp_path, "widen.ods")
+    table = ODSReader(path)
+    table.sheet("Sheet1")["E1"].value = "x"
+    table.save()
+    reread = ODSReader(path).sheet("Sheet1")
+    assert reread.size == (2, 5)
+    assert reread["D1"].style.background_color == "#ffff00"
+    assert _yellow_count(path) == 16381
+
+
+def test_a_plain_unformatted_filler_is_still_left_out(tmp_path):
+    # the padding itself says nothing about its cells, and still goes: it is
+    # what keeps the grid from materialising 16,384 columns per row
+    xml = '<table:table-column table:number-columns-repeated="3"/>' + table_row(
+        text_cell("a"), text_cell("b"), text_cell("c"), empty_cells(16381)
+    )
+    path = ods_with_sheet(tmp_path / "plain.ods", xml)
+    table = ODSReader(path)
+    assert table.sheet("Sheet1").size == (1, 3)
+    table.save()
+    row = saved_table(path).find("table:table-row")
+    assert sum(_repeat(c, "table:number-columns-repeated") for c in row.find_all(TAG_CELL)) == 3
+
+
 def test_inserted_columns_take_the_width_of_the_column_they_push_right(writable_reader):
     # issue #25: they took the default width, where LibreOffice repeats the
     # definition of the column they push right - its width, its visibility,
