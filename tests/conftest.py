@@ -5,6 +5,7 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from xml.sax.saxutils import quoteattr
 
 # Make the `odsslicer` package importable when running `pytest` straight from a
 # checkout, without an editable install. This file lives at <repo>/tests/conftest.py
@@ -190,6 +191,19 @@ def text_cell(text):
         '<table:table-cell office:value-type="string">'
         f"<text:p>{text}</text:p></table:table-cell>"
     )
+
+
+def formula_cell(formula):
+    """A cell holding `formula`, ODF syntax and prefix included, with no
+    cached result, as `table_xml` for `ods_with_sheet`: written as
+    LibreOffice writes it, where the `formula` setter would expand its
+    braces."""
+    return f"<table:table-cell table:formula={quoteattr(formula)}/>"
+
+
+def number_cell(number):
+    """A float cell, as `table_xml` for `ods_with_sheet`."""
+    return f'<table:table-cell office:value-type="float" office:value="{number}"/>'
 
 
 def note_cell(text):

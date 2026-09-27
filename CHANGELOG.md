@@ -81,6 +81,14 @@ still change between minor versions.
   space before it in every document, `50 %` in en-US, where LibreOffice writes `50%`. And the
   text written from any percentage or currency format follows the format's own text, where a
   space before the sign or the symbol was taken for granted.
+- **An edit no longer rewrites a formula holding braces into another**
+  ([#22](https://github.com/antnardo/odsslicer/issues/22)). Inserting or deleting rows or
+  columns, `copy`, `sort`, `fill_formula` and `rename_sheet` took the braces of the formulas
+  they rewrote for the `{r}`/`{c}` placeholders of `cell.formula`: once a row was inserted
+  above them, `="{"&A6&"}"` became the text `&[.A7]&`, a formula writing LaTeX lost its
+  braces, and an inline array raised `SyntaxError`, leaving the formulas after it unadjusted.
+  They now change the references alone.
+
 ### Added
 
 - **`NumberFormat.create(..., elapsed=True)`** makes an elapsed-time format, LibreOffice's

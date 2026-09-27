@@ -515,7 +515,7 @@ class ODSReader:
                         continue
                     renamed = _rename_odf_formula_sheet(cell.formula, old_name, new_name)
                     if renamed != cell.formula:
-                        cell.formula = renamed
+                        cell._write_formula(renamed)
         self._rename_drawing_references(old_name, new_name)
 
     def move_sheet(self, name: str, index: int) -> None:

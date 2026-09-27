@@ -663,7 +663,7 @@ class Sheet:
                 if target._style_name() != style_name:
                     target.style = style_name
                 if formula is not None:
-                    target.formula = _shift_odf_formula(formula, drow, dcol)
+                    target._write_formula(_shift_odf_formula(formula, drow, dcol))
                 else:
                     target.value = value
 
@@ -732,7 +732,7 @@ class Sheet:
                 if target._style_name() != style_name:  # as in `copy`
                     target.style = style_name
                 if formula is not None:
-                    target.formula = _shift_odf_formula(formula, drow, 0)
+                    target._write_formula(_shift_odf_formula(formula, drow, 0))
                 else:
                     target.value = value
 
@@ -1370,7 +1370,7 @@ class Sheet:
                         continue
                     adjusted = _remap_odf_formula_references(cell._formula, self.name, sheet.name, remap)
                     if adjusted != cell._formula:
-                        cell.formula = adjusted
+                        cell._write_formula(adjusted)
         self.reader._remap_drawing_references(self.name, remap)
 
     def __repr__(self) -> str:

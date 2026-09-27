@@ -717,6 +717,10 @@ Escape literal braces (e.g. an array constant `{1,2,3}`) by doubling them, like
 sheet["A1"].formula = "SUM({{1,2,3}})"   # -> "of:=SUM({1,2,3})"
 ```
 
+Only what you write is expanded: a formula read from the file keeps its braces, text or an
+inline array, when an edit rewrites its references — structural edits, `copy`, `sort`,
+`fill_formula`, `rename_sheet`.
+
 ### Formula references follow structural edits
 
 Several operations rewrite formulas so they keep pointing at the same cells:

@@ -28,8 +28,10 @@ from conftest import (
     chart_frame,
     document_in,
     empty_cells,
+    formula_cell,
     libreoffice_shows,
     note_cell,
+    number_cell,
     ods_with_sheet,
     requires_soffice,
     saved_table,
@@ -563,6 +565,28 @@ def test_libreoffice_computes_references_to_other_sheets_after_edits(tmp_path):
     path = tmp_path / "references.ods"
     table.save(path)
     assert libreoffice_shows(path, tmp_path) == [["5", "15", "50"]]
+
+
+@requires_soffice
+def test_libreoffice_computes_formulas_holding_braces_after_edits(tmp_path):
+    # issue #22: once a row was inserted, "{"&A6&"}" became the text
+    # "&[.A7]&", and an inline array raised SyntaxError
+    formulas = [
+        'of:="{"&[.A6]&"}"',
+        'of:="\\textbf{"&[.A6]&"}"',
+        "of:=SUMPRODUCT([.A6:.A8];{1|2|3})",
+        'of:="{{"&[$Other.A10]&"}}"',
+    ]
+    xml = "".join(table_row(empty_cells(), formula_cell(formula)) for formula in formulas)
+    xml += table_row(empty_cells()) + "".join(table_row(number_cell(n)) for n in (1, 2, 3))
+    path = ods_with_sheet(tmp_path / "braces.ods", xml)
+    table = ODSReader(path)
+    table.add_sheet("Other")["A10"].value = "x"
+    table.sheet("Sheet1").insert_rows(0)
+    table.rename_sheet("Other", "Autre")
+    table.save()
+    shows = libreoffice_shows(path, tmp_path)
+    assert [row[1] for row in shows[1:5]] == ["{1}", "\\textbf{1}", "14", "{{x}}"]
 
 
 @requires_soffice

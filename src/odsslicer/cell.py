@@ -492,6 +492,17 @@ class Cell:
 
     @formula.setter
     def formula(self, new_formula: "str | None") -> None:
+        if new_formula is not None:
+            expanded, restore_escapes = _expand_formula_template(new_formula, self.row, self.col)
+            new_formula = restore_escapes(_normalize_odf_formula(expanded))
+        self._write_formula(new_formula)
+
+    def _write_formula(self, formula: "str | None") -> None:
+        """Write `formula` as `table:formula` holds it, in ODF syntax with
+        its prefix, where the `formula` setter expands and translates what a
+        user writes. The edits that rewrite a formula read from the file
+        come here: its braces are text or an inline array, never a `{r}`
+        placeholder, which the setter would evaluate (issue #22)."""
         self._prepare_for_write()
         tag = self.cell
 
@@ -501,13 +512,11 @@ class Cell:
         tag.attrs.pop("calcext:value-type", None)
         self._set_text(None)  # any previously cached/displayed value would now be stale
 
-        if new_formula is None:
+        if formula is None:
             tag.attrs.pop("table:formula", None)
-            self._formula = None
         else:
-            expanded, restore_escapes = _expand_formula_template(new_formula, self.row, self.col)
-            self._formula = restore_escapes(_normalize_odf_formula(expanded))
-            tag.attrs["table:formula"] = self._formula
+            tag.attrs["table:formula"] = formula
+        self._formula = formula
 
         self.is_formula = self._formula is not None
         self.format = None
@@ -554,7 +563,7 @@ class Cell:
 
         for cell in target._iter_cells():
             drow, dcol = cell.row - self.row, cell.col - self.col
-            cell.formula = _shift_odf_formula(self._formula, drow, dcol)
+            cell._write_formula(_shift_odf_formula(self._formula, drow, dcol))
 
     def _compute_is_empty(self) -> bool:
         return (

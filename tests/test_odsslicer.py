@@ -30,7 +30,9 @@ from conftest import (
     chart_ranges,
     document_in,
     empty_cells,
+    formula_cell,
     note_cell,
+    number_cell,
     ods_with_sheet,
     saved_table,
     shape_cell,
@@ -4694,6 +4696,99 @@ def test_a_friendly_formula_takes_an_absolute_sheet_and_an_accented_name():
     s["A1"].formula = "$Data.A5*2+Élèves.B3+SUM($Data.A1:A5)"
     assert s["A1"].formula == "of:=[$Data.A5]*2+[Élèves.B3]+SUM([$Data.A1:.A5])"
     assert s["A1"].formula_friendly == "=$Data.A5*2+Élèves.B3+SUM($Data.A1:A5)"
+
+
+def _braces(ref, cells, other):
+    """Formulas holding braces as text and as an inline array, referencing
+    `ref`, `cells` and `other`."""
+    return [
+        'of:="{"&[' + ref + ']&"}"',
+        'of:="\\textbf{"&[' + ref + ']&"}"',
+        "of:=SUMPRODUCT([" + cells + "];{1|2|3})",
+        'of:="{{"&[' + other + ']&"}}"',
+    ]
+
+
+def _with_braces(tmp_path):
+    """Sheet1 with `_braces` in B1:B4, as LibreOffice writes them, and 1, 2,
+    3 in A6:A8; then an Other sheet, and C1:C4 to sort B1:B4 backwards by."""
+    formulas = _braces(".A6", ".A6:.A8", "$Other.A10")
+    xml = "".join(
+        table_row(empty_cells(), formula_cell(formula), number_cell(4 - i))
+        for i, formula in enumerate(formulas)
+    )
+    xml += table_row(empty_cells()) + "".join(table_row(number_cell(n)) for n in (1, 2, 3))
+    r = ODSReader(ods_with_sheet(tmp_path / "braces.ods", xml))
+    r.add_sheet("Other")
+    return r
+
+
+@pytest.mark.parametrize(
+    ("edit", "cells", "expected"),
+    [
+        pytest.param(
+            lambda r: r.sheet("Sheet1").insert_rows(0),
+            ["B2", "B3", "B4", "B5"],
+            _braces(".A7", ".A7:.A9", "$Other.A10"),
+            id="insert_rows",
+        ),
+        pytest.param(
+            lambda r: r.sheet("Sheet1").delete_rows([4]),
+            ["B1", "B2", "B3", "B4"],
+            _braces(".A5", ".A5:.A7", "$Other.A10"),
+            id="delete_rows",
+        ),
+        pytest.param(
+            lambda r: r.sheet("Sheet1").insert_columns(0),
+            ["C1", "C2", "C3", "C4"],
+            _braces(".B6", ".B6:.B8", "$Other.A10"),
+            id="insert_columns",
+        ),
+        pytest.param(
+            lambda r: r.sheet("Other").insert_rows(0),
+            ["B1", "B2", "B3", "B4"],
+            _braces(".A6", ".A6:.A8", "$Other.A11"),
+            id="insert_rows on Other",
+        ),
+        pytest.param(
+            lambda r: r.rename_sheet("Other", "Autre"),
+            ["B1", "B2", "B3", "B4"],
+            _braces(".A6", ".A6:.A8", "$Autre.A10"),
+            id="rename_sheet",
+        ),
+        pytest.param(
+            lambda r: r.sheet("Sheet1").copy("B1:B4", "D1"),
+            ["D1", "D2", "D3", "D4"],
+            _braces(".C6", ".C6:.C8", "$Other.C10"),
+            id="copy",
+        ),
+        pytest.param(
+            lambda r: [r.sheet("Sheet1")[f"B{row}"].fill_formula(f"D{row}") for row in range(1, 5)],
+            ["D1", "D2", "D3", "D4"],
+            _braces(".C6", ".C6:.C8", "$Other.C10"),
+            id="fill_formula",
+        ),
+        # each formula moves, and its references with it, as in a copy
+        pytest.param(
+            lambda r: r.sheet("Sheet1").sort("B1:C4", by=2),
+            ["B4", "B3", "B2", "B1"],
+            [
+                'of:="{"&[.A9]&"}"',
+                'of:="\\textbf{"&[.A7]&"}"',
+                "of:=SUMPRODUCT([.A5:.A7];{1|2|3})",
+                'of:="{{"&[$Other.A7]&"}}"',
+            ],
+            id="sort",
+        ),
+    ],
+)
+def test_an_edit_leaves_the_braces_of_a_formula_as_they_are(tmp_path, edit, cells, expected):
+    # regression: each edit wrote the formula it rewrote through the setter,
+    # which took its braces for {r}/{c} placeholders: "{"&[.A6]&"}" became
+    # the text "&[.A7]&", and an inline array raised SyntaxError
+    r = _with_braces(tmp_path)
+    edit(r)
+    assert [r.sheet("Sheet1")[address].formula for address in cells] == expected
 
 
 # ---------------------------------------------------------------------------
