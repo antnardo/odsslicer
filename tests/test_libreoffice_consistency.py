@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Consistency checks against a real, local LibreOffice install (via its
 `--headless` CLI), not just odsslicer's own BeautifulSoup-based reader.
@@ -21,6 +20,7 @@ import re
 import numpy as np
 import pytest
 from bs4 import BeautifulSoup
+
 from conftest import (
     PRINT_TITLE_WIDTHS_XML,
     PRINT_TITLE_XML,
@@ -40,7 +40,6 @@ from conftest import (
     text_cell,
     with_chart,
 )
-
 from odsslicer import ODSReader
 from odsslicer.classes import Border, NumberFormat
 
@@ -233,11 +232,15 @@ def test_libreoffice_reads_back_a_created_number_format_and_conditional_formatti
         rf'<style:style style:name="{cell_style_name}"[^>]*style:data-style-name="([^"]+)"', xml
     ).group(1)
     base_format_xml = re.search(
-        rf'<number:currency-style style:name="{base_format_name}"[^>]*>.*?</number:currency-style>', xml, re.DOTALL
+        rf'<number:currency-style style:name="{base_format_name}"[^>]*>.*?</number:currency-style>',
+        xml,
+        re.DOTALL,
     ).group(0)
     condition_target = re.search(r'style:apply-style-name="([^"]+)"', base_format_xml).group(1)
     target_xml = re.search(
-        rf'<number:currency-style style:name="{condition_target}"[^>]*>.*?</number:currency-style>', xml, re.DOTALL
+        rf'<number:currency-style style:name="{condition_target}"[^>]*>.*?</number:currency-style>',
+        xml,
+        re.DOTALL,
     ).group(0)
     assert 'fo:color="#ff0000"' in target_xml
 
@@ -724,7 +727,8 @@ def test_libreoffice_reads_back_document_properties(writable_reader, tmp_path, l
     assert '<meta:user-defined meta:name="Montant" meta:value-type="float">42.5</meta:user-defined>' in meta
     assert '<meta:user-defined meta:name="Valide" meta:value-type="boolean">true</meta:user-defined>' in meta
     assert (
-        '<meta:user-defined meta:name="Echeance" meta:value-type="date">2026-12-31</meta:user-defined>' in meta
+        '<meta:user-defined meta:name="Echeance" meta:value-type="date">2026-12-31</meta:user-defined>'
+        in meta
     )
 
 
@@ -973,7 +977,9 @@ def test_libreoffice_reads_back_a_pivot_table_definition(writable_reader, tmp_pa
     # LibreOffice itself parsed, accepted, and re-serialized the definition
     # (it expands the single-cell target to a range and adds its own
     # application-data/buttons/data-pilot-level, all harmless)
-    pivot = re.search(r'<table:data-pilot-table table:name="MyPivot".*?</table:data-pilot-table>', xml, re.DOTALL)
+    pivot = re.search(
+        r'<table:data-pilot-table table:name="MyPivot".*?</table:data-pilot-table>', xml, re.DOTALL
+    )
     assert pivot is not None
     pivot_xml = pivot.group(0)
     assert 'table:source-field-name="Category" table:orientation="row"' in pivot_xml

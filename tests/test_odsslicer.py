@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Suite de tests pytest pour le module `odsslicer`.
 
@@ -17,9 +16,11 @@ import math
 import warnings
 from decimal import Decimal
 from fractions import Fraction
+from typing import ClassVar
 
 import numpy as np
 import pytest
+
 from conftest import (
     FIXTURES_DIR,
     PRINT_TITLE_WIDTHS_XML,
@@ -40,12 +41,10 @@ from conftest import (
     text_cell,
     with_chart,
 )
-
 from odsslicer import ODSReader
 from odsslicer.classes import ArrayValues, Border, Cell, CellStyle, NumberFormat, Sheet
 from odsslicer.constants import TAG_CELL
 from odsslicer.sheet import _repeat
-
 
 # ---------------------------------------------------------------------------
 # Sheet.address : conversion "A1" / "A1:B3" / "A:B" / "1:2" -> index/slice
@@ -129,7 +128,7 @@ def test_string_address_row_is_one_indexed():
     assert Sheet.string_address(9, 0) == "A10"
 
 
-@pytest.mark.parametrize("col", list(range(0, 60)) + [100, 300, 701, 702, 703, 728, 729, 1000])
+@pytest.mark.parametrize("col", [*range(60), 100, 300, 701, 702, 703, 728, 729, 1000])
 def test_string_address_round_trips_through_string_to_col(col):
     letters = Sheet.string_address(0, col)[:-1]
     assert Sheet.string_to_col(letters) == col
@@ -358,7 +357,7 @@ def test_empty_col_with_slice(sheet1):
 class _FakeTag(dict):
     """Minimal stand-in for the BeautifulSoup tag Sheet.__init__ expects."""
 
-    attrs = {}
+    attrs: ClassVar[dict] = {}
 
     def __getitem__(self, key):
         return {"table:name": "Fake", "table:style-name": "st"}[key]
@@ -511,7 +510,6 @@ def test_writing_to_an_empty_selection_does_nothing(writable_reader):
 
 def test_a_row_of_an_empty_sheet_keeps_its_two_dimensions(reader):
     # [[]] is a one-row selection of zero cells, not a zero-row one
-    from odsslicer.classes import ArrayValues
 
     selection = ArrayValues([[]])
     assert selection.dimension == 2
@@ -1855,7 +1853,9 @@ def test_date_display_reads_the_real_format_with_no_example_anywhere():
     r = _blank_document()
     s = r.sheet("Sheet1")
     fmt = NumberFormat.create(
-        r, "date", components=[("year", "long"), ("text", "-"), ("month", "long"), ("text", "-"), ("day", "long")]
+        r,
+        "date",
+        components=[("year", "long"), ("text", "-"), ("month", "long"), ("text", "-"), ("day", "long")],
     )
     s["A1"].style.number_format = fmt
     s["A1"].value = dt.date(2026, 3, 5)
@@ -2746,7 +2746,7 @@ def test_a_duration_under_a_day_shows_as_a_duration(value, text):
 def test_add_sheet_creates_an_empty_sheet(writable_reader):
     before = list(writable_reader.sheets_names)
     s = writable_reader.add_sheet("NewSheet")
-    assert writable_reader.sheets_names == before + ["NewSheet"]
+    assert writable_reader.sheets_names == [*before, "NewSheet"]
     assert s.size == (0, 0)
     assert writable_reader.sheet("NewSheet") is s  # cached, same object
 
@@ -3240,7 +3240,7 @@ def test_save_round_trip_after_fill_formula(writable_reader, tmp_path):
     writable_reader.save(out)
 
     reread = ODSReader(out).sheet("Sheet1")
-    for row, ref_row in zip(range(1, 4), (1, 2, 3)):
+    for row, ref_row in zip(range(1, 4), (1, 2, 3), strict=True):
         assert reread.get_cell(row, 1).formula_friendly == f"=$A{ref_row}+1"
 
 
@@ -3756,6 +3756,7 @@ def test_merge_grows_the_sheet_if_needed(writable_reader):
     s = writable_reader.sheet("Sheet1")
     size_before = s.size
     s.merge("Z10:AA11")
+    assert s.size[0] >= size_before[0] and s.size[1] >= size_before[1]
     assert s.size[0] >= 11 and s.size[1] >= 27
     assert s["Z10"].merge_range == "Z10:AA11"
 
@@ -4070,7 +4071,7 @@ def test_table_style_write_forks_and_reuses(writable_reader):
 
 
 def test_style_write_without_owner_raises_for_row_column_table():
-    from odsslicer.classes import RowStyle, ColumnStyle, TableStyle
+    from odsslicer.classes import ColumnStyle, RowStyle, TableStyle
 
     with pytest.raises(RuntimeError):
         RowStyle(tag=None).height = "1cm"

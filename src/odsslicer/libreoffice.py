@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
 """Delegating formula recalculation and pivot refresh to a headless LibreOffice."""
 
 import contextlib
-import glob
 import os
 import shutil
 import signal
@@ -161,16 +159,18 @@ def _find_libreoffice() -> str:
     it's a path that exists or a name found on PATH, else the first usual
     install location that exists. Raises `FileNotFoundError` otherwise."""
     exe = LIBREOFFICE_COMMAND[0]
-    if os.path.isabs(exe):
+    if Path(exe).is_absolute():
         # an explicit path is taken at its word - no silent fallback elsewhere
-        if os.path.exists(exe):
+        if Path(exe).exists():
             return exe
-        raise FileNotFoundError(f"LibreOffice executable {exe!r} (odsslicer.LIBREOFFICE_COMMAND[0]) does not exist")
+        raise FileNotFoundError(
+            f"LibreOffice executable {exe!r} (odsslicer.LIBREOFFICE_COMMAND[0]) does not exist"
+        )
     found = shutil.which(exe)
     if found:
         return found
     for candidate in _LIBREOFFICE_FALLBACKS:
-        if os.path.exists(candidate):
+        if Path(candidate).exists():
             return candidate
     raise FileNotFoundError(
         f"LibreOffice executable {exe!r} not found on PATH nor in the usual install "
@@ -181,21 +181,25 @@ def _find_libreoffice() -> str:
 _SYSTEM_BIN_DIRS = ("/usr/local/bin", "/usr/bin", "/bin")
 
 
+def _ships_python(directory: str) -> bool:
+    """True if `directory` holds a `python`/`python3` executable. A directory
+    that cannot be listed counts as not holding one, the way the `glob` this
+    replaces swallowed the error."""
+    try:
+        return any(Path(directory).glob("python3*")) or Path(directory, "python.exe").exists()
+    except OSError:
+        return False
+
+
 def _path_without_foreign_pythons(path_value: str) -> str:
     """`path_value` with every directory that ships a `python`/`python3`
     executable removed, and (on POSIX) the standard system directories
     guaranteed present at the end - so the only interpreter LibreOffice's
     prefix discovery can find is the system one its own build links
     against. See the environment note in `recalculate()`."""
-    keep = [
-        d
-        for d in path_value.split(os.pathsep)
-        if d
-        and not glob.glob(os.path.join(d, "python3*"))
-        and not glob.glob(os.path.join(d, "python.exe"))
-    ]
+    keep = [d for d in path_value.split(os.pathsep) if d and not _ships_python(d)]
     if os.name == "posix":
-        keep.extend(d for d in _SYSTEM_BIN_DIRS if d not in keep and os.path.isdir(d))
+        keep.extend(d for d in _SYSTEM_BIN_DIRS if d not in keep and Path(d).is_dir())
     return os.pathsep.join(keep)
 
 
@@ -315,7 +319,7 @@ def recalculate(
         scripts.mkdir(parents=True)
         (scripts / "odsslicer_recalc.py").write_text(_LIBREOFFICE_RECALC_SCRIPT, encoding="utf-8")
         base = [exe, *LIBREOFFICE_COMMAND[1:], f"-env:UserInstallation={profile.as_uri()}"]
-        cmd = base + ["vnd.sun.star.script:odsslicer_recalc.py$recalculate?language=Python&location=user"]
+        cmd = [*base, "vnd.sun.star.script:odsslicer_recalc.py$recalculate?language=Python&location=user"]
         env = dict(
             os.environ,
             ODSSLICER_RECALC_FILE=str(path),

@@ -130,6 +130,12 @@ still change between minor versions.
   inserted columns take the default width
   ([#25](https://github.com/antnardo/odsslicer/issues/25)).
 
+- **`odsslicer.__all__` and `odsslicer.classes.__all__` name the public API**, so
+  `from odsslicer import *` brings in the documented names rather than everything the package
+  imports. The code is now in line with the ruff rules the project selected (line length set
+  to 110, the length it was written to), and CI checks them — the configuration had drifted to
+  506 findings without one.
+
 ## [0.13.2] — 2026-09-27
 
 ### Fixed

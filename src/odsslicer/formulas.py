@@ -1,14 +1,12 @@
-# -*- coding: utf-8 -*-
 """ODF formula machinery: friendly <-> ODF syntax translation, reference
 shifting for fills/copies/deletions/renames, {r}/{c} templating."""
 
 import ast
 import bisect
 import re
-from typing import Callable
+from collections.abc import Callable
 
 from .addresses import string_address, string_to_col
-
 
 _FORMULA_LANGUAGE_PREFIX = re.compile(r"^[A-Za-z][\w.-]*:=")
 
@@ -255,10 +253,10 @@ def _remap_reference(
     semantics, a `$` lock is irrelevant. `edge` is a single reference's
     when it stands for one: a drawing's last cell."""
     parts = reference.split(":", 1)
-    edges: "list[str | None]" = [edge] if len(parts) == 1 else ["start", "end"]
+    edges: list[str | None] = [edge] if len(parts) == 1 else ["start", "end"]
     rewritten: list[str] = []
-    before: "list[tuple[int, int]]" = []
-    after: "list[tuple[int, int]]" = []
+    before: list[tuple[int, int]] = []
+    after: list[tuple[int, int]] = []
     effective_sheet = containing_sheet
     for part, edge in zip(parts, edges, strict=True):
         m = _SHEET_QUALIFIED_RE.match(part)
@@ -409,7 +407,7 @@ def _eval_template_expr(expr: str, context: dict[str, int]) -> int:
                 f"(only {', '.join(context)} are available)"
             )
     code = compile(tree, "<formula-template>", "eval")
-    return eval(code, {"__builtins__": {}}, context)  # noqa: S307 - restricted to arithmetic on r/c
+    return eval(code, {"__builtins__": {}}, context)
 
 
 _ESCAPED_BRACES_RE = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)

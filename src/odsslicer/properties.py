@@ -1,8 +1,7 @@
-# -*- coding: utf-8 -*-
 """DocumentProperties: structured, writable access to meta.xml."""
 
 import datetime as dt
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from bs4 import Tag
 

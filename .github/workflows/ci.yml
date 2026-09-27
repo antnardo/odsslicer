@@ -32,6 +32,25 @@ jobs:
       - name: Run the test suite
         run: pytest
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install the package with test dependencies (ruff among them)
+        run: pip install -e ".[test]"
+      # The rules live in pyproject.toml. Checked here because a configuration
+      # nobody enforces drifts: between its arrival and this job, the code had
+      # collected 506 findings against it.
+      - name: ruff (the rules the project selected)
+        run: ruff check src tests benchmarks
+
   typecheck:
     runs-on: ubuntu-latest
     steps:

@@ -1,13 +1,12 @@
-# -*- coding: utf-8 -*-
 """Shared constants: ODF cell-type conversions, size limits, sentinel objects."""
 
 import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from bs4 import BeautifulSoup
 
 from .datetimes import _parse_date_value, _parse_time_value
-
 
 RE_STRING_CELL = re.compile(r"([A-Z]+)?([0-9]+)?(:)?([A-Z]+)?([0-9]+)?")
 TAG_CELL = ["table:table-cell", "table:covered-table-cell"]

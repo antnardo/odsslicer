@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Sweep real-world .ods files, comparing two versions of odsslicer.
 
 Run before a release. The test suite covers what we thought to write down;
@@ -303,11 +302,15 @@ def compare(current: dict, baseline: dict | None, findings: Findings, do_write: 
     if baseline is None or baseline["error"]:
         return
     if len(baseline["sheets"]) != len(current["sheets"]):
-        findings.read_differences.append(f"{path}: {len(baseline['sheets'])} -> {len(current['sheets'])} sheets")
+        findings.read_differences.append(
+            f"{path}: {len(baseline['sheets'])} -> {len(current['sheets'])} sheets"
+        )
         return
     for old, new in zip(baseline["sheets"], current["sheets"], strict=True):
         if old["size"] != new["size"]:
-            findings.read_differences.append(f"{path} sheet {new['name_digest']}: size {old['size']} -> {new['size']}")
+            findings.read_differences.append(
+                f"{path} sheet {new['name_digest']}: size {old['size']} -> {new['size']}"
+            )
         elif old["values"] != new["values"] or old["texts"] != new["texts"]:
             findings.read_differences.append(f"{path} sheet {new['name_digest']}: values or texts differ")
 
@@ -358,7 +361,9 @@ def main() -> int:
         print(file=sys.stderr)
     finally:
         if worktree:
-            subprocess.run(["git", "-C", str(REPO), "worktree", "remove", "--force", str(worktree)], check=False)
+            subprocess.run(
+                ["git", "-C", str(REPO), "worktree", "remove", "--force", str(worktree)], check=False
+            )
 
     if args.json:
         Path(args.json).write_text(json.dumps(reports, indent=1))

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Spreadsheet address arithmetic: bijective base-26 column letters <-> 0-indexed columns."""
 
 

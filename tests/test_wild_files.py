@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Confront the API with real-world "wild" .ods files written by other
 generators (Excel 16, LibreOffice 3.5 from 2012, recent LibreOffice on Linux
 and Windows, a Google Sheets export) - see tests/wild/README.md for
@@ -14,8 +13,8 @@ they pin down the filler-clamping behaviour of `Sheet.load`.
 import datetime as dt
 
 import pytest
-from conftest import FIXTURES_DIR, requires_soffice
 
+from conftest import FIXTURES_DIR, requires_soffice
 from odsslicer import ODSReader
 
 WILD_DIR = FIXTURES_DIR / "wild"

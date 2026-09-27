@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # mypy: disable-error-code="union-attr"
 # (bs4 Tag/NavigableString/None unions are narrowed dynamically all over this
 # module, guarded by runtime checks mypy can't see through - silencing that
@@ -12,9 +11,10 @@ import functools
 import itertools
 import logging
 import warnings
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, Tuple, Union, cast
+from collections.abc import Iterable, Iterator
+from typing import TYPE_CHECKING, Any, cast
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import Tag
 
 from .addresses import string_address, string_to_col
 from .cell import ArrayValues, Cell
@@ -29,10 +29,10 @@ from .datetimes import _comparable
 from .formulas import (
     _PIVOT_DATA_FUNCTIONS,
     _SHEET_QUALIFIED_RE,
-    _Remap,
     _deletion_remap,
     _insertion_remap,
     _quote_odf_sheet_name,
+    _Remap,
     _remap_odf_formula_references,
     _shift_odf_formula,
     _unquote_odf_sheet_name,
@@ -110,7 +110,7 @@ class Sheet:
         self._log_level = logging.INFO if verbose else logging.DEBUG
         self.reader = reader
         self.table: Tag = table
-        self.attrs: Dict[str, str] = self.table.attrs
+        self.attrs: dict[str, str] = self.table.attrs
         self.name: str = cast(str, self.table["table:name"])
         self.stylename = self.table.attrs.get("table:style-name")
         self.rows = self.load(table)
@@ -328,7 +328,9 @@ class Sheet:
             stacklevel=1,
         )
 
-    def _normalize_row_width(self, row_tag: Tag, cells_bs: "list[Tag]", real_width: int, row_index: int) -> "list[Tag]":
+    def _normalize_row_width(
+        self, row_tag: Tag, cells_bs: "list[Tag]", real_width: int, row_index: int
+    ) -> "list[Tag]":
         """Rewrite one row's XML so its total width is exactly `real_width`
         cells, touching only its trailing run of *empty* cells: a huge grid
         filler (see `load`) has its repeat count reduced (cells beyond it
@@ -612,7 +614,9 @@ class Sheet:
             raise ValueError(f"cell {Sheet.string_address(row0, col0)} is not part of a merged range")
         self._unmerge(row0, col0)
 
-    def copy(self, source: "str | int | tuple[Any, ...] | slice", dest: "str | int | tuple[Any, ...] | slice") -> None:
+    def copy(
+        self, source: "str | int | tuple[Any, ...] | slice", dest: "str | int | tuple[Any, ...] | slice"
+    ) -> None:
         """Copy the cells in `source` (any address `sheet[...]` accepts,
         e.g. `"A1:B2"` or a single cell) onto `dest` (the *top-left*
         address of the target range - the copy always has the same shape
@@ -706,7 +710,9 @@ class Sheet:
         ]
         key_offset = by - col0
 
-        def compare(a: tuple[int, list[tuple[Any, Any, Any]]], b: tuple[int, list[tuple[Any, Any, Any]]]) -> int:
+        def compare(
+            a: tuple[int, list[tuple[Any, Any, Any]]], b: tuple[int, list[tuple[Any, Any, Any]]]
+        ) -> int:
             # _comparable: a column of dates can hold date-times too, and one
             # of times durations - Python refuses to order either pair as is
             va, vb = _comparable(a[1][key_offset][0]), _comparable(b[1][key_offset][0])
@@ -1535,7 +1541,13 @@ class Sheet:
         self.table.attrs["table:style-name"] = tag["style:name"]
         return tag
 
-    def empty_row(self, i: "int | None" = None, n_cols: "int | None" = None, start: int = 0, slice: "slice | None" = None) -> list[Cell]:
+    def empty_row(
+        self,
+        i: "int | None" = None,
+        n_cols: "int | None" = None,
+        start: int = 0,
+        slice: "slice | None" = None,
+    ) -> list[Cell]:
         step = 1
         if slice is not None:
             start, stop, step = self._unslice(slice)
@@ -1545,7 +1557,13 @@ class Sheet:
             stop = self.n_cols
         return [Cell(EMPTY_CELL_BS, cast(int, i), j, sheet=self) for j in range(start, stop, step)]
 
-    def empty_col(self, j: "int | None" = None, n_rows: "int | None" = None, start: int = 0, slice: "slice | None" = None) -> list[list[Cell]]:
+    def empty_col(
+        self,
+        j: "int | None" = None,
+        n_rows: "int | None" = None,
+        start: int = 0,
+        slice: "slice | None" = None,
+    ) -> list[list[Cell]]:
         step = 1
         if slice is not None:
             start, stop, step = self._unslice(slice)
@@ -1567,8 +1585,7 @@ class Sheet:
         row = self.get_row(i)
         if j >= self.n_cols:
             return Cell(EMPTY_CELL_BS, i, j, sheet=self)
-        else:
-            return row[j]
+        return row[j]
 
     def _unslice(self, slice: slice, row: bool = False, col: bool = False) -> tuple[int, int, int]:
         start = slice.start
@@ -1612,20 +1629,20 @@ class Sheet:
             address = self.address(address, self.n_rows)
         if type(address) is int:
             return ArrayValues(self.get_row(address))
-        elif type(address) is slice:
+        if type(address) is slice:
             return ArrayValues(self.get_rows(address))
-        elif type(address) is tuple and len(address) == 2:
+        if type(address) is tuple and len(address) == 2:
             # 1, 2 ou 1:3, 2 ou 1:3, 2:5 ou 1, 2:5
             rows_address, cols_address = address
             if type(rows_address) is int and type(cols_address) is int:
                 return self.get_cell(*address)
-            elif type(rows_address) is int and type(cols_address) is slice:
+            if type(rows_address) is int and type(cols_address) is slice:
                 return ArrayValues(self.get_row_slice(rows_address, cols_address))
-            elif type(rows_address) is slice and type(cols_address) is int:
+            if type(rows_address) is slice and type(cols_address) is int:
                 return ArrayValues(
                     self.get_cells(rows_address, slice(cols_address, cols_address + 1))
                 )
-            elif type(rows_address) is slice and type(cols_address) is slice:
+            if type(rows_address) is slice and type(cols_address) is slice:
                 return ArrayValues(self.get_cells(rows_address, cols_address))
         raise ValueError(
             f"Format demandé non conforme ou données non définie dans le tableur : {address}"
@@ -1639,7 +1656,7 @@ class Sheet:
         return string_to_col(s)
 
     @classmethod
-    def address(cls, string: str, n_rows: int = 1) -> Union[int, Tuple[Any, ...], slice]:
+    def address(cls, string: str, n_rows: int = 1) -> int | tuple[Any, ...] | slice:
         m = RE_STRING_CELL.fullmatch(string)
         if m is None:
             raise ValueError
@@ -1658,12 +1675,11 @@ class Sheet:
             if c1 is None:
                 # 1
                 return r1  # type: ignore[return-value]
-            elif r1 is None:
+            if r1 is None:
                 # A
                 return slice(n_rows), c1
-            else:
-                # A1
-                return r1, c1
+            # A1
+            return r1, c1
         if (c1 is None and r2 is None) or (c2 is None and r1 is None):
             raise ValueError
         # dp is not None
@@ -1672,16 +1688,16 @@ class Sheet:
         if r1 is None:
             # A:B
             return slice(n_rows), slice(c1, c2)
-        elif c1 is None:
+        if c1 is None:
             # 1:2
             return slice(r1, r2)
-        elif r2 == r1 + 1 and c2 > c1 + 1:  # type: ignore[operator]
+        if r2 == r1 + 1 and c2 > c1 + 1:  # type: ignore[operator]
             # A1:B1
             return r1, slice(c1, c2)
-        elif c2 == c1 + 1 and r2 > r1 + 1:  # type: ignore[operator]
+        if c2 == c1 + 1 and r2 > r1 + 1:  # type: ignore[operator]
             # A1:A2
             return slice(r1, r2), c1
-        elif r2 == r1 + 1 and c2 == c1 + 1:
+        if r2 == r1 + 1 and c2 == c1 + 1:
             # A1:A1 == A1
             return r1, c1
         return slice(r1, r2), slice(c1, c2)

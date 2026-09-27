@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Low-level helpers for building/cloning namespace-qualified ODF XML elements."""
 
 import copy
@@ -6,7 +5,6 @@ import re
 from typing import cast
 
 from bs4 import BeautifulSoup, Tag
-
 
 # Standard OASIS namespace URIs, used as a last-resort fallback to build a
 # namespace-qualified tag from scratch when the document has no existing tag

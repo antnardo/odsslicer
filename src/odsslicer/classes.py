@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Backwards-compatibility shim.
 
 `odsslicer` used to be a single module (`odsslicer.classes`); it is now split
@@ -28,3 +27,35 @@ from .properties import DocumentProperties
 from .reader import ODSReader
 from .sheet import Sheet
 from .styles import Border, CellStyle, ColumnStyle, NumberFormat, RowStyle, TableStyle
+
+# Re-exported for the old `from odsslicer.classes import ...` imports: named here
+# so the shim's whole purpose is explicit rather than looking like dead imports.
+__all__ = [
+    "EMPTY_CELL_BS",
+    "FORMATS",
+    "LIBREOFFICE_COMMAND",
+    "MAX_CELLS_PER_SHEET",
+    "MAX_CHARS_PER_CELL",
+    "MAX_COLS_PER_SHEET",
+    "MAX_REPEAT_COLS",
+    "MAX_REPEAT_ROWS",
+    "MAX_ROWS_PER_SHEET",
+    "MAX_SHEETS",
+    "RE_STRING_CELL",
+    "TAG_CELL",
+    "ArrayValues",
+    "Border",
+    "Cell",
+    "CellStyle",
+    "ColumnStyle",
+    "Comment",
+    "DocumentProperties",
+    "NumberFormat",
+    "ODSReader",
+    "RowStyle",
+    "Sheet",
+    "TableStyle",
+    "recalculate",
+    "string_address",
+    "string_to_col",
+]

@@ -1,10 +1,9 @@
-# -*- coding: utf-8 -*-
 """ODSReader: the document itself - zip I/O, sheets, styles lookup, save."""
 
 import logging
 import re
 from pathlib import Path
-from typing import Union, cast
+from typing import cast
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from bs4 import BeautifulSoup, Tag
@@ -63,7 +62,7 @@ def _same_number_format(a: Tag, b: Tag) -> bool:
 class ODSReader:
     _from_template: bool = False  # set by new(): no source file to default save() to
 
-    def __init__(self, file: Union[Path, str], verbose: bool = False) -> None:
+    def __init__(self, file: Path | str, verbose: bool = False) -> None:
         self.file: Path = Path(file)
         self.verbose = verbose
         # chatty progress messages go to the "odsslicer" logger: DEBUG
@@ -92,7 +91,7 @@ class ODSReader:
         self.meta_data = BeautifulSoup(self.meta, "xml")
         self.tables = self.data.find_all("table:table")
         self.sheets_names = [table["table:name"] for table in self.tables]
-        self._sheets: dict[str, Sheet | None] = {name: None for name in self.sheets_names}
+        self._sheets: dict[str, Sheet | None] = dict.fromkeys(self.sheets_names)
         # the formats dates written into unformatted cells get, and the cell
         # styles carrying them, shared by every cell (see Cell.value)
         self._default_date_formats: dict[str, str] = {}
@@ -261,7 +260,7 @@ class ODSReader:
 
     def save(
         self,
-        path: Union[Path, str, None] = None,
+        path: Path | str | None = None,
         recalculate: bool = False,
         timeout: int = 120,
         update_links: bool = False,
@@ -315,7 +314,9 @@ class ODSReader:
             (name, part.encode("utf-8")) for name, part in self._parts.items() if part is not None
         )
         with ZipFile(self.file) as src:
-            entries = [(item, regenerated.get(item.filename, src.read(item.filename))) for item in src.infolist()]
+            entries = [
+                (item, regenerated.get(item.filename, src.read(item.filename))) for item in src.infolist()
+            ]
         # a regenerated part absent from the source package (every part but
         # `content.xml` is optional in ODF, see __init__) still has to be
         # written, or the in-memory edits to it would be dropped
@@ -415,11 +416,12 @@ class ODSReader:
                     tag[attr] = _rename_range_list(cast(str, tag[attr]), old_name, new_name)
 
     def export_content_xml(self, pretty: bool = True) -> None:
+        target = self.file.with_suffix(".xml")
         if pretty:
-            with open(f"{self.file.with_suffix('.xml')}", "w", encoding="utf8") as f:
+            with target.open("w", encoding="utf8") as f:
                 f.write(self.data.prettify())
         else:
-            with open(f"{self.file.with_suffix('.xml')}", "wb") as f:
+            with target.open("wb") as f:
                 f.write(self.content)
 
     @property

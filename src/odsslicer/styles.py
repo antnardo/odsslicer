@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # mypy: disable-error-code="union-attr"
 # (bs4 Tag/NavigableString/None unions are narrowed dynamically all over this
 # module, guarded by runtime checks mypy can't see through - silencing that
@@ -10,7 +9,7 @@ Border, CellStyle, RowStyle, ColumnStyle, TableStyle."""
 import datetime as dt
 import re
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Dict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from bs4 import Tag
 
@@ -119,7 +118,7 @@ class NumberFormat:
     has the layout you want); `.add_condition(condition, target)` appends
     a conditional variant to an existing format."""
 
-    _FAMILY_TAGS = {
+    _FAMILY_TAGS: ClassVar[dict[str, str]] = {
         "number": "number:number-style",
         "percentage": "number:percentage-style",
         "currency": "number:currency-style",
@@ -128,7 +127,9 @@ class NumberFormat:
         "boolean": "number:boolean-style",
     }
 
-    def __init__(self, tag: Tag, reader: "ODSReader | None" = None, _seen: "set[str | None] | None" = None) -> None:
+    def __init__(
+        self, tag: Tag, reader: "ODSReader | None" = None, _seen: "set[str | None] | None" = None
+    ) -> None:
         self._tag = tag
         self._reader = reader
         self.name = cast("str | None", tag.get("style:name"))
@@ -564,7 +565,7 @@ class CellStyle:
     its style name) already present in the document."""
 
     _BORDER_ATTRS = ("fo:border", "fo:border-top", "fo:border-bottom", "fo:border-left", "fo:border-right")
-    _BORDER_SIDE_ATTRS = {
+    _BORDER_SIDE_ATTRS: ClassVar[dict[str, str]] = {
         "border_top": "fo:border-top",
         "border_bottom": "fo:border-bottom",
         "border_left": "fo:border-left",
@@ -641,8 +642,8 @@ class CellStyle:
 
         # raw, flattened property dicts as an escape hatch for anything not
         # surfaced above - base style first, so a nearer style overrides it
-        self.cell_properties: Dict[str, str] = {}
-        self.text_properties: Dict[str, str] = {}
+        self.cell_properties: dict[str, str] = {}
+        self.text_properties: dict[str, str] = {}
         for style in reversed(chain):
             cell_props = style.find("style:table-cell-properties")
             if cell_props is not None:
@@ -683,7 +684,7 @@ class CellStyle:
         resolved) sides along explicitly - see the class docstring."""
         self._require_cell()
         tag = self._cell._ensure_own_style()
-        values: "dict[str, Border | str | None]" = {
+        values: dict[str, Border | str | None] = {
             "border_top": self._border_top,
             "border_bottom": self._border_bottom,
             "border_left": self._border_left,
@@ -740,7 +741,9 @@ class CellStyle:
 
     @strikethrough.setter
     def strikethrough(self, value: bool) -> None:
-        self._write_attr("style:text-properties", "style:text-line-through-style", "solid" if value else "none")
+        self._write_attr(
+            "style:text-properties", "style:text-line-through-style", "solid" if value else "none"
+        )
         self._strikethrough = bool(value)
 
     @property
@@ -988,7 +991,9 @@ class RowStyle:
     @height.setter
     def height(self, value: "str | None") -> None:
         self._require_owner()
-        props = _ensure_style_child(self._sheet._ensure_row_style(cast(int, self._row)), "style:table-row-properties")
+        props = _ensure_style_child(
+            self._sheet._ensure_row_style(cast(int, self._row)), "style:table-row-properties"
+        )
         if value is None:
             props.attrs.pop("style:row-height", None)
         else:
@@ -1004,7 +1009,9 @@ class RowStyle:
     @optimal_height.setter
     def optimal_height(self, value: bool) -> None:
         self._require_owner()
-        props = _ensure_style_child(self._sheet._ensure_row_style(cast(int, self._row)), "style:table-row-properties")
+        props = _ensure_style_child(
+            self._sheet._ensure_row_style(cast(int, self._row)), "style:table-row-properties"
+        )
         props.attrs["style:use-optimal-row-height"] = "true" if value else "false"
         self._optimal_height = bool(value)
 
@@ -1015,7 +1022,9 @@ class RowStyle:
     @visible.setter
     def visible(self, value: bool) -> None:
         self._require_owner()
-        props = _ensure_style_child(self._sheet._ensure_row_style(cast(int, self._row)), "style:table-row-properties")
+        props = _ensure_style_child(
+            self._sheet._ensure_row_style(cast(int, self._row)), "style:table-row-properties"
+        )
         props.attrs["table:visibility"] = "visible" if value else "collapse"
         self._visible = bool(value)
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Read-speed and memory comparison against other .ods readers.
 
 Usage: python benchmarks/compare_readers.py [sizes...]   (default: 100 1000 10000 100000)

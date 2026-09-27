@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Created 2021
 
@@ -26,16 +25,31 @@ Attention, comme numpy, un format (n x 1) (1 colonne) est de dimension 2
 On peut l'avoir en (n) avec .to_vector()
 """
 from .classes import (
-    ODSReader,
     FORMATS,
-    CellStyle,
-    NumberFormat,
-    Border,
-    RowStyle,
-    ColumnStyle,
-    TableStyle,
-    DocumentProperties,
-    Comment,
-    recalculate,
     LIBREOFFICE_COMMAND,
+    Border,
+    CellStyle,
+    ColumnStyle,
+    Comment,
+    DocumentProperties,
+    NumberFormat,
+    ODSReader,
+    RowStyle,
+    TableStyle,
+    recalculate,
 )
+
+__all__ = [
+    "FORMATS",
+    "LIBREOFFICE_COMMAND",
+    "Border",
+    "CellStyle",
+    "ColumnStyle",
+    "Comment",
+    "DocumentProperties",
+    "NumberFormat",
+    "ODSReader",
+    "RowStyle",
+    "TableStyle",
+    "recalculate",
+]

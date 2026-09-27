@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # mypy: disable-error-code="union-attr"
 # (bs4 Tag/NavigableString/None unions are narrowed dynamically all over this
 # module, guarded by runtime checks mypy can't see through - silencing that
@@ -13,10 +12,11 @@ import itertools
 import math
 import numbers
 import re
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, cast
+from collections.abc import Callable, Iterator
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
-from bs4 import BeautifulSoup, Tag
+from bs4 import Tag
 
 from .addresses import string_address
 from .constants import EMPTY_CELL_BS, FORMATS, TAG_CELL
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 def _data_style_name(reader: "ODSReader", name: "str | None") -> "str | None":
     """The name of the number format the cell style `name` gives a cell,
     following its parents."""
-    visited: "set[str]" = set()
+    visited: set[str] = set()
     while name and name not in visited:
         visited.add(name)
         style = reader._find_style(name, family="table-cell")
@@ -184,7 +184,7 @@ class ArrayValues:
             raise ValueError(
                 f"shape mismatch: {len(self.array)} cell(s) but {len(values)} value(s) given"
             )
-        for item, v in zip(self.array, values):
+        for item, v in zip(self.array, values, strict=True):
             ArrayValues(item).value = v
 
     @property
@@ -219,10 +219,11 @@ class ArrayValues:
     def to_list(self) -> Any:
         if self.dimension == 0:
             return self.value
-        elif self.dimension == 1:
+        if self.dimension == 1:
             return [cell.value for cell in self.array]
-        elif self.dimension == 2:
+        if self.dimension == 2:
             return [[cell.value for cell in row] for row in self.array]
+        raise ValueError(f"a selection cannot be {self.dimension} levels deep")
 
     def to_vector(self) -> "ArrayValues":
         assert self.dimension == 2 and self.size[1] == 1
@@ -334,7 +335,7 @@ class Cell:
         self.col = col
         self.cell: Tag = cell
         self.sheet = sheet
-        self.attrs: Dict[str, str] = self.cell.attrs
+        self.attrs: dict[str, str] = self.cell.attrs
         self.format = self.attrs.get("office:value-type", None)
         if self.format == "date":
             self.raw_value = self.attrs.get("office:date-value")
@@ -356,7 +357,7 @@ class Cell:
         # whose cached result is "") and for one with several children (spans,
         # line breaks...) - `str(None)` would then wrongly become the literal
         # string "None" instead of the cell's actual (possibly empty) text.
-        self.text: "str | None" = "\n".join(p.get_text() for p in paragraphs) if paragraphs else None
+        self.text: str | None = "\n".join(p.get_text() for p in paragraphs) if paragraphs else None
         # A value its declared type cannot be read from - a malformed date, a
         # type no reader knows (KeyError) - must not take the whole sheet
         # down with it: the cell reads as its displayed text instead, and
@@ -385,7 +386,7 @@ class Cell:
         # `table:style-name`, since `cell.style = other_cell.style`/`Sheet.copy`
         # can legitimately point two different cells at the very same forked
         # style name, and a name-based check can't tell those apart.
-        self._own_style_name: "str | None" = None
+        self._own_style_name: str | None = None
 
     @property
     def value(self) -> Any:
@@ -741,7 +742,9 @@ class Cell:
                 # plain "General"-style cells show as many digits as the value
                 # needs: rounding to the template's own decimal count would lose
                 # precision (e.g. "3.4" as template -> only borrow the separator)
-                def render_general(value: float, _sep: str = decimal_sep, _prefix: str = prefix, _suffix: str = suffix) -> str:
+                def render_general(
+                value: float, _sep: str = decimal_sep, _prefix: str = prefix, _suffix: str = suffix
+            ) -> str:
                     return f"{_prefix}{str(value).replace('.', _sep)}{_suffix}"
 
                 render = render_general
@@ -806,7 +809,8 @@ class Cell:
 
     def _infer_boolean_display(self, new_value: bool) -> "str | None":
         target_raw = "true" if new_value else "false"
-        for template_raw, template_text in self._format_template_candidates("boolean", "office:boolean-value"):
+        candidates = self._format_template_candidates("boolean", "office:boolean-value")
+        for template_raw, template_text in candidates:
             if template_raw == target_raw:
                 return template_text
         return None
@@ -1078,8 +1082,8 @@ class Cell:
         style wins, exactly as `CellStyle` resolves them on read.
         """
         reader = self.sheet.reader
-        automatic: "list[Tag]" = []
-        seen: "set[str | None]" = set()
+        automatic: list[Tag] = []
+        seen: set[str | None] = set()
         current = reader._find_style(current_name, family="table-cell")
         while current is not None:
             name = cast("str | None", current.get("style:name"))

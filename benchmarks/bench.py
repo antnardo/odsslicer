@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Benchmark harness for odsslicer - run manually, not part of the test suite.
 
 Usage: python benchmarks/bench.py [sizes...]   (default: 1000 10000 100000)
@@ -10,12 +9,12 @@ markdown table so they can be pasted into DOCS.md.
 import gc
 import resource
 import sys
-import time
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from odsslicer import ODSReader  # noqa: E402
+from odsslicer import ODSReader
 
 N_COLS = 5
 
