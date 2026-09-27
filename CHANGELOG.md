@@ -123,6 +123,13 @@ still change between minor versions.
 - The PyPI page lists the same keywords as the repository's GitHub topics, so a search for
   what the package does finds it.
 
+- **The three deviations from LibreOffice left open are documented** in DOCS.md's known
+  limitations: deleting the row or column a chart is anchored in deletes it
+  ([#24](https://github.com/antnardo/odsslicer/issues/24)), a plain save drops the formatting
+  of a whole formatted row ([#23](https://github.com/antnardo/odsslicer/issues/23)), and
+  inserted columns take the default width
+  ([#25](https://github.com/antnardo/odsslicer/issues/25)).
+
 ## [0.13.2] — 2026-09-27
 
 ### Fixed
