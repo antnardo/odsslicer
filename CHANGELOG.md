@@ -101,6 +101,10 @@ still change between minor versions.
   LibreOffice. A value, a formula or a style written there undid it: a long date written into
   a title merged across three columns showed as `###`. Writing into a hidden cell of the merge
   still undoes it, so that the value written shows.
+- **DOCS.md states the shapes of selections as they are**
+  ([#21](https://github.com/antnardo/odsslicer/issues/21)), where it said they followed numpy:
+  a column keeps its axis, `(n, 1)`, where numpy drops it, and an address spanning one row is
+  one-dimensional, `sheet["A12:C12"]` giving `(3,)` where `sheet[11:12, 0:3]` gives `(1, 3)`.
 - **DOCS.md no longer says that LibreOffice recomputes every formula on open**
   ([#18](https://github.com/antnardo/odsslicer/issues/18)). At its default setting, it
   recomputes the formulas with no cached result, the volatile ones, and those in a cell with

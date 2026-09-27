@@ -123,8 +123,19 @@ sheet["ZZZ100000"]          # outside the data: an empty cell (value=None), no e
 ```
 
 An address or slice outside the data always returns empty cells (`value=None`) of the correct
-shape, rather than an error — the shape follows the same conventions as numpy (a (n, 1) column
-stays 2D; see `to_vector()` below to flatten it).
+shape, rather than an error. Shapes follow numpy's but for columns:
+
+| Selection | Shape | numpy's |
+| --- | --- | --- |
+| `sheet[0]`, `sheet[0, 0:3]`, `sheet["A1:C1"]`, `sheet["1"]` — one row | `(3,)` | `(3,)` |
+| `sheet[0:3, 0]`, `sheet[:, 0]`, `sheet["A1:A3"]`, `sheet["A"]` — one column | `(3, 1)` | `(3,)` |
+| `sheet[0:3, 0:2]`, `sheet["A1:B3"]`, `sheet[0:3]`, `sheet["A:B"]` | `(3, 2)` | `(3, 2)` |
+| `sheet[0:1, 0:3]` — a slice of one row | `(1, 3)` | `(1, 3)` |
+
+An integer row index drops the row axis, as numpy does, and so does an address spanning one
+row: `sheet["A12:C12"]` is `(3,)` where `sheet[11:12, 0:3]` is `(1, 3)`. An integer column
+index keeps its axis, `(n, 1)`, where numpy drops it, and so does an address spanning one
+column; `to_vector()` (below) flattens it to `(n,)`.
 
 ### Cells (`Cell`)
 
