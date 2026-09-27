@@ -101,7 +101,7 @@ jobs:
           sudo add-apt-repository -y ppa:libreoffice/ppa
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libreoffice-calc libreoffice-script-provider-python libreoffice-l10n-fr
+            libreoffice-calc libreoffice-script-provider-python
           soffice --version
 
       # A number format that names its days and months without saying in which
@@ -111,6 +111,12 @@ jobs:
       # the same here as where they were written, or "dim. 27 sept." comes back
       # as "Sun 27 Sep". Pinned rather than asserted loosely, so the test keeps
       # checking that both agree character for character.
+      #
+      # The locale only: no language pack, deliberately. Formats follow the
+      # locale, error names follow the interface language, and the tests expect
+      # English ones - "#REF!", "Err:540". Installing libreoffice-l10n-fr turned
+      # those into "#RÉF !" and "Err :540" and failed three tests, which is what
+      # the development machine looks like: French locale, English LibreOffice.
       - name: Use the locale the consistency tests were written in
         run: |
           sudo locale-gen fr_FR.UTF-8
