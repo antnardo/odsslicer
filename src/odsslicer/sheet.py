@@ -946,6 +946,12 @@ class Sheet:
         cells from logical column `start` on - past the grid, whose cells
         must keep their elements."""
         attr = "table:number-columns-repeated"
+        # a row reaches its full width through a filler, one blank cell
+        # repeated to the end: without one, no need to add up its cells -
+        # which, for every row of a big sheet, doubled insert_columns' time
+        last = next((c for c in reversed(row_tag.contents) if isinstance(c, Tag)), None)
+        if last is None or _repeat(last, attr) <= MAX_REPEAT_ROWS:
+            return
         cells = row_tag.find_all(TAG_CELL, recursive=False)
         positions = list(itertools.accumulate((_repeat(c, attr) for c in cells), initial=0))
         if positions[-1] - count in _FULL_WIDTHS:
