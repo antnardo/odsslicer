@@ -22,6 +22,7 @@ from .addresses import string_address
 from .constants import EMPTY_CELL_BS, FORMATS, TAG_CELL
 from .datetimes import (
     _as_datetime,
+    _as_timedelta,
     _duration_text,
     _format_date_value,
     _format_time_value,
@@ -38,8 +39,24 @@ from .styles import CellStyle, _render_date_time_from_format, _render_number_fro
 from .xmlutils import _ODF_NAMESPACES, _blank_template, _ensure_style_child, _new_qualified_tag
 
 if TYPE_CHECKING:
+    from .reader import ODSReader
     from .sheet import Sheet
     from .styles import NumberFormat
+
+
+def _data_style_name(reader: "ODSReader", name: "str | None") -> "str | None":
+    """The name of the number format the cell style `name` gives a cell,
+    following its parents."""
+    visited: "set[str]" = set()
+    while name and name not in visited:
+        visited.add(name)
+        style = reader._find_style(name, family="table-cell")
+        if style is None:
+            return None
+        if "style:data-style-name" in style.attrs:
+            return cast(str, style["style:data-style-name"])
+        name = cast("str | None", style.get("style:parent-style-name"))
+    return None
 
 
 def _is_broadcastable_scalar(value: object) -> bool:
@@ -349,10 +366,16 @@ class Cell:
             self._value = self.text
         else:
             try:
-                self._value = FORMATS[self.format](self.raw_value)
+                value = FORMATS[self.format](self.raw_value)
             except (KeyError, TypeError, ValueError):
                 self._value = self.text
                 self._unreadable = f"{self.format} value {self.raw_value!r}"
+            else:
+                # PT07H30M is a time of day, or 7 h 30 of a duration: the
+                # format tells them apart - see `_counts_elapsed_time`
+                if isinstance(value, dt.time) and self._counts_elapsed_time():
+                    value = _as_timedelta(value)
+                self._value = value
         self._formula = self.attrs.get("table:formula", None)
 
         self.is_formula = self._formula is not None
@@ -420,9 +443,12 @@ class Cell:
             # day showed 07:30:00 AM in an en-US document (issue #16)
             kind = "duration" if isinstance(new_value, dt.timedelta) else "time"
             tag.attrs["office:time-value"] = _format_time_value(new_value)
-            # as reading it back gives it: a time if it fits in a day, else a timedelta
+            # as reading it back gives it: a time if it fits in a day, else a
+            # timedelta - and a timedelta in a format counting elapsed time
             new_value = _parse_time_value(tag.attrs["office:time-value"])
             self._format_if_unformatted(kind, new_value)
+            if isinstance(new_value, dt.time) and self._counts_elapsed_time():
+                new_value = _as_timedelta(new_value)
             same_format = self._has_date_time_format(new_value)
             text = (  # as for a date
                 self._render_display_from_number_format(new_value)
@@ -585,6 +611,26 @@ class Cell:
         number_format = self._resolved_number_format(value)
         return number_format is not None and number_format.family in ("date", "time")
 
+    def _counts_elapsed_time(self) -> bool:
+        """Whether this cell shows time in a format counting it in full -
+        `[HH]:MM:SS`, `number:truncate-on-overflow="false"` - a duration's,
+        as the format odsslicer gives a written timedelta is. ODF stores a
+        duration and a time of day alike, PT07H30M: a value that fits in a
+        day reads as a duration in such a format, as the timedelta written
+        there, and as a time of day otherwise (issue #20). The answer is
+        kept per number format, a column of times asking it for every cell."""
+        if self.sheet is None or self.sheet.reader is None:
+            return False
+        reader = self.sheet.reader
+        name = _data_style_name(reader, self._style_name())
+        if name is None:
+            return False
+        if name not in reader._elapsed_formats:
+            tag = reader._find_number_style(name)
+            elapsed = tag is not None and tag.get("number:truncate-on-overflow") == "false"
+            reader._elapsed_formats[name] = elapsed
+        return reader._elapsed_formats[name]
+
     def _number_format_at(self, tag: Tag) -> "str | None":
         """The name of the number format the cell element `tag` shows with:
         its own style's, else its column's default cell style's, following
@@ -605,16 +651,7 @@ class Cell:
                 if col < seen:
                     name = cast("str | None", definition.get("table:default-cell-style-name"))
                     break
-        visited: "set[str]" = set()
-        while name and name not in visited:
-            visited.add(name)
-            style = reader._find_style(name, family="table-cell")
-            if style is None:
-                return None
-            if "style:data-style-name" in style.attrs:
-                return cast(str, style["style:data-style-name"])
-            name = cast("str | None", style.get("style:parent-style-name"))
-        return None
+        return _data_style_name(cast("ODSReader", reader), name)
 
     def _format_template_candidates(
         self, fmt: "str | None", raw_attr: str, same_format: bool = False

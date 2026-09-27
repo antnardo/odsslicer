@@ -102,6 +102,9 @@ class ODSReader:
         # for an embedded object that is no chart
         self._parts: dict[str, BeautifulSoup | None] = {}
         self._drawing_tags: tuple[list[Tag], list[Tag]] | None = None  # see _drawings
+        # number formats, by name: whether each counts time in full, [HH]:MM
+        # (see Cell._counts_elapsed_time)
+        self._elapsed_formats: dict[str, bool] = {}
         logger.log(self._log_level, "    %r", self)
 
     def __repr__(self) -> str:

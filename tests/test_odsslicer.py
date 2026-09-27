@@ -642,7 +642,13 @@ def test_write_unsupported_type_raises_typeerror(writable_reader):
             dt.datetime(2026, 9, 20, 10, 11, 12, 123456),
             id="datetime64[ns]",
         ),
-        pytest.param(np.timedelta64(90, "m"), dt.time(1, 30), dt.time(1, 30), id="timedelta64"),
+        # a duration, in the format of a duration (issue #20)
+        pytest.param(
+            np.timedelta64(90, "m"),
+            dt.timedelta(minutes=90),
+            dt.timedelta(minutes=90),
+            id="timedelta64",
+        ),
         pytest.param(
             np.timedelta64(30, "h"),
             dt.timedelta(hours=30),
@@ -2016,12 +2022,78 @@ def test_a_written_date_time_or_duration_round_trips(tmp_path, value, raw):
     assert reread["A1"].format == s["A1"].format
 
 
-def test_a_written_duration_within_a_day_reads_as_a_time_of_day(writable_reader):
+def test_a_duration_written_into_a_time_of_day_cell_reads_as_a_time_of_day(writable_reader):
     # .value is at once what reading the cell back gives: see odsslicer/datetimes.py
     s = writable_reader.sheet("Sheet1")
-    s["A9"].value = dt.timedelta(hours=9, minutes=30)
+    s["A9"].value = dt.timedelta(hours=9, minutes=30)  # A9: HH:MM:SS, kept
     assert s["A9"].raw_value == "PT09H30M00S"
     assert s["A9"].value == dt.time(9, 30)
+
+
+@pytest.mark.parametrize(
+    ("value", "read"),
+    [
+        (dt.timedelta(hours=7, minutes=30), dt.timedelta(hours=7, minutes=30)),
+        (dt.time(7, 30), dt.time(7, 30)),
+    ],
+)
+def test_a_value_under_a_day_reads_back_as_the_kind_written(tmp_path, value, read):
+    # regression: a duration under a day read back as a time of day - the
+    # format it gets now, [HH]:MM:SS, tells it apart (issue #20)
+    r = ODSReader.new()
+    r.sheet("Sheet1")["A1"].value = value
+    assert r.sheet("Sheet1")["A1"].value == read
+    r.save(tmp_path / "out.ods")
+    back = ODSReader(tmp_path / "out.ods").sheet("Sheet1")["A1"].value
+    assert back == read
+    assert type(back) is type(read)
+
+
+_ELAPSED_STYLES = (
+    '<number:time-style style:name="Nelapsed" number:truncate-on-overflow="false">'
+    '<number:hours number:style="long"/><number:text>:</number:text>'
+    '<number:minutes number:style="long"/></number:time-style>'
+    '<number:time-style style:name="Nclock"><number:hours number:style="long"/>'
+    '<number:text>:</number:text><number:minutes number:style="long"/></number:time-style>'
+    '<style:style style:name="elapsed" style:family="table-cell" style:data-style-name="Nelapsed"/>'
+    '<style:style style:name="clock" style:family="table-cell" style:data-style-name="Nclock"/>'
+    '<style:style style:name="child" style:family="table-cell" style:parent-style-name="elapsed"/>'
+)
+
+
+def _time_cell(style=None):
+    style_attr = f' table:style-name="{style}"' if style else ""
+    return (
+        f'<table:table-cell{style_attr} office:value-type="time" office:time-value="PT07H30M00S">'
+        "<text:p>07:30</text:p></table:table-cell>"
+    )
+
+
+def test_copying_a_time_of_day_onto_a_duration_keeps_it_a_time_of_day():
+    # the copy takes the source's format before its value, which reads back
+    # through it: the target's [HH]:MM:SS made 09:00 a duration
+    r = ODSReader.new()
+    s = r.sheet("Sheet1")
+    s["A1"].value = dt.time(9)
+    s["B1"].value = dt.timedelta(hours=26)
+    s.copy("A1", "B1")
+    assert s["B1"].value == dt.time(9)
+
+
+def test_a_time_value_reads_as_its_format_says(tmp_path):
+    # PT07H30M: a duration in a format counting time in full, [HH]:MM, a
+    # time of day otherwise - as LibreOffice saves both
+    xml = (
+        '<table:table-column table:number-columns-repeated="4"/>'
+        '<table:table-column table:default-cell-style-name="elapsed"/>'
+        + table_row(
+            _time_cell("elapsed"), _time_cell("clock"), _time_cell(), _time_cell("child"), _time_cell()
+        )
+    )
+    s = ODSReader(ods_with_sheet(tmp_path / "times.ods", xml, _ELAPSED_STYLES)).sheet("Sheet1")
+    duration, clock = dt.timedelta(hours=7, minutes=30), dt.time(7, 30)
+    # its own format, a time of day's, none, its parent's, its column's
+    assert [s[0, col].value for col in range(5)] == [duration, clock, clock, duration, duration]
 
 
 def test_an_aware_datetime_is_written_in_utc(writable_reader):

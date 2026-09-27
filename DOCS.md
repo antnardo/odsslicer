@@ -156,19 +156,23 @@ Available formats are listed in `odsslicer.FORMATS` (ODF format -> conversion ca
 ### Dates, times and durations
 
 ODF stores a date cell as a date or a date-time, and a time cell as a *duration*, which only
-reads as a time of day when it is shorter than one. `cell.value` follows the value itself:
+reads as a time of day when it is shorter than one and its format shows a time of day.
+`cell.value` follows the value and the cell's format:
 
 | Stored in the file | `cell.value` |
 | --- | --- |
 | `office:date-value="2023-11-30"` | `date(2023, 11, 30)` |
 | `office:date-value="2023-11-30T13:00:00"` | `datetime(2023, 11, 30, 13, 0)` |
 | `office:time-value="PT09H30M00S"` | `time(9, 30)` |
+| `office:time-value="PT07H30M00S"`, shown `07:30` in `[HH]:MM` | `timedelta(hours=7, minutes=30)` |
 | `office:time-value="PT12H30M15.5S"` | `time(12, 30, 15, 500000)` |
 | `office:time-value="PT128H45M00S"`, shown `128:45:00` | `timedelta(hours=128, minutes=45)` |
 | `office:time-value="-PT01H30M00S"`, shown `-01:30:00` | `timedelta(hours=-1, minutes=-30)` |
 
-- A duration reads as a `time` when it lies within a day, and as a `timedelta` otherwise:
-  24 hours or more — an elapsed time in a `[HH]:MM:SS` format, typically — or negative.
+- A duration reads as a `timedelta` in a format counting time in full — `[HH]:MM:SS`, as
+  LibreOffice writes an elapsed time, and as odsslicer formats a `timedelta` written into a
+  cell with no format — and whenever it is 24 hours or more, or negative; as a `time` when it
+  lies within a day, in any other format. A `timedelta` written reads back as one.
 - One column can therefore mix `time` and `timedelta`, and a column of date-times can mix
   `datetime` and `date`: LibreOffice saves a date-time falling on midnight as a bare date.
   `Sheet.sort` orders either mix.

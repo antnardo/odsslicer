@@ -75,7 +75,7 @@ still change between minor versions.
   as the format asks, rounded as LibreOffice rounds them.
 - **A duration under a day shows as a duration.** Written into a cell with no format, it got
   the format of a time of day, `07:30:00 AM` in an en-US document; it gets `[HH]:MM:SS`, as a
-  longer one does. It still reads back as a `time`.
+  longer one does.
 - **A percentage's sign goes where the document's locale puts it**
   ([#17](https://github.com/antnardo/odsslicer/issues/17)): `NumberFormat.create` wrote a
   space before it in every document, `50 %` in en-US, where LibreOffice writes `50%`. And the
@@ -89,6 +89,13 @@ still change between minor versions.
 
 ### Changed
 
+- **A duration in a format counting time in full reads as a `timedelta`, whatever its
+  length** ([#20](https://github.com/antnardo/odsslicer/issues/20)): 7 h 30 in a `[HH]:MM`
+  cell read as `time(7, 30)`, as any value within a day did, so that a timesheet's column of
+  durations mixed `time` and `timedelta`. A `timedelta` written into a cell with no format,
+  which gets `[HH]:MM:SS`, now reads back as a `timedelta`. A value within a day in any other
+  format still reads as a `time`. `Sheet.copy` and `Sheet.sort` give a cell its format before
+  its value, which reads back through it.
 - **Writing into a merge's master cell keeps the merge**
   ([#19](https://github.com/antnardo/odsslicer/issues/19)), as typing into it does in
   LibreOffice. A value, a formula or a style written there undid it: a long date written into

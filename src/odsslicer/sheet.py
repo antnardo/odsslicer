@@ -646,14 +646,16 @@ class Sheet:
             for j in range(n_cols):
                 value, formula, style_name = snapshot[i][j]
                 target = self.rows[dest_row0 + i][dest_col0 + j]
+                # the style first, as a value reads back through its format - a
+                # time of day as a duration in a [HH]:MM one (issue #20); a cell
+                # showing with it already, through its column, is left without
+                # a style of its own
+                if target._style_name() != style_name:
+                    target.style = style_name
                 if formula is not None:
                     target.formula = _shift_odf_formula(formula, drow, dcol)
                 else:
                     target.value = value
-                # a cell showing with it already, through its column, is left
-                # without a style of its own
-                if target._style_name() != style_name:
-                    target.style = style_name
 
     def sort(self, source: "str | int | tuple[Any, ...] | slice", by: int, ascending: bool = True) -> None:
         """Sort the rows of `source` (a range address, e.g. `"A2:C10"`) in
@@ -717,12 +719,12 @@ class Sheet:
             drow = new_row - old_row
             for j, (value, formula, style_name) in enumerate(row_data):
                 target = self.rows[new_row][col0 + j]
+                if target._style_name() != style_name:  # as in `copy`
+                    target.style = style_name
                 if formula is not None:
                     target.formula = _shift_odf_formula(formula, drow, 0)
                 else:
                     target.value = value
-                if target._style_name() != style_name:  # as in `copy`
-                    target.style = style_name
 
     def create_pivot_table(
         self,
