@@ -169,42 +169,41 @@ def _unquote_odf_sheet_name(raw: str) -> str:
     return raw
 
 
-def _remap_cell_address(addr: str, remap: "Callable[[int, int], tuple[int, int]]") -> str:
-    """Rewrite a single ODF cell address (`.A1`, `.$A$1`, or bare `A1`)
-    through `remap(row, col) -> (row, col)` (0-based), keeping its `$` locks
-    and leading dot. Meant for structural edits - deleting or inserting
-    rows/columns - where the referenced cell itself moves, so unlike
-    `_shift_cell_address`'s fill/copy semantics a `$` lock is irrelevant.
-    Anything that isn't a plain cell address is returned untouched."""
-    dotted = addr.startswith(".")
-    body = addr[1:] if dotted else addr
-    m = _ODF_CELL_ADDRESS_RE.match(body)
-    if m is None:
-        return addr
-    col_abs, col_letters, row_abs, row_digits = m.groups()
-    row, col = remap(int(row_digits) - 1, string_to_col(col_letters))
-    new_letters = string_address(0, col)[:-1]
-    shifted = f"{col_abs}{new_letters}{row_abs}{row + 1}"
-    return f".{shifted}" if dotted else shifted
+# How a structural edit moves a referenced cell: `(row, col, edge)` -> its
+# new `(row, col)` (0-based), or `None` for a cell deleted with its row or
+# column. `edge` tells a single reference (`None`) from a range's first cell
+# ("start") or last ("end"): a range whose first or last row is deleted
+# keeps the rows left of it, as in a spreadsheet.
+_Remap = Callable[[int, int, "str | None"], "tuple[int, int] | None"]
 
 
 def _deletion_remap(
     deleted_rows: "list[int] | None" = None,
     deleted_cols: "list[int] | None" = None,
-) -> "Callable[[int, int], tuple[int, int]]":
-    """The `_remap_cell_address` rule for the (sorted) `deleted_rows` (or
-    `deleted_cols`) having been physically removed: an index moves back by
-    the number of removed positions strictly before it. A reference that
-    pointed exactly at a removed row/column is left unchanged (there's no
-    `#REF!`-style error value to represent "this reference is now broken" -
-    see the README's known limitations)."""
+) -> _Remap:
+    """The rule for the (sorted) `deleted_rows` (or `deleted_cols`) having
+    been physically removed: an index moves back by the number of removed
+    positions before it. A deleted cell is gone, unless it ends a range:
+    its first cell becomes the next one left, its last the previous one.
+    Leaving a deleted index unchanged, as this did, pointed the reference
+    at the cell that took its place - a range losing its last row took in
+    the row after it, a total just below for one (issue #12)."""
 
-    def remap(row: int, col: int) -> tuple[int, int]:
-        if deleted_rows and row not in deleted_rows:
-            row -= bisect.bisect_left(deleted_rows, row)
-        if deleted_cols and col not in deleted_cols:
-            col -= bisect.bisect_left(deleted_cols, col)
-        return row, col
+    def moved(index: int, deleted: "list[int] | None", edge: "str | None") -> "int | None":
+        if not deleted:
+            return index
+        before = bisect.bisect_left(deleted, index)
+        if before < len(deleted) and deleted[before] == index:
+            if edge is None:
+                return None
+            return index - before - (1 if edge == "end" else 0)
+        return index - before
+
+    def remap(row: int, col: int, edge: "str | None" = None) -> "tuple[int, int] | None":
+        new_row, new_col = moved(row, deleted_rows, edge), moved(col, deleted_cols, edge)
+        if new_row is None or new_col is None:
+            return None
+        return new_row, new_col
 
     return remap
 
@@ -213,17 +212,17 @@ def _insertion_remap(
     at_row: "int | None" = None,
     at_col: "int | None" = None,
     count: int = 1,
-) -> "Callable[[int, int], tuple[int, int]]":
-    """The `_remap_cell_address` rule for `count` rows (or columns) inserted
-    before index `at_row` (or `at_col`): every index at or past the
-    insertion point moves forward by `count`.
+) -> _Remap:
+    """The rule for `count` rows (or columns) inserted before index `at_row`
+    (or `at_col`): every index at or past the insertion point moves forward
+    by `count`.
 
     Applied to each end of a range independently, this reproduces what a
     spreadsheet does with ranges too: inserting strictly inside `A2:A10`
     stretches it (only the end moves), inserting at or above its first row
     moves it whole, inserting just below its last row leaves it alone."""
 
-    def remap(row: int, col: int) -> tuple[int, int]:
+    def remap(row: int, col: int, edge: "str | None" = None) -> "tuple[int, int] | None":
         if at_row is not None and row >= at_row:
             row += count
         if at_col is not None and col >= at_col:
@@ -233,35 +232,65 @@ def _insertion_remap(
     return remap
 
 
-def _remap_odf_formula_references(
-    formula: str,
-    target_sheet: str,
-    containing_sheet: str,
-    remap: "Callable[[int, int], tuple[int, int]]",
-) -> str:
-    """Rewrite, through `remap` (see `_remap_cell_address`), every reference
-    in an already ODF-syntax formula that resolves to `target_sheet` -
-    explicitly sheet-qualified, or bare when `containing_sheet` is
-    `target_sheet`; references into any other sheet are left as they are.
-    Used by `Sheet.delete_rows`/`insert_rows` and their column equivalents
-    to keep formulas, in this sheet or any other, pointing at the same
-    cells they did before the structural edit."""
-
-    def remap_one(part: str) -> str:
+def _remap_reference(
+    reference: str, target_sheet: str, containing_sheet: "str | None", remap: _Remap
+) -> "str | None":
+    """One reference - `.A1`, `Sheet2.$A$1`, or a range, `.A1:.B3` - through
+    `remap`, keeping its `$` locks, dots and sheet names; `None` if what it
+    pointed at was deleted whole, a single cell or every row or column of a
+    range. Only an address resolving to `target_sheet` moves - explicitly
+    sheet-qualified, or bare when `containing_sheet` is `target_sheet` -
+    and anything that isn't a plain cell address is left as it is. Meant
+    for structural edits, where the referenced cell itself moves: unlike
+    `_shift_cell_address`'s fill/copy semantics, a `$` lock is irrelevant."""
+    parts = reference.split(":", 1)
+    edges: "list[str | None]" = [None] if len(parts) == 1 else ["start", "end"]
+    rewritten: list[str] = []
+    before: "list[tuple[int, int]]" = []
+    after: "list[tuple[int, int]]" = []
+    for part, edge in zip(parts, edges, strict=True):
         m = _SHEET_QUALIFIED_RE.match(part)
         assert m is not None  # the pattern matches any non-empty reference part
         ref_sheet, addr = m.group("sheet"), m.group("addr")
         effective_sheet = _unquote_odf_sheet_name(ref_sheet) if ref_sheet else containing_sheet
-        if effective_sheet != target_sheet:
-            return part
-        remapped = _remap_cell_address(addr, remap)
-        return f"{ref_sheet}.{remapped}" if ref_sheet else remapped
+        dotted = addr.startswith(".")
+        cell = _ODF_CELL_ADDRESS_RE.match(addr[1:] if dotted else addr)
+        if effective_sheet != target_sheet or cell is None:
+            rewritten.append(part)
+            continue
+        col_abs, col_letters, row_abs, row_digits = cell.groups()
+        position = (int(row_digits) - 1, string_to_col(col_letters))
+        new = remap(*position, edge)
+        if new is None:
+            return None
+        before.append(position)
+        after.append(new)
+        text = f"{col_abs}{string_address(0, new[1])[:-1]}{row_abs}{new[0] + 1}"
+        text = f".{text}" if dotted else text
+        rewritten.append(f"{ref_sheet}.{text}" if ref_sheet else text)
+    ordered = len(before) == 2 and before[0][0] <= before[1][0] and before[0][1] <= before[1][1]
+    if ordered and (after[0][0] > after[1][0] or after[0][1] > after[1][1]):
+        return None  # every row, or every column, of the range deleted
+    return ":".join(rewritten)
+
+
+def _remap_odf_formula_references(
+    formula: str,
+    target_sheet: str,
+    containing_sheet: str,
+    remap: _Remap,
+) -> str:
+    """Rewrite, through `remap` (see `_remap_reference`), every reference in
+    an already ODF-syntax formula that resolves to `target_sheet`;
+    references into any other sheet are left as they are. Used by
+    `Sheet.delete_rows`/`insert_rows` and their column equivalents to keep
+    formulas, in this sheet or any other, pointing at the same cells they
+    did before the structural edit. A reference to what was deleted becomes
+    `[#REF!]`, as LibreOffice writes it."""
 
     def remap_bracket(inner: str) -> str:
-        if ":" in inner:
-            start, end = inner.split(":", 1)
-            return f"{remap_one(start)}:{remap_one(end)}"
-        return remap_one(inner)
+        remapped = _remap_reference(inner, target_sheet, containing_sheet, remap)
+        return "#REF!" if remapped is None else remapped
 
     return _ODF_BRACKET_RE.sub(lambda m: f"[{remap_bracket(m.group(1))}]", formula)
 

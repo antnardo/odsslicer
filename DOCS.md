@@ -700,9 +700,10 @@ Several operations rewrite formulas so they keep pointing at the same cells:
   sheet["C4"].formula_friendly    # "=A5+A6" — C5's own content, now at C4
   ```
 
-  A reference pointing *exactly* at the removed row/column is left as-is rather than modeled
-  as a `#REF!` error (there's no error-value concept) — deleting the first row of a
-  `SUM(A2:A3)` range shrinks it to `SUM(A2:A2)`.
+  As in LibreOffice, a range whose first or last row is removed keeps the rows left of it —
+  deleting row 3 turns `SUM(A2:A3)` into `SUM(A2:A2)` — and a reference to a removed cell, or
+  a range removed whole, becomes `#REF!` (`[#REF!]` in the file), which LibreOffice shows as
+  such.
 
 - `insert_rows`/`insert_columns`: references at or past the insertion point move forward, `$`
   locks included (the referenced cell moved, the formula wasn't filled):

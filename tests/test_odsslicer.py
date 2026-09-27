@@ -3954,9 +3954,61 @@ def test_delete_row_shrinks_a_range_spanning_the_deletion(writable_reader):
     s = writable_reader.sheet("Sheet1")
     assert s["A5"].formula_friendly == "=SUM(A2:A3)"
     s.delete_row(1)  # A2, the exact start of the range
-    # the start (exactly at the deleted row) is left as-is - best effort,
-    # no #REF!-style error value - the end (past it) shifts up
+    # the start moves to the first row left, the end (past it) shifts up
     assert s["A4"].formula_friendly == "=SUM(A2:A2)"
+
+
+@pytest.mark.parametrize(
+    ("formula", "expected"),
+    [
+        # rows 5 and 6 deleted; as LibreOffice rewrites them, through UNO
+        ("SUM(A5:A11)", "=SUM(A5:A9)"),  # its first rows
+        ("SUM(A2:A6)", "=SUM(A2:A4)"),  # its last rows
+        ("SUM(A2:A5)", "=SUM(A2:A4)"),  # its last row, and the one after
+        ("SUM(A5:A6)", "=SUM(#REF!)"),  # all of it
+        ("SUM(A5:C5)", "=SUM(#REF!)"),  # its only row
+        ("A5", "=#REF!"),
+        ("A5+A8", "=#REF!+A6"),
+        ("SUM(A4:A7)", "=SUM(A4:A5)"),
+        ("SUM($A$2:$A$6)", "=SUM($A$2:$A$4)"),
+    ],
+)
+def test_delete_rows_rewrites_references_as_libreoffice_does(formula, expected):
+    # regression: a deleted start or end, or a deleted cell, kept its
+    # address, and pointed at the cells taking its place
+    s = ODSReader.new().sheet("Sheet1")
+    for i in range(12):
+        s[i, 0].value = i + 1
+    s["B1"].formula = formula
+    s.delete_rows([4, 5])
+    assert s["B1"].formula_friendly == expected
+
+
+def test_a_range_written_backwards_is_no_deleted_range():
+    # its end before its start is how it was written, not a deletion
+    s = ODSReader.new().sheet("Sheet1")
+    s["C1"].formula = "SUM(A6:A2)"
+    s.insert_rows(0)
+    assert s["C2"].formula_friendly == "=SUM(A7:A3)"
+
+
+def test_deleting_the_last_row_of_a_range_leaves_out_the_total_below():
+    # regression: SUM(A1:A6) kept its end, and summed its own cell
+    s = ODSReader.new().sheet("Sheet1")
+    for i in range(6):
+        s[i, 0].value = i + 1
+    s["A7"].formula = "SUM(A1:A6)"
+    s.delete_row(5)
+    assert s["A6"].formula_friendly == "=SUM(A1:A5)"
+
+
+def test_delete_column_rewrites_references_as_libreoffice_does(writable_reader):
+    s = writable_reader.sheet("Sheet2Repeat")  # its columns are defined
+    s["A9"].formula = "SUM(B1:D1)"
+    s["B9"].formula = "D2+C2"
+    s.delete_column(3)  # D, the last of the range
+    assert s["A9"].formula_friendly == "=SUM(B1:C1)"
+    assert s["B9"].formula_friendly == "=#REF!+C2"
 
 
 def test_delete_column_shifts_a_formula_reference_right_of_it(writable_reader):

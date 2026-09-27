@@ -333,6 +333,25 @@ def test_libreoffice_shows_values_written_around_empty_columns_where_written(tmp
 
 
 @requires_soffice
+def test_libreoffice_computes_formulas_whose_references_were_deleted(tmp_path):
+    # issue #12: the total kept its range's end, and summed itself; a
+    # reference to a deleted cell read the cell below it
+    table = ODSReader.new()
+    sheet = table.sheet("Sheet1")
+    for i in range(6):
+        sheet[i, 0].value = i + 1
+    sheet["A7"].formula = "SUM(A1:A6)"
+    sheet["B1"].formula = "A5"
+    sheet.delete_row(5)  # row 6, the range's last
+    sheet.delete_row(4)  # row 5, B1's reference
+    path = tmp_path / "deleted.ods"
+    table.save(path)
+    shows = libreoffice_shows(path, tmp_path)
+    assert shows[4][0] == "10"  # SUM(A1:A4)
+    assert shows[0][1] == "#REF!"
+
+
+@requires_soffice
 def test_libreoffice_shows_numpy_values_and_a_nan_as_an_empty_cell(tmp_path):
     # issue #11: numpy's integers raised TypeError, and NaN was written as
     # office:value="nan", which LibreOffice showed as 0

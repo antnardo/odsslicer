@@ -36,6 +36,13 @@ still change between minor versions.
   written as `office:value="nan"`, which LibreOffice shows as 0 and counts in sums and
   averages. numpy's `NaT` does the same, and an infinite number raises `ValueError` instead
   of showing as 0.
+- **Deleting the last row of a range no longer takes in the row after it**
+  ([#12](https://github.com/antnardo/odsslicer/issues/12)). `delete_rows` and
+  `delete_column` kept the address of a reference to a deleted cell, which then read the cell
+  taking its place: a total's `SUM(A1:A6)` with row 6 deleted went on reading A6, the total
+  itself, a circular reference. As in LibreOffice, a range whose first or last row is deleted
+  now keeps the rows left of it, and a reference to a deleted cell, or a range deleted whole,
+  becomes `#REF!`.
 
 ### Changed
 

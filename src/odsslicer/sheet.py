@@ -29,6 +29,7 @@ from .datetimes import _comparable
 from .formulas import (
     _PIVOT_DATA_FUNCTIONS,
     _SHEET_QUALIFIED_RE,
+    _Remap,
     _deletion_remap,
     _insertion_remap,
     _quote_odf_sheet_name,
@@ -1315,7 +1316,7 @@ class Sheet:
             after = next(k for k, t in enumerate(definitions) if t is new_tag) + 1
             _give_back(definitions[after:], attr, count)
 
-    def _remap_formula_references(self, remap: "Callable[[int, int], tuple[int, int]]") -> None:
+    def _remap_formula_references(self, remap: _Remap) -> None:
         """After a structural edit of this sheet (rows or columns deleted or
         inserted), rewrite every formula in the whole document - this
         sheet's own, and any other sheet's formula that references into
