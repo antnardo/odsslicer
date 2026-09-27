@@ -366,7 +366,8 @@ def test_libreoffice_gives_print_title_columns_their_widths_after_an_insertion(
     # - and writes them in inches on an American system
     in_cm = [_centimetres(width) for width in columns[:4]]
     assert [round(width) for width in (in_cm[0], in_cm[2], in_cm[3])] == [1, 2, 3]
-    assert round(in_cm[1], 1) not in (1.0, 2.0)  # the new column: the default
+    # the inserted column repeats the one it pushed right, 2cm (issue #25)
+    assert round(in_cm[1]) == 2  # the inserted column repeats the one it pushed right (issue #25)
 
 
 def _centimetres(length):

@@ -78,6 +78,26 @@ def _holds_content(cell: Cell) -> bool:
 _DRAWING_PREFIXES = frozenset({"draw", "dr3d"})
 
 
+def _drawings_in(cell_tag: Tag) -> "list[Tag]":
+    """What is anchored in `cell_tag`: a chart, a shape, an image."""
+    return [
+        child
+        for child in cell_tag.find_all(True, recursive=False)
+        if child.prefix in _DRAWING_PREFIXES
+    ]
+
+
+def _rescue_drawings(cell_tag: Tag, heir: "Tag | None") -> None:
+    """Move what is anchored in `cell_tag` into `heir`, the cell taking its
+    place, so deleting a row or a column does not delete the chart anchored
+    there - LibreOffice keeps it, at the same address (issue #24). Nothing
+    to do it with, and it goes with the cell, as it did everywhere."""
+    if heir is None:
+        return
+    for drawing in _drawings_in(cell_tag):
+        heir.append(drawing.extract())
+
+
 # The sizes applications pad a sheet to with repeated blank rows and cells:
 # 1,048,576 rows - 65,536 before LibreOffice 3.3 and Excel 2007 - and 16,384
 # columns - 1,024 before LibreOffice 7.4. A sheet padded to one of them keeps
@@ -1013,18 +1033,12 @@ class Sheet:
             position = 0
             for k, cell_tag in enumerate(cells):
                 if position == col:
-                    drawings = [
-                        child
-                        for child in cell_tag.find_all(True, recursive=False)
-                        if child.prefix in _DRAWING_PREFIXES
-                    ]
-                    if drawings or len(cells) == 1:
+                    if _drawings_in(cell_tag) or len(cells) == 1:
                         heir = cells[k + 1] if k + 1 < len(cells) else None
                         if heir is None:
                             heir = self._empty_cell_template()
                             cell_tag.insert_after(heir)
-                        for drawing in drawings:
-                            heir.append(drawing.extract())
+                        _rescue_drawings(cell_tag, heir)
                     cell_tag.decompose()
                     break
                 position += _repeat(cell_tag, "table:number-columns-repeated")
@@ -1093,6 +1107,15 @@ class Sheet:
 
         for row in reversed(targets):  # bottom-up: earlier indexes stay valid
             self._unrepeat_row(row)
+            # what is anchored in the row stays at its address, in the row
+            # that takes its place - the one below, or the one above for the
+            # last row of the sheet (issue #24)
+            heir_row = row + 1 if row + 1 < len(self.rows) else row - 1
+            if 0 <= heir_row < len(self.rows):
+                for c, cell in enumerate(self.rows[row]):
+                    if _drawings_in(cell.cell):
+                        self._unrepeat_col(heir_row, c)
+                        _rescue_drawings(cell.cell, self.rows[heir_row][c].cell)
             self.rows[row][0].cell.parent.decompose()
             del self.rows[row]
         for r in range(targets[0], len(self.rows)):
@@ -1133,6 +1156,12 @@ class Sheet:
             if group is not self.table and group.find("table:table-column") is None:
                 group.decompose()
         for run in self._runs_in(self.rows):
+            # same as for a row: the chart anchored in the column moves to the
+            # cell taking its place, rather than going with it (issue #24)
+            heir_col = col + 1 if col + 1 < self.n_cols else col - 1
+            if 0 <= heir_col < self.n_cols:
+                self._unrepeat_col(run.start, heir_col)
+                _rescue_drawings(self.rows[run.start][col].cell, self.rows[run.start][heir_col].cell)
             self.rows[run.start][col].cell.decompose()  # once for the whole run
             for r in run:
                 del self.rows[r][col]
@@ -1318,8 +1347,14 @@ class Sheet:
                 covered.__init__(covered.cell, row=r, col=c, sheet=self)  # type: ignore[misc]
 
     def _insert_column_definitions(self, col: int, count: int) -> None:
-        """Insert `count` blank `<table:table-column>` definitions before
-        logical column `col`, so existing columns keep their widths.
+        """Insert `count` `<table:table-column>` definitions before logical
+        column `col`, so existing columns keep their widths.
+
+        The new ones repeat the definition of the column they push right -
+        its width, its visibility, the default cell style of a column
+        formatted as a whole - which is what LibreOffice gives a column
+        inserted before another (issue #25). Appending past the last column
+        has nothing to copy, and takes the default width.
 
         Applications declare definitions up to the sheet's maximum width
         (an empty one repeated thousands of times after the last used
@@ -1339,7 +1374,9 @@ class Sheet:
                     _set_repeat(tail, "table:number-columns-repeated", seen + n - col)
                     tag.insert_after(tail)
                     tag = tail
-                new_tag = _blank_template(self.table, "table:table-column")
+                # `tag` now starts at `col`: it is the definition of the
+                # column being pushed right, and the one to repeat
+                new_tag = copy.deepcopy(tag)
                 _set_repeat(new_tag, "table:number-columns-repeated", count)
                 tag.insert_before(new_tag)
                 break

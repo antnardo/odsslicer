@@ -1278,6 +1278,48 @@ _ROW_5_EDITS = {
 }
 
 
+# edit -> where a shape anchored in B2, inside the data, ends up. LibreOffice
+# keeps it at the same address when the row or the column it is anchored in
+# goes, rather than deleting it with them (issue #24).
+_IN_GRID_EDITS = {
+    "delete_rows([1]) (its own row)": (lambda s: s.delete_rows([1]), "B2"),
+    "delete_rows([0, 1]) (its row among others)": (lambda s: s.delete_rows([0, 1]), "B1"),
+    "delete_column(1) (its own column)": (lambda s: s.delete_column(1), "B2"),
+    "delete_rows([2]) (another row)": (lambda s: s.delete_rows([2]), "B2"),
+    "delete_column(0) (another column)": (lambda s: s.delete_column(0), "A2"),
+}
+
+
+@pytest.mark.parametrize("edit", list(_IN_GRID_EDITS))
+def test_a_shape_inside_the_data_survives_the_deletion_of_its_row_or_column(tmp_path, edit):
+    # regression (issue #24): a shape, a chart or an image is a child of the
+    # cell it is anchored to, so deleting that cell's row or column deleted it
+    # with them - a report template lost its chart on a plain delete_rows
+    change, shape_at = _IN_GRID_EDITS[edit]
+    xml = '<table:table-column table:number-columns-repeated="3"/>' + "".join(
+        table_row(text_cell(str(v)), shape_cell("Box") if v == 2 else empty_cells(), empty_cells())
+        for v in (1, 2, 3)
+    )
+    path = ods_with_sheet(tmp_path / "shape-in-grid.ods", xml)
+    r = ODSReader(path)
+    sheet = r.sheet("Sheet1")
+    assert addresses_holding(saved_table(path), _is_shape) == ["B2"]
+    change(sheet)
+    r.save()
+    assert addresses_holding(saved_table(path), _is_shape) == [shape_at]
+
+
+def test_inserted_columns_take_the_width_of_the_column_they_push_right(writable_reader):
+    # issue #25: they took the default width, where LibreOffice repeats the
+    # definition of the column they push right - its width, its visibility,
+    # the default cell style of a column formatted as a whole
+    s = writable_reader.sheet("Sheet1")
+    s.column_style(1).width = "5cm"
+    s.insert_columns(1, 2)
+    assert [s.column_style(c).width for c in (1, 2, 3)] == ["5cm", "5cm", "5cm"]
+    assert s.column_style(0).width != "5cm"
+
+
 @pytest.mark.parametrize("edit", list(_ROW_5_EDITS))
 def test_a_shape_below_the_data_stays_where_libreoffice_has_it(tmp_path, edit):
     # regression: writing past the data or inserting rows deleted it
@@ -2958,7 +3000,7 @@ def test_formula_template_refuses_what_is_not_a_row_or_column(writable_reader, f
     # substituted for its content - `'"{"&A1&"}"'` was silently stored as
     # `of:="&A1&"`, a different formula, where an unknown name already raised.
     s = writable_reader.sheet("Sheet1")
-    with pytest.raises(ValueError, match="double the braces|unsupported expression"):
+    with pytest.raises(ValueError, match=r"double the braces|unsupported expression"):
         s["A1"].formula = formula
 
 
@@ -5040,7 +5082,9 @@ def test_insert_columns_keeps_column_widths_with_their_columns(writable_reader):
     s.column_style(1).width = "5cm"
     s.insert_columns(1, 2)
     assert s.column_style(3).width == "5cm"
-    assert s.column_style(1).width is None and s.column_style(2).width is None
+    # the new ones repeat the column they push right, as LibreOffice does
+    # (issue #25) - see test_inserted_columns_take_the_width_of_the_column...
+    assert [s.column_style(c).width for c in (1, 2)] == ["5cm", "5cm"]
     assert _defined_extent(s)[1] == s.n_cols
 
 
@@ -5077,8 +5121,8 @@ def _widths(sheet):
         pytest.param(lambda s: None, ["1cm", "2cm", "3cm"], id="read"),
         pytest.param(lambda s: s.delete_column(1), ["1cm", "3cm"], id="delete_column(1)"),
         pytest.param(lambda s: s.delete_column(0), ["2cm", "3cm"], id="delete_column(0)"),
-        pytest.param(lambda s: s.insert_columns(1), ["1cm", None, "2cm", "3cm"], id="insert_columns(1)"),
-        pytest.param(lambda s: s.insert_columns(0), [None, "1cm", "2cm", "3cm"], id="insert_columns(0)"),
+        pytest.param(lambda s: s.insert_columns(1), ["1cm", "2cm", "2cm", "3cm"], id="insert_columns(1)"),
+        pytest.param(lambda s: s.insert_columns(0), ["1cm", "1cm", "2cm", "3cm"], id="insert_columns(0)"),
     ],
 )
 def test_the_widths_of_print_title_columns_stay_with_their_columns(tmp_path, edit, widths):
@@ -5099,7 +5143,7 @@ def test_the_widths_of_print_title_columns_stay_with_their_columns(tmp_path, edi
     ("edit", "widths"),
     [
         pytest.param(lambda s: s.delete_column(1), ["1cm", "3cm"], id="delete_column(1)"),
-        pytest.param(lambda s: s.insert_columns(1), ["1cm", None, "1cm", "3cm"], id="insert_columns(1)"),
+        pytest.param(lambda s: s.insert_columns(1), ["1cm", "1cm", "1cm", "3cm"], id="insert_columns(1)"),
     ],
 )
 def test_a_repeated_print_title_definition_is_split_where_it_stands(tmp_path, edit, widths):
