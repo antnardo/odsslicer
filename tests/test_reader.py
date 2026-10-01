@@ -1,12 +1,13 @@
-"""`ODSReader.save()`: writing the file, and what it leaves alone.
+"""`ODSReader.save()`: writing the file, what it leaves alone, and what it keeps.
 
-Two things are checked here. First, the write itself (issue #8): `save()` used
-to truncate its target and write the new zip into it, so a program reading the
-file meanwhile got a partial zip, and a save stopped midway left the workbook
-unreadable - these tests stop a save at each of its steps, and read the file on
-disk while the zip is being written. Second, that the parts `save()` copies
-through really are copied, byte for byte, and only serialised once something
-wrote to their tree.
+Three things are checked here. First, the write itself (issue #8): `save()`
+used to truncate its target and write the new zip into it, so a program
+reading the file meanwhile got a partial zip, and a save stopped midway left
+the workbook unreadable - these tests stop a save at each of its steps, and
+read the file on disk while the zip is being written. Second, that the parts
+`save()` copies through really are copied, byte for byte, and only serialised
+once something wrote to their tree. Third, that a part which is serialised says what it said: in
+particular that no run of whitespace is lost on the way.
 """
 
 import os
@@ -16,9 +17,11 @@ import stat
 import zipfile
 
 import pytest
+from lxml import etree
 
 from conftest import FIXTURES_DIR
 from odsslicer import ODSReader
+from odsslicer.xmlutils import _parse_xml, _root_local_name
 
 
 def _edited(path):
@@ -177,10 +180,11 @@ def test_recalculation_runs_on_the_saved_file(workbook, monkeypatch):
 # them - and parsing then serialising is faithful in meaning but not to the
 # byte. Measured on these very fixtures: attributes come back in another order
 # (1,427 start tags out of 3,110 in one `content.xml`), `&apos;` is written
-# out as `'`, an empty element collapses to `<x/>`, and a whitespace-only text
-# node is squeezed to a single space - which in `<number:text>   </number:text>`
-# is a number format losing its padding, 34 such nodes over three of the eight
-# fixtures below.
+# out as `'`, an empty element collapses to `<x/>`. (A whitespace-only text
+# node used to be squeezed to a single space too - which in
+# `<number:text>   </number:text>` was a number format losing its padding, 34
+# such nodes over three of the eight fixtures below; see "what a save keeps
+# as written" further down for how that is gone.)
 #
 # These tests fail as soon as a part nothing asked for is serialised.
 
@@ -306,3 +310,118 @@ def test_a_touched_settings_part_is_created_for_a_file_that_had_none(tmp_path):
     after = _saved(book, tmp_path)
 
     assert b'config:name="ooo:view-settings"' in after["settings.xml"]
+
+
+# ---------------------------------------------------------------------------
+# What a save keeps as written: whitespace, and the meaning of every part
+# ---------------------------------------------------------------------------
+#
+# A part that is serialised - `content.xml` and `meta.xml` on every save, the
+# others once touched - must say what it said. Attribute order, `&apos;` and
+# the shape of an empty element are allowed to change; nothing else is, so
+# the canonical form (C14N) of a part has to come back identical.
+#
+# BeautifulSoup squeezes a text node made of whitespace only to one character
+# while parsing, unless an element it was told to preserve is open:
+# `_parse_xml` names the document element, so everything under it is kept.
+# The accounting formats of three fixtures, `<number:text>   </number:text>`,
+# are the real-world case; the same loss reached `content.xml` on every save
+# of every version before this, for a padded format that happened to live
+# in its automatic styles.
+
+
+def _c14n(data):
+    return etree.tostring(etree.fromstring(data), method="c14n")
+
+
+def _with_part_edited(fixture, tmp_path, part, edit):
+    """A copy of `fixture` whose `part` went through `edit` (bytes -> bytes)."""
+    path = tmp_path / f"edited-{fixture.name}"
+    with zipfile.ZipFile(fixture) as src, zipfile.ZipFile(path, "w") as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            dst.writestr(item, edit(data) if item.filename == part else data)
+    return path
+
+
+# an accounting-style number format, padded with three spaces either side
+PADDED_FORMAT = (
+    b'<number:number-style style:name="NPAD"><number:text>   </number:text>'
+    b'<number:number number:decimal-places="2" number:min-integer-digits="1" number:grouping="true"/>'
+    b"<number:text>   </number:text></number:number-style>"
+)
+
+
+def _padded_in_automatic_styles(content):
+    assert b"<office:automatic-styles>" in content, "TEST.ods is expected to carry automatic styles"
+    return content.replace(b"<office:automatic-styles>", b"<office:automatic-styles>" + PADDED_FORMAT, 1)
+
+
+def test_a_padded_number_format_in_content_xml_keeps_its_padding_through_a_save(tmp_path):
+    # `content.xml` is regenerated by every save: a padded format there -
+    # one applied to a cell directly rather than through a named style -
+    # came back as `<number:text> </number:text>`, whatever the edit
+    path = _with_part_edited(FIXTURES_DIR / "TEST.ods", tmp_path, "content.xml", _padded_in_automatic_styles)
+    assert len(PADDED_NUMBER_TEXT.findall(_members(path)["content.xml"])) == 2
+
+    after = _saved(ODSReader(path), tmp_path)
+
+    assert len(PADDED_NUMBER_TEXT.findall(after["content.xml"])) == 2
+    reread = ODSReader(tmp_path / "saved.ods")
+    assert [t.get_text() for t in reread._find_number_style("NPAD").find_all("number:text")] == ["   ", "   "]
+
+
+@pytest.mark.parametrize("name, expected", sorted(PADDED_NUMBER_TEXT_COUNTS.items()))
+def test_a_styles_part_written_back_keeps_its_padded_number_formats(name, expected, tmp_path):
+    # copying `styles.xml` through hid the loss; once something writes to
+    # it, the tree is serialised and has to hold the padding itself
+    book = ODSReader(FIXTURES_DIR / "wild" / name)
+    book._touched_part("styles.xml")
+
+    after = _saved(book, tmp_path)
+
+    assert len(PADDED_NUMBER_TEXT.findall(after["styles.xml"])) == expected
+
+
+@pytest.mark.parametrize("fixture", FIXTURES, ids=lambda path: path.name)
+def test_a_save_without_an_edit_changes_nothing_in_meaning(fixture, tmp_path):
+    before = _members(fixture)
+
+    after = _saved(ODSReader(fixture), tmp_path)
+
+    for part in REGENERATED_PARTS:
+        assert _c14n(after[part]) == _c14n(before[part]), part
+
+
+@pytest.mark.parametrize("fixture", FIXTURES, ids=lambda path: path.name)
+def test_a_styles_part_written_back_says_what_it_said(fixture, tmp_path):
+    before = _members(fixture)
+    book = ODSReader(fixture)
+    book._touched_part("styles.xml")  # serialised from its tree, with nothing changed in it
+
+    after = _saved(book, tmp_path)
+
+    assert _c14n(after["styles.xml"]) == _c14n(before["styles.xml"])
+
+
+def test_parsing_keeps_every_run_of_whitespace_whatever_the_element():
+    # not only `number:text`: nothing is decided about what an element means
+    markup = (
+        b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        b"<!-- a comment before the document element, as XML allows -->\n"
+        b'<a:root xmlns:a="urn:a"><a:x>   </a:x><a:y><a:z>\t\n </a:z></a:y><a:w> </a:w></a:root>'
+    )
+    assert _root_local_name(markup) == "root"
+
+    out = _parse_xml(markup).encode("utf-8")
+
+    assert b"<a:x>   </a:x>" in out
+    assert b"<a:z>\t\n </a:z>" in out
+    assert b"<a:w> </a:w>" in out
+
+
+def test_parsing_something_that_is_not_xml_still_gives_a_tree():
+    assert _root_local_name(b"") is None
+    assert _root_local_name(b"no markup at all") is None
+    assert _parse_xml(b"").find(True) is None
+

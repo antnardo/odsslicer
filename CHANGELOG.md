@@ -7,6 +7,24 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A number format padded with spaces keeps its padding through a save.** BeautifulSoup
+  squeezes a text node made of whitespace only to a single character while parsing, so
+  `<number:text>   </number:text>` — the padding of an accounting format, by which the amounts
+  of a column line up — came back as one space from any part written out of its tree:
+  `content.xml` on every save of every version so far, for a format applied to a cell directly
+  rather than through a named style (none of the test fixtures holds one there, which is why it
+  went unseen; LibreOffice writes a number style where the cell style using it lives). Every
+  part is now parsed with its document element named as whitespace-preserving, which keeps
+  every text node under it as written, whatever element holds it — nothing in ODF has to be
+  named for that, and nothing can be forgotten. On the eight fixtures, a part written out of
+  its tree now comes back identical in canonical form (C14N) to what it was, `styles.xml`
+  included, where it lost 34 such nodes over three files before. Opening a document costs a few
+  per cent more for it, and no memory. One visible consequence on reading: a cell paragraph
+  made of spaces only, which no spreadsheet application writes (LibreOffice encodes a run of
+  spaces as `<text:s/>`), now reads as written rather than as one space.
+
 ### Added
 
 - **`settings.xml` is parsed on demand** (`ODSReader.settings_data`): the part holding what the
@@ -26,11 +44,12 @@ still change between minor versions.
 
   This keeps "values change, styling does not" a property of the code. Measured on the eight test
   fixtures: parsing and serialising back reorders the attributes of a third to a half of the start
-  tags, writes `&apos;` out as `'`, rewrites the XML declaration — and squeezes a whitespace-only
-  text node to a single space, which for `<number:text>   </number:text>` costs a number format
-  its padding, 34 such nodes over three of the fixtures. A part nothing touched never goes through
-  any of it. The invariant is under test on all eight fixtures, and asserted by
-  `benchmarks/sweep_real_files.py` on real files.
+  tags, writes `&apos;` out as `'`, rewrites the XML declaration — and, until the fix above,
+  squeezed a whitespace-only text node to a single space. A part nothing touched never goes
+  through any of it. The invariant is under test on all eight fixtures, and asserted by
+  `benchmarks/sweep_real_files.py` on real files. A file shipping no `settings.xml` now reads a
+  blank skeleton into `reader.settings` rather than `b""`, as `reader.styles` and `reader.meta`
+  already did for a missing part.
 
 ## [0.14.1] — 2026-09-27
 

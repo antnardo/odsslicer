@@ -323,10 +323,14 @@ Copying by default is what makes “values change, styling does not” a propert
 rather than a hope. Parsing XML and serialising it back is faithful in meaning but not to the
 byte, and the difference is measurable: on the eight test fixtures a round trip reorders the
 attributes of a third to a half of the start tags, writes `&apos;` out as `'`, collapses an empty
-element to `<x/>`, rewrites the XML declaration, and squeezes a whitespace-only text node to a
-single space — which for `<number:text>   </number:text>` is a number format quietly losing
-its padding (34 such nodes across three of those fixtures). A part nothing touched never goes
-through any of that, so none of it can reach a file where only values were edited.
+element to `<x/>` and rewrites the XML declaration. It is faithful in meaning, though: the
+canonical form (C14N) of every part written out of its tree is identical to the original's, on
+all eight fixtures — including every run of whitespace, which BeautifulSoup would otherwise
+squeeze to one character in a text node made of nothing else, and `<number:text>   </number:text>`
+is a number format whose padding that is (34 such nodes across three of those fixtures). The
+parts are parsed with their document element named as whitespace-preserving, so that holds for
+any element, not only the ones odsslicer knows. A part nothing touched never goes through any of
+it, so none of it can reach a file where only values were edited.
 
 `save()` never writes into the workbook itself: it writes the new file under a temporary name
 in the same folder (`.name.ods.<random>.tmp`), has it reach the disk, then renames it over the

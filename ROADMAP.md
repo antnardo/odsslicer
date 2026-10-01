@@ -270,20 +270,48 @@ et pour `styles.xml` pas même au sens.
   un fichier), un élément vide replié en `<x/>` (0 → 4 dans un `meta.xml`). Le poids bouge de
   −615 à +0 octets. Les 35 déclarations de namespace restent toutes, aucune balise ni attribut
   ne disparaît : la forme canonique C14N des deux parties est identique avant et après.
-- Ce que la sérialisation **perd** : BeautifulSoup normalise tout nœud de texte entièrement
+- Ce que la sérialisation **perdait** : BeautifulSoup normalise tout nœud de texte entièrement
   blanc à un seul caractère (`'   '` → `' '`, `'\t\n '` → `'\n'`) — c'est `endData()` dans bs4,
-  pas lxml, qui le fait seul est fidèle. Sur `styles.xml`, cela touche 34
+  pas lxml, qui le fait seul est fidèle. Sur `styles.xml`, cela touchait 34
   `<number:text>   </number:text>` répartis sur 3 fichiers sur 8 (8, 13 et 13) : des formats
-  comptables qui perdent leur rembourrage, donc un alignement de colonne changé dans le
-  tableur. La forme C14N de ces trois `styles.xml` n'est **pas** identique après un aller-retour.
-- Le même défaut atteint déjà `content.xml`, qui est sérialisé : un
-  `<number:text>   </number:text>` injecté dans ses styles automatiques ressort à un espace
-  après un simple `save()`. Aucune fixture n'en porte (LibreOffice range ces formats dans
-  `styles.xml`), ce qui explique qu'il n'ait jamais été vu. **Défaut ouvert, indépendant de
-  cette note.**
+  comptables qui perdaient leur rembourrage, donc un alignement de colonne changé dans le
+  tableur. La forme C14N de ces trois `styles.xml` n'était **pas** identique après un
+  aller-retour.
+- Le même défaut atteignait `content.xml`, sérialisé à chaque `save()`, dans toutes les
+  versions publiées (reproduit sur la 0.14.1) : un `<number:text>   </number:text>` injecté dans
+  ses styles automatiques ressortait à un espace. Aucune fixture n'en porte, parce que
+  LibreOffice écrit un style de nombre là où vit le style de cellule qui l'utilise : dans
+  `styles.xml` pour un style nommé, dans `content.xml` pour un format appliqué directement à
+  une cellule — le cas d'un format comptable choisi dans la barre d'outils.
 
-Conséquence pour la mise en page et les volets figés : la mécanique ne les bloque plus, mais
-réécrire `styles.xml` reste un recul tant que ce défaut est là. Il se corrigerait en passant à
-BeautifulSoup la liste des balises dont le blanc compte (`preserve_whitespace_tags`), ce qui
-suppose de nommer ces balises — à l'envers de la règle 4 — ou en lui passant tous les noms de
-balises du document. À décider avant d'écrire dans l'une ou l'autre partie.
+#### Le blanc est conservé (2026-10-01)
+
+Le levier est bien `preserve_whitespace_tags`, mais ni l'une ni l'autre des deux voies
+envisagées : bs4 compare ce jeu au **nom local** de chaque balise ouverte (`text`, pas
+`number:text`), et ne réduit un nœud blanc que si **aucune** balise du jeu n'est ouverte. Il
+suffit donc d'y mettre l'élément racine du document — `document-content`, `document-styles`…,
+lu sur la première balise ouvrante, à coût constant (`_parse_xml`) — pour que tout ce qu'il
+contient soit conservé tel quel, sans nommer une seule balise ODF (règle 4 respectée) et sans
+passe sur les octets. Passer tous les noms de balises du document reviendrait au même, avec une
+passe de plus ; en nommer quelques-unes aurait perdu en silence celles oubliées.
+
+- Après correction, les 8 fixtures reviennent identiques en forme C14N pour chaque partie
+  sérialisée — `content.xml`, `meta.xml`, et `styles.xml` quand on force sa sérialisation —, les
+  34 nœuds rembourrés compris. Les seules différences restantes sont la déclaration XML, l'ordre
+  des attributs, `&apos;`/`&quot;` rendus en caractères et `<x></x>` replié en `<x/>`, sans perte.
+- Coût : la vérification se fait à chaque balise ouverte et fermée, soit quelques pour cent sur
+  l'ouverture (mesuré avec `benchmarks/bench.py`, voir la section 12 de `DOCS.md`), rien en
+  mémoire.
+- Un effet de bord à connaître : un paragraphe de cellule entièrement blanc (`<text:p>   </text:p>`,
+  qu'aucun tableur n'écrit — LibreOffice code les espaces répétés en `<text:s/>`) se lit désormais
+  tel quel, trois espaces, là où il se lisait réduit à un.
+
+La relecture de la régénération paresseuse a aussi trouvé un chemin d'écriture sans drapeau :
+`add_condition` sur un format de nombre de `styles.xml` (celui d'un style de cellule nommé, le
+cas le plus courant dans un document LibreOffice) écrivait dans un arbre que `save()` recopiait,
+donc perdait la condition en silence — déjà vrai sur `master`, où `styles.xml` était toujours
+recopié. L'écriture pose maintenant le drapeau (`_touched_tag`), et chaque chemin pouvant
+atteindre une partie recopiée a un test qui échoue si on retire son drapeau.
+
+Conséquence pour la mise en page et les volets figés : plus rien ne retient la main sur la
+mécanique. Ce qui reste est le modèle et l'API de chacune des deux fonctionnalités.

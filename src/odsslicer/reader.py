@@ -15,7 +15,7 @@ from .libreoffice import _recalculate_file
 from .properties import DocumentProperties
 from .sheet import Sheet
 from .styles import _NUMBER_STYLE_TAGS, NumberFormat
-from .xmlutils import _blank_template, _new_qualified_tag
+from .xmlutils import _blank_template, _new_qualified_tag, _parse_xml
 
 logger = logging.getLogger("odsslicer")
 
@@ -95,9 +95,11 @@ class ODSReader:
             self.meta = read_optional("meta.xml", _BLANK_META_XML)
             # Application-specific settings, such as the window size or printer information.
             self.settings = read_optional("settings.xml", _BLANK_SETTINGS_XML)
-        self.data = BeautifulSoup(self.content, "xml")
-        self.styles_data = BeautifulSoup(self.styles, "xml")
-        self.meta_data = BeautifulSoup(self.meta, "xml")
+        # parsed so that they serialise back to what they say, whitespace
+        # included - see `_parse_xml`
+        self.data = _parse_xml(self.content)
+        self.styles_data = _parse_xml(self.styles)
+        self.meta_data = _parse_xml(self.meta)
         # `settings.xml` holds nothing a cell needs, so it is parsed only if
         # something asks for it - see `settings_data`
         self._settings_data: BeautifulSoup | None = None
@@ -147,7 +149,7 @@ class ODSReader:
         Whatever writes here must call `_touched_part("settings.xml")`, or
         `save()` will copy the original bytes over the change."""
         if self._settings_data is None:
-            self._settings_data = BeautifulSoup(self.settings, "xml")
+            self._settings_data = _parse_xml(self.settings)
         return self._settings_data
 
     def _touched_part(self, name: str) -> None:
@@ -333,9 +335,11 @@ class ODSReader:
         property of the code rather than a hope: parsing and serialising
         back is faithful in meaning but not to the byte - attributes come
         out in another order, an empty element collapses to `<x/>`, `&apos;`
-        becomes `'`, and a run of spaces in a text node is squeezed to one,
-        which for `<number:text>   </number:text>` in a number format is a
-        real loss. A part nothing touched never goes through that.
+        becomes `'`. (It used to lose something too: a run of spaces in a
+        text node was squeezed to one, which for `<number:text>   </number:text>`
+        in a number format cost it its padding - every part is now parsed so
+        that whitespace comes back as written, see `_parse_xml`.) A part
+        nothing touched never goes through any of it.
 
         The file is written under a temporary name in the same folder, then
         renamed over `path`: a program reading it meanwhile sees either the
@@ -438,7 +442,7 @@ class ODSReader:
             with ZipFile(self.file) as package:
                 members = set(package.namelist())
                 for name in missing:
-                    part = BeautifulSoup(package.read(name), "xml") if name in members else None
+                    part = _parse_xml(package.read(name)) if name in members else None
                     self._parts[name] = part if part and part.find("office:chart") else None
         return [(name, part) for name in wanted if (part := self._parts[name]) is not None]
 
