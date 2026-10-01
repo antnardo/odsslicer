@@ -156,3 +156,66 @@ des features.
 - Vraie prise en compte de la locale du document dans le rendu du texte affiché
   (`number:language`/`number:country` sur les `NumberFormat`) — actuellement approximé avec un
   séparateur `.`/`,` fixe.
+
+## Relecture de DOCS.md du 2026-10-01 — ce que coûterait de lever les limitations
+
+Quatre points relevés en relisant la section « Known limitations », avec leur coût estimé.
+Rien n'est engagé : noté pour décider plus tard.
+
+### 1. Séparateurs des nombres selon la locale — toujours vrai, et asymétrique
+
+Vérifié dans le code le 2026-10-01 : la limitation est exacte, mais seulement pour les
+**nombres**. Les dates et heures lisent bien `number:language`/`number:country` du format, et
+retombent sur la locale du document (`_date_names` + `_document_locale`, depuis la 0.13.1) ;
+`_render_number_from_format` rend encore avec un `.`/`,` fixe (`f"{value:,.Nf}"`) et ignore la
+locale du format.
+
+À faire : étendre la table des 67 locales de `dateformats` aux séparateurs décimal et de
+groupement, et rendre les nombres à travers elle. Petit travail, la table et le chemin de
+résolution de locale existent déjà. Gain réel surtout pour `.text` lu par odsslicer : un vrai
+tableur recalcule le texte affiché à l'ouverture.
+
+### 2. Faire suivre les autres plages à une édition de structure — mécanique, mais un inventaire
+
+Le remappage existe déjà et sert aux formules (`_remap_formula_references`) et aux graphiques
+(`_remap_drawing_references`) : une plage de plus se branche dessus. Le travail n'est pas
+l'algorithme mais l'inventaire des endroits où ODF écrit une plage, et leurs syntaxes :
+
+- tableaux croisés : `table:source-cell-range`/`table:target-range-address` ;
+- plages nommées : `table:named-range` (`table:cell-range-address`, `table:base-cell-address`)
+  et `table:named-expression` (une expression entière, donc le remappage de formule) ;
+- mises en forme conditionnelles : `calcext:conditional-format` (`calcext:target-range-address`)
+  et les conditions des `style:map`, qui contiennent des références ;
+- validations : `table:content-validation` (`table:condition`, `table:base-cell-address`) ;
+- plages de base de données et filtres : `table:database-range` ;
+- zones d'impression : `table:print-ranges` sur `table:table`.
+
+Pièges : une liste de plages séparées par des espaces, les références 3D, et le fait qu'une
+plage entièrement supprimée devrait devenir invalide (le remappage de suppression ne modélise
+pas `#REF!`). Compter une journée avec les tests, par famille.
+
+### 3. Texte enrichi partiel — une vraie fonctionnalité, pas un correctif
+
+`text:span` dans un `text:p`, plus `text:a` sur une portion. Il faut un modèle de « suites »
+(texte + style par portion), une API neuve (`cell.runs`), la création de styles de famille
+`text` (`style:family="text"`, nouvelle famille à gérer dans le fork de style), et décider ce
+que `.value`/`.text` font d'une cellule enrichie — aujourd'hui ils aplatissent. C'est le plus
+gros des quatre : conception d'API avant code.
+
+### 4. Les non-couverts — trois niveaux, et une marche commune
+
+- **Immédiat** : protection de la feuille (`table:protected` + `table:protection-key` sur
+  `table:table`) — un attribut, une propriété.
+- **Contenu** : validations/listes déroulantes et filtres automatiques — une structure par
+  feuille, référencée par les cellules (`table:content-validation-name`) ; même forme de travail
+  que les tableaux croisés, déjà fait.
+- **Regroupement de lignes/colonnes** : `table:table-row-group` imbrique les lignes ; le
+  chargement les trouve déjà (recherche récursive), mais insertion, suppression et bornes de
+  groupe demandent du soin.
+- **La marche commune** : volets figés (`settings.xml`) et mise en page (`style:master-page`,
+  `style:page-layout` dans `styles.xml`) sont hors de portée tant que `save()` recopie ces deux
+  parties telles quelles. Les régénérer comme `content.xml` et `meta.xml` est le vrai préalable,
+  et sert les deux d'un coup.
+- **Création de graphiques** : écrire une partie `Object N/content.xml` et ses entrées de
+  manifeste. La lecture est déjà là (les plages des graphiques sont lues et réécrites) ; créer
+  reste un chantier à part entière.
