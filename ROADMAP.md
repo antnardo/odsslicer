@@ -299,9 +299,9 @@ passe de plus ; en nommer quelques-unes aurait perdu en silence celles oubliées
   sérialisée — `content.xml`, `meta.xml`, et `styles.xml` quand on force sa sérialisation —, les
   34 nœuds rembourrés compris. Les seules différences restantes sont la déclaration XML, l'ordre
   des attributs, `&apos;`/`&quot;` rendus en caractères et `<x></x>` replié en `<x/>`, sans perte.
-- Coût : la vérification se fait à chaque balise ouverte et fermée, soit quelques pour cent sur
-  l'ouverture (mesuré avec `benchmarks/bench.py`, voir la section 12 de `DOCS.md`), rien en
-  mémoire.
+- Coût : la vérification se fait à chaque balise ouverte et fermée, soit +1,1 % à 1 000 lignes,
+  +1,9 % à 10 000 et +2,4 % à 100 000 sur l'ouverture (fichiers de `benchmarks/bench.py`, processus
+  frais entrelacés, médiane ; voir la section 12 de `DOCS.md`), rien en mémoire.
 - Un effet de bord à connaître : un paragraphe de cellule entièrement blanc (`<text:p>   </text:p>`,
   qu'aucun tableur n'écrit — LibreOffice code les espaces répétés en `<text:s/>`) se lit désormais
   tel quel, trois espaces, là où il se lisait réduit à un.

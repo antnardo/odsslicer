@@ -1336,6 +1336,12 @@ What the numbers mean in practice:
   document size).
 - **Copying into new columns** pays for growing every existing row first (`grow_to`) — the
   cost is proportional to the sheet's height, not just the copied block.
+- **Keeping whitespace as written costs a few per cent on open, and no memory.** Every part is
+  parsed with its document element named as whitespace-preserving (see [`Cell.value` and `save()`](#cellvalue-and-save)), and
+  BeautifulSoup then checks each element it opens and closes. Measured on the same synthetic
+  workbooks, open time in fresh processes, interleaved, median of 7 runs (3 at 100,000 rows),
+  before and after that change on one machine: +1.1 % at 1,000 rows, +1.9 % at 10,000, +2.4 % at
+  100,000; peak RSS within 0.5 % at every size.
 - A subtle one, fixed in 0.10: writing values of a format with **no example anywhere in the
   document** (e.g. the first dates into a numbers-only sheet) used to trigger a full-document
   scan per cell (~33 ms each on a 10k-row sheet). The display-inference lookups are now lazy;
