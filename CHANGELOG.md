@@ -5,6 +5,33 @@ All notable changes to `odsslicer` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
 still change between minor versions.
 
+## [Unreleased]
+
+### Added
+
+- **`settings.xml` is parsed on demand** (`ODSReader.settings_data`): the part holding what the
+  application remembers of the window — frozen panes, the active sheet, the cursor — was read as
+  bytes and never looked at. Nothing a cell needs lives there, so a document that never asks for
+  it is never parsed; a file shipping none, as Excel does, gives a blank skeleton to write into.
+  Nothing in the library writes there yet: this is the groundwork for frozen panes and page
+  layout, which both need a part other than `content.xml` written back.
+
+### Changed
+
+- **`save()` regenerates a part only once something wrote to its tree**, and copies every other
+  zip member byte for byte. `content.xml` and `meta.xml` are regenerated as before; `styles.xml`,
+  `settings.xml`, the manifest, the thumbnail and a chart's own content are now written back only
+  when the library touched them — a chart's content was rewritten as soon as a structural edit had
+  parsed it, even when no range of it moved.
+
+  This keeps "values change, styling does not" a property of the code. Measured on the eight test
+  fixtures: parsing and serialising back reorders the attributes of a third to a half of the start
+  tags, writes `&apos;` out as `'`, rewrites the XML declaration — and squeezes a whitespace-only
+  text node to a single space, which for `<number:text>   </number:text>` costs a number format
+  its padding, 34 such nodes over three of the fixtures. A part nothing touched never goes through
+  any of it. The invariant is under test on all eight fixtures, and asserted by
+  `benchmarks/sweep_real_files.py` on real files.
+
 ## [0.14.1] — 2026-09-27
 
 ### Fixed

@@ -213,9 +213,11 @@ gros des quatre : conception d'API avant code.
   chargement les trouve déjà (recherche récursive), mais insertion, suppression et bornes de
   groupe demandent du soin.
 - **La marche commune** : volets figés (`settings.xml`) et mise en page (`style:master-page`,
-  `style:page-layout` dans `styles.xml`) sont hors de portée tant que `save()` recopie ces deux
-  parties telles quelles. Les régénérer comme `content.xml` et `meta.xml` est le vrai préalable,
-  et sert les deux d'un coup.
+  `style:page-layout` dans `styles.xml`) demandaient que `save()` sache réécrire ces deux
+  parties. La mécanique est là (régénération paresseuse, voir ci-dessous) ; ce qui reste pour
+  les deux fonctionnalités, c'est le modèle et l'API — et la réserve de la mesure : la
+  sérialisation abîme un format de nombre rembourré d'espaces, donc une partie qu'on réécrit ne
+  revient pas intacte.
 - **Création de graphiques** : écrire une partie `Object N/content.xml` et ses entrées de
   manifeste. La lecture est déjà là (les plages des graphiques sont lues et réécrites) ; créer
   reste un chantier à part entière.
@@ -247,3 +249,41 @@ Comment lever la limitation sans perdre la promesse :
    réellement la sérialisation bs4/lxml, donc ce qu'on accepterait pour les deux autres parties.
 4. Sérialiser l'arbre analysé, jamais reconstruire : ce qu'odsslicer ne comprend pas (éléments
    inconnus, données binaires, parties d'une extension) doit traverser sans être interprété.
+
+#### Ce que la mesure a dit, et ce qui est fait (2026-10-01)
+
+Les points 1, 2 et 4 sont faits : `save()` recopie toute partie que rien n'a touchée, y compris
+le `content.xml` d'un graphique, `settings.xml` s'analyse au premier accès
+(`ODSReader.settings_data`), et l'invariant est sous test sur les huit fixtures du dépôt comme
+dans le balayage.
+
+Le point 3 a été mesuré sur ces huit fixtures (les six de `tests/wild/`, `TEST.ods`,
+`WHOLEROW.ods`), et il **retient la main** : la sérialisation est fidèle au sens, pas à l'octet,
+et pour `styles.xml` pas même au sens.
+
+- Un aller-retour sans édition ne réécrit que `content.xml` et `meta.xml` : 8 fichiers sur 8,
+  ce qui confirme le relevé des 28.
+- Ce que la sérialisation change, sans rien perdre : la déclaration XML
+  (`encoding="UTF-8" standalone="yes"` → `encoding="utf-8"`, et les CRLF d'Excel passent en LF),
+  l'ordre des attributs (de 34 % à 53 % des balises ouvrantes selon le fichier — 1 427 sur 3 110
+  pour le plus gros `content.xml`), `&apos;` et `&quot;` rendus en caractères (jusqu'à 123 dans
+  un fichier), un élément vide replié en `<x/>` (0 → 4 dans un `meta.xml`). Le poids bouge de
+  −615 à +0 octets. Les 35 déclarations de namespace restent toutes, aucune balise ni attribut
+  ne disparaît : la forme canonique C14N des deux parties est identique avant et après.
+- Ce que la sérialisation **perd** : BeautifulSoup normalise tout nœud de texte entièrement
+  blanc à un seul caractère (`'   '` → `' '`, `'\t\n '` → `'\n'`) — c'est `endData()` dans bs4,
+  pas lxml, qui le fait seul est fidèle. Sur `styles.xml`, cela touche 34
+  `<number:text>   </number:text>` répartis sur 3 fichiers sur 8 (8, 13 et 13) : des formats
+  comptables qui perdent leur rembourrage, donc un alignement de colonne changé dans le
+  tableur. La forme C14N de ces trois `styles.xml` n'est **pas** identique après un aller-retour.
+- Le même défaut atteint déjà `content.xml`, qui est sérialisé : un
+  `<number:text>   </number:text>` injecté dans ses styles automatiques ressort à un espace
+  après un simple `save()`. Aucune fixture n'en porte (LibreOffice range ces formats dans
+  `styles.xml`), ce qui explique qu'il n'ait jamais été vu. **Défaut ouvert, indépendant de
+  cette note.**
+
+Conséquence pour la mise en page et les volets figés : la mécanique ne les bloque plus, mais
+réécrire `styles.xml` reste un recul tant que ce défaut est là. Il se corrigerait en passant à
+BeautifulSoup la liste des balises dont le blanc compte (`preserve_whitespace_tags`), ce qui
+suppose de nommer ces balises — à l'envers de la règle 4 — ou en lui passant tous les noms de
+balises du document. À décider avant d'écrire dans l'une ou l'autre partie.
