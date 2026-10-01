@@ -158,6 +158,20 @@ class ODSReader:
         its bytes through."""
         self._touched.add(name)
 
+    def _touched_tag(self, tag: Tag) -> None:
+        """Record a write to `tag`, wherever it lives: the part whose tree
+        holds it is then serialised by `save()`. For a tag of `content.xml`
+        or `meta.xml`, which are always regenerated, there is nothing to
+        record. The way for code that writes to a tag it found rather than
+        made - a number format of `styles.xml`, say - to say so without
+        knowing which part it came from."""
+        top: Tag = tag
+        while top.parent is not None:
+            top = top.parent  # up to the document itself, the BeautifulSoup object
+        for name, part in self._lazy_parts().items():
+            if part is top:
+                self._touched_part(name)
+
     def _lazy_parts(self) -> "dict[str, BeautifulSoup]":
         """The parsed parts `save()` writes back only once touched, by the
         name they have in the package. `settings.xml` is absent until

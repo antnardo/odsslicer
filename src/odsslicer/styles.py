@@ -300,6 +300,9 @@ class NumberFormat:
         style_map.attrs["style:condition"] = condition
         style_map.attrs["style:apply-style-name"] = target.name
         self._tag.append(style_map)
+        # a format a named cell style uses lives in `styles.xml`, which
+        # save() copies through unless told something wrote to it
+        self._reader._touched_tag(self._tag)
         self.conditions.append((condition, target))
 
     def __repr__(self) -> str:

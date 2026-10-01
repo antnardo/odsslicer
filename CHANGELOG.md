@@ -24,6 +24,14 @@ still change between minor versions.
   per cent more for it, and no memory. One visible consequence on reading: a cell paragraph
   made of spaces only, which no spreadsheet application writes (LibreOffice encodes a run of
   spaces as `<text:s/>`), now reads as written rather than as one space.
+- **A condition added to a number format of `styles.xml` is written back.** `add_condition` on
+  the format of a named cell style — the one behind most formatted cells of a LibreOffice
+  document — wrote into a tree that `save()` copied through unchanged, so the condition was
+  silently dropped. Such a write now tells `save()` to serialise the part (`_touched_tag`).
+  The same loss was possible, in theory, for a row, column or sheet style of `styles.xml`
+  bearing a name odsslicer reserves for the styles it forks (`ors1`, `ocos1`, `ots1`...): such a
+  style is now forked into `content.xml` like any other instead of being written into. No real
+  producer names a style that way.
 
 ### Added
 

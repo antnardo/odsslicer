@@ -6,7 +6,8 @@ reading the file meanwhile got a partial zip, and a save stopped midway left
 the workbook unreadable - these tests stop a save at each of its steps, and
 read the file on disk while the zip is being written. Second, that the parts
 `save()` copies through really are copied, byte for byte, and only serialised
-once something wrote to their tree. Third, that a part which is serialised says what it said: in
+once something wrote to their tree - and that every write into such a tree
+says so. Third, that a part which is serialised says what it said: in
 particular that no run of whitespace is lost on the way.
 """
 
@@ -425,3 +426,59 @@ def test_parsing_something_that_is_not_xml_still_gives_a_tree():
     assert _root_local_name(b"no markup at all") is None
     assert _parse_xml(b"").find(True) is None
 
+
+# ---------------------------------------------------------------------------
+# Every write into a copied part says so
+# ---------------------------------------------------------------------------
+#
+# The parts `save()` copies through are only serialised once something records
+# a write to their tree (`_touched_part`, `_touched_tag`). A write that forgot
+# to would be silently lost on save: these tests hold each path that can reach
+# such a tree. A chart's content has its own tests (test_odsslicer.py, "a chart
+# follows..."). `settings.xml` has no writer in the library yet.
+
+
+def test_a_condition_added_to_a_number_format_of_styles_xml_is_written_back(workbook, tmp_path):
+    # a format a named cell style uses lives in `styles.xml` (A7 of TEST.ods
+    # is one): `add_condition` writes into it where it is
+    book = ODSReader(workbook)
+    sheet = book.sheet("Sheet1")
+    fmt, target = sheet["A7"].style.number_format, sheet["A8"].style.number_format
+    assert fmt._tag.find_parent("office:document-styles") is not None, "expected a format of styles.xml"
+    assert fmt.conditions == []
+
+    fmt.add_condition("value()<0", target)
+    _saved(book, tmp_path)
+
+    reread = ODSReader(tmp_path / "saved.ods").sheet("Sheet1")["A7"].style.number_format
+    assert [(condition, applied.name) for condition, applied in reread.conditions] == [
+        ("value()<0", target.name)
+    ]
+
+
+def test_a_style_of_styles_xml_bearing_a_fork_s_name_is_forked_rather_than_written_into(tmp_path):
+    # odsslicer names the styles it forks `ors1`, `ocos1`..., and writes into
+    # one it finds under such a name without forking again - but only one of
+    # its own, in the automatic styles of `content.xml`. A style of
+    # `styles.xml` that happens to bear the name is somebody else's.
+    foreign = (
+        b'<style:style style:name="ors1" style:family="table-row">'
+        b'<style:table-row-properties style:row-height="1cm"/></style:style>'
+    )
+
+    def add_foreign_style(styles):
+        assert b"<office:styles>" in styles
+        return styles.replace(b"<office:styles>", b"<office:styles>" + foreign, 1)
+
+    path = _with_part_edited(FIXTURES_DIR / "TEST.ods", tmp_path, "styles.xml", add_foreign_style)
+    before = _members(path)
+    book = ODSReader(path)
+    sheet = book.sheet("Sheet1")
+    sheet.rows[0][0].cell.parent["table:style-name"] = "ors1"
+    assert sheet.row_style(0).height == "1cm"
+
+    sheet.row_style(0).height = "2cm"
+    after = _saved(book, tmp_path)
+
+    assert after["styles.xml"] == before["styles.xml"]
+    assert ODSReader(tmp_path / "saved.ods").sheet("Sheet1").row_style(0).height == "2cm"

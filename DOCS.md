@@ -332,6 +332,12 @@ parts are parsed with their document element named as whitespace-preserving, so 
 any element, not only the ones odsslicer knows. A part nothing touched never goes through any of
 it, so none of it can reach a file where only values were edited.
 
+A write into a part that is copied through has to say so: the library records it
+(`_touched_part`, or `_touched_tag` for a write into a tag found rather than made), and
+`save()` serialises that part — `add_condition` on a number format of `styles.xml`, the one
+behind a named cell style, is such a write. An edit nothing recorded would be dropped by the
+copy, silently: every such path is under test.
+
 `save()` never writes into the workbook itself: it writes the new file under a temporary name
 in the same folder (`.name.ods.<random>.tmp`), has it reach the disk, then renames it over the
 target in one step. A program reading the workbook meanwhile gets the old version or the new
