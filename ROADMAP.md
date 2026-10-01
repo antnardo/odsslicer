@@ -219,3 +219,31 @@ gros des quatre : conception d'API avant code.
 - **Création de graphiques** : écrire une partie `Object N/content.xml` et ses entrées de
   manifeste. La lecture est déjà là (les plages des graphiques sont lues et réécrites) ; créer
   reste un chantier à part entière.
+
+### La contrainte à respecter si l'on régénère `styles.xml` et `settings.xml`
+
+Soulevé le 2026-10-01 : la promesse du paquet est qu'on modifie des valeurs **sans** toucher au
+style. Aujourd'hui cette promesse est absolue pour ces deux parties, parce que `save()` les
+recopie octet pour octet — un relevé rapide sur 28 fichiers l'a confirmé : seuls `content.xml`
+et `meta.xml` ressortent réécrits, jamais `styles.xml` ni `settings.xml`. Les régénérer
+remplacerait une garantie mécanique par une confiance dans la fidélité de l'analyseur et du
+sérialiseur, ce qui est un net recul.
+
+Comment lever la limitation sans perdre la promesse :
+
+1. **Régénération paresseuse, partie par partie.** Garder la recopie comme chemin par défaut et
+   ne sérialiser une partie que si son arbre en mémoire a été modifié (un drapeau posé par les
+   API qui y écrivent). Un fichier où l'on n'a changé que des valeurs ou des styles de cellule
+   — ces derniers vivant dans `content.xml` — garde alors ses deux parties intactes à l'octet.
+   `settings.xml` n'est même pas analysé aujourd'hui (lu en octets) : l'analyser à la demande,
+   au premier accès.
+2. **Invariant à mettre sous test** : une lecture suivie d'un enregistrement, sans édition, doit
+   laisser `styles.xml` et `settings.xml` identiques à l'octet. Le balayage
+   (`benchmarks/sweep_real_files.py`) est l'endroit pour l'affirmer sur de vrais fichiers, en
+   plus d'un test unitaire.
+3. **Mesure préalable à faire** (volontairement remise) : sur le corpus, comparer partie par
+   partie ce qu'un aller-retour modifie déjà pour `content.xml` et `meta.xml` — attributs
+   réordonnés, formes auto-fermantes, déclarations de namespace. Cela dira ce que coûte
+   réellement la sérialisation bs4/lxml, donc ce qu'on accepterait pour les deux autres parties.
+4. Sérialiser l'arbre analysé, jamais reconstruire : ce qu'odsslicer ne comprend pas (éléments
+   inconnus, données binaires, parties d'une extension) doit traverser sans être interprété.
