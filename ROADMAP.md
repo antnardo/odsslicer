@@ -247,3 +247,56 @@ Comment lever la limitation sans perdre la promesse :
    réellement la sérialisation bs4/lxml, donc ce qu'on accepterait pour les deux autres parties.
 4. Sérialiser l'arbre analysé, jamais reconstruire : ce qu'odsslicer ne comprend pas (éléments
    inconnus, données binaires, parties d'une extension) doit traverser sans être interprété.
+
+## Vers 1.0 — se passer de BeautifulSoup, lxml seul (décidé le 2026-10-01)
+
+Décision prise : on y va, et la rupture d'API est acceptée. Les attributs qui exposent des
+objets bs4 (`reader.data`, `styles_data`, `meta_data`, `settings_data`, `cell.cell`) sont des
+propriétés obscures, peu utilisées, et le paquet n'a pas d'utilisateurs à ménager. À faire à la
+**1.0**, annoncée comme telle, pas au fil d'une 0.14.x.
+
+### Ce que ça rapporte, mesuré
+
+Sur un `content.xml` réel de 185 Ko (`tests/wild/libreoffice26_linux_streets.ods`) :
+
+| | temps d'analyse | pic mémoire |
+| --- | --- | --- |
+| BeautifulSoup (`"xml"`, donc lxml dessous) | 0,10 s | 35,2 Mo |
+| lxml seul | 0,01 s | 23,9 Mo |
+
+Environ ×10 sur l'analyse, et un écart mémoire qui s'ouvre avec la taille : c'est la limite que
+DOCS.md documente déjà (~4,5 Ko par cellule, ~2 Go de pic à 100 000 × 5) — elle est largement le
+surcoût des objets bs4, un élément lxml étant une structure C de quelques dizaines d'octets.
+
+Et surtout, **la fidélité devient acquise par construction** : lxml préserve l'ordre des
+attributs, les échappements et les blancs (vérifié). Plus de perte de rembourrage des
+`<number:text>`, plus d'arbitrage autour de `preserve_whitespace_tags`, et régénérer
+`styles.xml` redevient sûr — donc mise en page et volets figés deviennent atteignables.
+
+### Ce que ça coûte
+
+Réécriture du cœur, pas un échange de bibliothèque : **~490 points d'appel** dans 7 015 lignes de
+`src` — `.attrs` 181, annotations `Tag` 121, `find`/`find_all` 83, plus `decompose`,
+`insert_before`/`insert_after`, `get_text`, `.string`, `deepcopy`. Les sélecteurs changent de
+nature : bs4 accepte le nom préfixé (`"table:table-cell"`), lxml veut `{URI}local` avec une carte
+de namespaces — plus correct au sens de XML, mais chaque appel est touché.
+
+### Le filet qui rend l'opération raisonnable
+
+Les ~1 030 tests, la suite de cohérence LibreOffice, et le balayage de 500 fichiers réels
+(`benchmarks/sweep_real_files.py` : invariant grille ↔ XML, écriture-relecture). C'est exactement
+ce qu'exige une réécriture de cœur, et c'est déjà en place.
+
+### Ordre à tenir
+
+1. **D'abord le correctif des blancs**, malgré cette décision : le même défaut atteint
+   `content.xml`, qui est sérialisé à chaque `save()` dans les versions **publiées** — un format
+   comptable perd son rembourrage sans que personne ne le voie. À vérifier et corriger pour
+   lui-même (voir [[projet-odsslicer-parties-paresseuses]] et la tâche en cours).
+2. **Puis l'étude de faisabilité** : inventaire des points d'appel par famille, prototype de la
+   couche d'accès (nommage `{URI}local`, carte de namespaces, clonage, insertion), mesure sur
+   1 000 / 10 000 / 100 000 lignes contre la section 12 de DOCS.md.
+3. **Puis la migration**, en gardant l'API publique haute (`ODSReader`, `Sheet`, `Cell`,
+   `CellStyle`…) inchangée. Seules les échappatoires changent de type : des éléments lxml, dit
+   dans le CHANGELOG et dans DOCS.md. Ne pas reconstruire une façade façon bs4 — ce serait
+   réécrire bs4.
