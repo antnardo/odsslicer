@@ -1268,16 +1268,23 @@ class Sheet:
                 after = cast(Tag, self.rows[-1][0].cell.parent)
         self.n_cols = max(self.n_cols, 1)  # a row holds a cell at least
         template = self._empty_row_template(self.n_cols)
+        # inserted by index, found once: bs4's insert_before and insert_after
+        # look it up with parent.index(), a scan from the first child, so
+        # placing each row with them cost count times the insertion point's
+        # position - 8 s for 20,000 rows inserted below 20,000
+        if before is not None:
+            parent = cast(Tag, before.parent)
+            position = parent.index(before)
+        elif after is not None:
+            parent = cast(Tag, after.parent)
+            position = _position_after(after)
+        else:
+            parent = self.table
+            position = len(parent.contents)
         new_rows = []
         for k in range(count):
             row_tag = copy.deepcopy(template)
-            if before is not None:
-                before.insert_before(row_tag)
-            elif after is not None:
-                after.insert_after(row_tag)
-                after = row_tag
-            else:
-                self.table.append(row_tag)
+            parent.insert(position + k, row_tag)
             new_rows.append(
                 [Cell(t, row=row + k, col=c, sheet=self) for c, t in enumerate(row_tag.find_all(TAG_CELL))]
             )
@@ -1326,20 +1333,19 @@ class Sheet:
             self._unrepeat_row(r)
         for r in range(self.n_rows):
             new_tags = [self._empty_cell_template() for _ in range(count)]
+            # by index, found once per row, as in `insert_rows`
             if col < self.n_cols:
                 self._unrepeat_col(r, col)
                 anchor = self.rows[r][col].cell
-                for tag in new_tags:
-                    anchor.insert_before(tag)
+                row_tag = cast(Tag, anchor.parent)
+                row_tag.insert(row_tag.index(anchor), *new_tags)
             else:
                 previous = self.rows[r][-1].cell
-                for tag in new_tags:
-                    previous.insert_after(tag)
-                    previous = tag
+                row_tag = cast(Tag, previous.parent)
+                row_tag.insert(_position_after(previous), *new_tags)
             self.rows[r][col:col] = [Cell(t, row=r, col=col + k, sheet=self) for k, t in enumerate(new_tags)]
             for c in range(col + count, len(self.rows[r])):
                 self.rows[r][c].col = c
-            row_tag = cast(Tag, self.rows[r][0].cell.parent)
             self._give_back_cells(row_tag, count, self.n_cols + count)
         if self.n_rows > 0:
             self.n_cols += count

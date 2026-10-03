@@ -16,6 +16,16 @@ still change between minor versions.
   comparisons. `benchmarks/bench.py`'s bulk writes at 100,000 rows took 246 s instead of 32 s.
   The new rows now go in at an index counted from the end of the table, where only what
   follows its last row (named ranges, conditional formats) has to be counted.
+- **`insert_rows` and `insert_columns` are linear in the rows and cells inserted.** Since
+  0.12.0, each new row was placed with BeautifulSoup's `insert_before` or `insert_after`, which
+  looks the neighbouring row up by scanning the table from its first row, so inserting N rows
+  cost N times the insertion point's position: `insert_rows(n, n)` on an n-row sheet took
+  8.2 s at 20,000 rows instead of 0.25 s (0.55 s instead of 0.07 s at 5,000), and inserting
+  them halfway down 5.5 s instead of 0.30 s. The insertion index is now found once per call.
+  `insert_columns` placed its new cells the same way within each row and now looks the index up
+  once per row instead of once per new cell, which matters for wide rows:
+  `insert_columns(1000, 1000)` on 200 rows of 1,000 columns took 6.7 s instead of 2.9 s
+  (Apple M4, Python 3.14, median of 3 interleaved fresh-process runs on the same machine).
 
 ## [0.14.3] — 2026-10-03
 

@@ -1543,24 +1543,58 @@ def test_writing_past_the_data_keeps_what_follows_the_rows_after_them(tmp_path):
     assert cells_with_content(ODSReader(path).sheet("Sheet1")) == {"A1": "a", "A3": "c", "A4": "d"}
 
 
+def _count_index_lookups(monkeypatch, name):
+    """The elements named `name` looked up with bs4's `Tag.index`, a scan
+    from the parent's first child, from now on."""
+    scanned = []
+    index = Tag.index
+
+    def counting_index(self, element):
+        if getattr(element, "name", None) == name:
+            scanned.append(element)
+        return index(self, element)
+
+    monkeypatch.setattr(Tag, "index", counting_index)
+    return scanned
+
+
 def test_writing_a_column_past_the_data_never_scans_the_table_for_a_row(monkeypatch):
     # regression (0.14.0 to 0.14.3): each new row went in with bs4's
     # insert_after, whose parent.index() scans the table from its first row,
     # and writing a column past the data grows the sheet one row per cell -
     # quadratic: generate+save of benchmarks/bench.py took 246 s at 100,000 rows, not 32 s
-    scanned = []
-    index = Tag.index
-
-    def counting_index(self, element):
-        if getattr(element, "name", None) == "table-row":
-            scanned.append(element)
-        return index(self, element)
-
-    monkeypatch.setattr(Tag, "index", counting_index)
+    scanned = _count_index_lookups(monkeypatch, "table-row")
     sheet = ODSReader.new().sheet("Sheet1")
     sheet[0:200, 0].value = [[float(i)] for i in range(200)]
     assert sheet.size == (200, 1)
     assert scanned == []
+
+
+@pytest.mark.parametrize("row", [0, 100, 200])
+def test_inserting_rows_scans_the_table_for_a_row_at_most_once(monkeypatch, row):
+    # regression: each new row went in with bs4's insert_before or
+    # insert_after, whose parent.index() scans the table from its first row -
+    # insert_rows(n, n) on n rows took 8.2 s at 20,000 rows, not 0.25 s
+    sheet = ODSReader.new().sheet("Sheet1")
+    sheet[0:200, 0].value = [[float(i)] for i in range(200)]
+    scanned = _count_index_lookups(monkeypatch, "table-row")
+    sheet.insert_rows(row, 200)
+    assert len(scanned) <= 1
+    values = [float(i) for i in range(200)]
+    assert sheet.to_list() == [[v] for v in values[:row] + [None] * 200 + values[row:]]
+
+
+@pytest.mark.parametrize("col", [0, 50, 100])
+def test_inserting_columns_scans_each_row_for_a_cell_at_most_once(monkeypatch, col):
+    # same within each row, one scan per new cell: insert_columns(1000, 1000)
+    # on 200 rows of 1,000 columns took 6.7 s, not 2.9 s
+    sheet = ODSReader.new().sheet("Sheet1")
+    sheet[0:20, 0:100].value = [[float(c) for c in range(100)] for _ in range(20)]
+    scanned = _count_index_lookups(monkeypatch, "table-cell")
+    sheet.insert_columns(col, 100)
+    assert len(scanned) <= 20
+    values = [float(c) for c in range(100)]
+    assert sheet.to_list() == [values[:col] + [None] * 100 + values[col:]] * 20
 
 
 # more than 1,000 empty rows between the data and a shape, which LibreOffice
