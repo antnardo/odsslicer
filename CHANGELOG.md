@@ -7,6 +7,26 @@ still change between minor versions.
 
 ## [Unreleased]
 
+## [0.14.3] — 2026-10-03
+
+### Fixed
+
+- **Spaces, tabs and line breaks written as elements are read**
+  ([#27](https://github.com/antnardo/odsslicer/issues/27)). ODF lets a consumer collapse the
+  whitespace a paragraph holds literally, so LibreOffice writes every run of two spaces or more,
+  every leading space, every tab and every Shift+Enter as an element — `<text:s text:c="N"/>`,
+  `<text:tab/>`, `<text:line-break/>` — and `cell.text`, `cell.value` and a comment's `.text`
+  read only the text nodes around them: `a<text:s text:c="2"/>b` read `ab` where LibreOffice
+  shows `a   b`, so any cell typed with a double space read one space short, and a tab or a
+  manual line break glued two words together. Every released version was affected. They now
+  read as LibreOffice shows them, checked against it on each form; a line break reads as `\n`.
+- **Writing encodes runs of whitespace the way LibreOffice does**: `"a   b"` is written
+  `a <text:s text:c="2"/>b`, a leading space as `<text:s/>`, a tab as `<text:tab/>`, where they
+  were written literally — which LibreOffice shows as written, but which ODF lets any other
+  consumer collapse. A value without such a run is written as before.
+- **Setting a hyperlink keeps the paragraph it wraps as it is** — spans and encoded spaces
+  included — where it flattened it to its text first.
+
 ## [0.14.2] — 2026-10-03
 
 ### Fixed
@@ -571,7 +591,8 @@ typed cell values (text, number, percentage, currency, date, time, boolean), for
 repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
-[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.14.2...HEAD
+[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.14.3...HEAD
+[0.14.3]: https://github.com/antnardo/odsslicer/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/antnardo/odsslicer/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/antnardo/odsslicer/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/antnardo/odsslicer/compare/v0.13.2...v0.14.0
