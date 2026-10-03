@@ -302,9 +302,16 @@ passe de plus ; en nommer quelques-unes aurait perdu en silence celles oubliées
 - Coût : la vérification se fait à chaque balise ouverte et fermée, soit +1,1 % à 1 000 lignes,
   +1,9 % à 10 000 et +2,4 % à 100 000 sur l'ouverture (fichiers de `benchmarks/bench.py`, processus
   frais entrelacés, médiane ; voir la section 12 de `DOCS.md`), rien en mémoire.
-- Un effet de bord à connaître : un paragraphe de cellule entièrement blanc (`<text:p>   </text:p>`,
-  qu'aucun tableur n'écrit — LibreOffice code les espaces répétés en `<text:s/>`) se lit désormais
-  tel quel, trois espaces, là où il se lisait réduit à un.
+- Un effet de bord, qui est aussi une correction : une suite d'espaces seule dans un nœud de
+  texte (`<text:p>   </text:p>`, les espaces avant un `<text:span>`, un span qui ne contient
+  qu'eux) se lit désormais telle quelle, là où elle se lisait réduite à un espace. LibreOffice
+  l'affiche telle quelle (vérifié par conversion d'un fichier portant chaque cas), et 2 des 250
+  vrais fichiers balayés en portent : LibreOffice code les espaces répétés en `<text:s/>`, mais
+  d'autres producteurs les écrivent en clair.
+- Reste ouvert, dans toutes les versions : `cell.text` ignore `<text:s text:c="N"/>`, donc
+  `a<text:s text:c="3"/>b` se lit `ab` là où LibreOffice affiche `a   b`. C'est la forme que
+  LibreOffice écrit lui-même pour deux espaces ou plus : défaut courant, à corriger à part
+  (`text:tab` et `text:line-break` à vérifier en même temps).
 
 La relecture de la régénération paresseuse a aussi trouvé un chemin d'écriture sans drapeau :
 `add_condition` sur un format de nombre de `styles.xml` (celui d'un style de cellule nommé, le

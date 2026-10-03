@@ -7,6 +7,8 @@ still change between minor versions.
 
 ## [Unreleased]
 
+## [0.14.2] — 2026-10-03
+
 ### Fixed
 
 - **A number format padded with spaces keeps its padding through a save.** BeautifulSoup
@@ -21,9 +23,11 @@ still change between minor versions.
   named for that, and nothing can be forgotten. On the eight fixtures, a part written out of
   its tree now comes back identical in canonical form (C14N) to what it was, `styles.xml`
   included, where it lost 34 such nodes over three files before. Opening a document costs a few
-  per cent more for it, and no memory. One visible consequence on reading: a cell paragraph
-  made of spaces only, which no spreadsheet application writes (LibreOffice encodes a run of
-  spaces as `<text:s/>`), now reads as written rather than as one space.
+  per cent more for it, and no memory. One visible consequence on reading, which is a fix too:
+  a run of spaces standing alone in a text node — a paragraph of spaces only, the spaces before
+  a `<text:span>`, a span holding nothing else — now reads as written, where it read as one
+  space. LibreOffice shows such runs as written: checked by converting a file holding each case,
+  and two of 250 real files swept carry them.
 - **A condition added to a number format of `styles.xml` is written back.** `add_condition` on
   the format of a named cell style — the one behind most formatted cells of a LibreOffice
   document — wrote into a tree that `save()` copied through unchanged, so the condition was
@@ -567,7 +571,8 @@ typed cell values (text, number, percentage, currency, date, time, boolean), for
 repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
-[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.13.2...HEAD
+[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.14.2...HEAD
+[0.14.2]: https://github.com/antnardo/odsslicer/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/antnardo/odsslicer/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/antnardo/odsslicer/compare/v0.13.2...v0.14.0
 [0.13.2]: https://github.com/antnardo/odsslicer/compare/v0.13.1...v0.13.2
