@@ -487,8 +487,11 @@ de s'ouvrir vide ; un fichier aux préfixes non standard se lit.
 ### À décider
 
 - **Fusionner le prototype quand ?** `meta_data` y devient lxml : sur `master` avant la 1.0, ce
-  serait une rupture dans une 0.x. Soit la branche attend l'étape 5, soit on la fusionne sans le
-  portage de `properties.py` (la couche et ses tests seuls ne cassent rien).
+  serait une rupture dans une 0.x. Le balayage de la branche contre la 0.14.3 (250 fichiers) est à
+  zéro partout sauf une erreur nouvelle, et voulue : un fichier chiffré lève à l'ouverture, son
+  `meta.xml` passant par l'analyse stricte, là où la 0.14.3 l'ouvrait sans feuille. Soit la
+  branche attend l'étape 5, soit on la fusionne sans le portage de `properties.py` (la couche et
+  ses tests seuls ne cassent rien).
 - **`Cell.attrs` et `Sheet.attrs`** : les retirer, exposer `el.attrib` (clés `{URI}local`), ou
   garder une vue en lecture aux clés préfixées (`prefixed()` existe). DOCS.md en montre l'usage.
   Même question pour les clés de `cell_properties` et `text_properties` ; je garderais le préfixe

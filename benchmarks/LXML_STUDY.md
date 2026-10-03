@@ -211,6 +211,13 @@ edit, and each guard was broken once to see a test fail.
 with its own prefixes; the partial-link guard above). The module got simpler: no cast, no
 template copied to create an element.
 
+The real-files sweep against v0.14.3 (250 files, writing on 150) found no read difference, no
+grid violation, no write failure and no copied part rewritten, and **one new error**: one of the
+two encrypted files of LibreOffice's test suite now raises `XMLSyntaxError` when opened, its
+encrypted `meta.xml` going through the strict parser, where v0.14.3 opened it as a document
+with no sheet. That is pitfall 4 doing what it should, but on a 0.x line it is a change of
+behaviour all the same.
+
 What the port teaches about the cost per module is less the line count than the coupling. Moving
 `properties.py` meant moving `meta.xml`, and nothing else reads it. For `cell.py`, `sheet.py` and
 `styles.py`, the trees are shared: a `Cell` holds an element of `content.xml`, its `CellStyle`
