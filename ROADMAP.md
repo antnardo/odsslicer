@@ -348,6 +348,13 @@ attributs, les échappements et les blancs (vérifié). Plus de perte de rembour
 `<number:text>`, plus d'arbitrage autour de `preserve_whitespace_tags`, et régénérer
 `styles.xml` redevient sûr — donc mise en page et volets figés deviennent atteignables.
 
+> Corrigé par l'étude du 2026-10-03 : lxml préserve l'ordre des attributs et les blancs, **pas
+> les échappements**. `&apos;` et `&quot;` ressortent en caractères, `<x></x>` en `<x/>`, comme
+> avec bs4 ; seule la forme canonique (C14N) revient identique, sur les 8 fixtures et toutes leurs
+> parties. Régénérer `styles.xml` est donc sûr au sens où il l'est déjà avec bs4 depuis la 0.14.2,
+> pas davantage, et la recopie à l'octet des parties non touchées reste nécessaire. Le gain de
+> fidélité réel est ailleurs : plus de `preserve_whitespace_tags`, et l'ordre des attributs gardé.
+
 ### Ce que ça coûte
 
 Réécriture du cœur, pas un échange de bibliothèque : **~490 points d'appel** dans 7 015 lignes de
@@ -367,10 +374,130 @@ ce qu'exige une réécriture de cœur, et c'est déjà en place.
 1. ~~D'abord le correctif des blancs~~ — fait, publié en 0.14.2 avec la régénération
    paresseuse (voir « Le blanc est conservé » ci-dessus). La migration part de là : lxml seul
    doit garder au moins cette fidélité, et les tests qui l'épinglent la vérifient.
-2. **Puis l'étude de faisabilité** : inventaire des points d'appel par famille, prototype de la
-   couche d'accès (nommage `{URI}local`, carte de namespaces, clonage, insertion), mesure sur
-   1 000 / 10 000 / 100 000 lignes contre la section 12 de DOCS.md.
+2. ~~**Puis l'étude de faisabilité**~~ — faite le 2026-10-03, sur la 0.14.3 : voir ci-dessous et
+   `benchmarks/LXML_STUDY.md` (inventaire, pièges, mesures, en anglais), branche
+   `claude/lxml-study`.
 3. **Puis la migration**, en gardant l'API publique haute (`ODSReader`, `Sheet`, `Cell`,
    `CellStyle`…) inchangée. Seules les échappatoires changent de type : des éléments lxml, dit
    dans le CHANGELOG et dans DOCS.md. Ne pas reconstruire une façade façon bs4 — ce serait
    réécrire bs4.
+
+### Ce que l'étude a établi (2026-10-03)
+
+Le détail, chiffres et cas qui échouent, est dans `benchmarks/LXML_STUDY.md` ; les scripts qui les
+mesurent sont à côté (`lxml_inventory.py`, `lxml_corpus_scan.py`, `lxml_profile_open.py`).
+
+- **Aucune opération sans équivalent lxml raisonnable.** Deux demandent un utilitaire d'une
+  vingtaine de lignes, faute de contrepartie dans lxml : `unwrap()` et la recherche paresseuse en
+  ordre de document (`previous_elements`/`next_elements`, qui sert à l'inférence du texte
+  affiché). Les deux sont écrits et testés contre bs4. La décision tient.
+- **L'inventaire** : 519 points d'appel et 132 mentions de type sur la 0.14.3 (la 0.14.3 en a
+  ajouté 13). Attributs 238, recherches par nom 82, insertions 62, texte 27, suppressions 27,
+  parent et frères 27, noms qualifiés 26, clonage 11, analyse et construction 10, ordre de
+  document 7. Par module : `sheet` 167, `cell` 121, `styles` 99, `reader` 73, `properties` 30,
+  `xmlutils` 28.
+- **Les pièges, chacun montré en échec** dans `tests/test_xmltree.py` : le `tail` (en lxml, le
+  texte qui suit un élément lui appartient — `remove`, `deepcopy`, `addnext` le perdent, le
+  dupliquent ou le dépassent ; deux sites seulement travaillent dans du texte mixte, tous deux
+  dans `hyperlink`), les préfixes (un fichier qui lie `tab:` au namespace des tableaux : identique
+  pour LibreOffice, **zéro feuille** pour odsslicer aujourd'hui ; aucun des 492 fichiers du corpus
+  ne le fait), la création d'éléments (`_blank_template` disparaît : un élément créé détaché prend
+  le préfixe du document à l'insertion), l'analyse stricte.
+- **Les préfixes : la carte ne doit pas venir du document pour les noms.** Les URI sont fixées par
+  la spécification et les préfixes du code sont son propre vocabulaire ; une carte tirée du
+  document casserait justement le fichier `tab:`, qui n'a pas de clé `table`. Le document compte
+  pour les préfixes **dans les valeurs** : `of:=` d'une formule. Le corpus a 5 fichiers dont les
+  formules sont en `of:` sans que `of` soit déclaré.
+- **Un défaut actuel, trouvé en route** : un fichier chiffré s'ouvre sans erreur avec zéro
+  feuille, et `save()` écrit un `content.xml` vide par-dessus (c'est le `recover=True` de bs4).
+  Proposé à part, à corriger dans la 0.14.x.
+- **Le chiffre qui décide** : à 100 000 lignes, ouvrir puis charger la feuille, c'est 94 % de bs4
+  — l'analyse, la navigation, et le ramasse-miettes que ses millions d'objets Python occupent (un
+  tiers de l'ouverture). Le travail propre d'odsslicer pèse 6 %. Mais lxml ne parcourt l'arbre que
+  deux fois plus vite que bs4 (un proxy Python par élément atteint) : la projection donne **×5,8**
+  (12,2 s → 2,1 s) et **un pic mémoire divisé par deux** (1,9 Go → 0,9 Go), pas ×15. Les ~28 s
+  d'ouverture de la décision ne se retrouvent pas : 12 à 15 s ici, comme dans DOCS.md.
+- **Le prototype** : `xmltree.py` (pas une façade : le code appelle lxml directement, le module ne
+  porte que ce qui diffère assez pour coûter un bogue), et `properties.py` porté avec les lignes
+  de `reader.py` qui lisent et écrivent `meta.xml`. Coût : 30 points d'appel, 3 lignes de
+  `reader.py`, aucun test modifié.
+- **Le couplage suit les parties du paquet, pas les modules.** Porter `properties.py` voulait dire
+  porter `meta.xml`, que rien d'autre ne lit. `content.xml` et `styles.xml` sont lus par le même
+  code — un `Cell` tient un élément de l'un, son `CellStyle` un élément de l'un ou de l'autre,
+  `_find_in_styles` cherche dans les deux — : ils basculent ensemble, ou pas du tout.
+
+### Plan d'engagement — six étapes après l'étude
+
+Chaque étape se termine suite verte (pytest, mypy, ruff, suite LibreOffice) et balayage à zéro
+contre la dernière version publiée, sauf différence annoncée. Les étapes 2 à 4 ne cassent rien et
+peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_data`,
+`settings_data`) et attendent la 1.0, que publie l'étape 5.
+
+0. ~~**Couche d'accès et `meta.xml`**~~ — fait sur la branche de l'étude. Attention : `meta_data`
+   y devient un arbre lxml, donc la branche ne doit pas partir dans une 0.14.x telle quelle (voir
+   « À décider »).
+1. **`settings.xml` et le contenu des graphiques.** Deux parties que seul `reader.py` lit
+   (`settings_data`, `_charts`, la réécriture de leurs plages) : petit, et le premier usage de la
+   couche sur un chemin de `save()` qui recopie ou régénère. `_touched_tag` apprend à remonter à
+   la racine d'un arbre lxml (`getroottree()`). Rupture : `settings_data`, à garder pour la 1.0.
+2. **Préparation sur bs4, sans changer de bibliothèque.** Faire passer par des fonctions à corps
+   bs4, aux noms et à la sémantique de `xmltree`, tout ce qui diffère entre les deux : création
+   d'éléments (`_blank_template`, `_new_qualified_tag`, `EMPTY_CELL_BS`, `_TAG_FACTORY` → `new`,
+   57 sites), texte (`text`, `set_text`, les deux fonctions de paragraphe), suppression, clonage,
+   insertion avant ou après, remplacement, désenrobage (59 sites), comparaison de nom (`.name`,
+   `.prefix` → 26 sites). Module par module : `xmlutils`, `styles`, `cell`, `sheet`, `reader`.
+   Comportement inchangé, balayage à zéro : c'est ce qui le garantit. Les pièges du `tail` se
+   règlent alors une fois, dans des fonctions testées des deux côtés, au lieu d'une fois par site
+   dans la bascule.
+3. **Enfants ou descendants, site par site.** Les 47 recherches qui comptent sur le défaut
+   récursif de `find_all` disent ce qu'elles veulent (`recursive=False` là où ce sont des
+   enfants). Étape à part parce qu'elle peut changer un comportement — elle corrige des bogues du
+   type de la note lue comme valeur — et que chaque différence au balayage doit pouvoir lui être
+   imputée.
+4. **Décisions d'API, écrites dans DOCS.md avant le code** : ce que deviennent `Cell.attrs`,
+   `Sheet.attrs`, les clés de `cell_properties`/`text_properties` (voir « À décider »), et le
+   message d'erreur d'un fichier chiffré ou mal formé.
+5. **La bascule : `content.xml` et `styles.xml` sur lxml, ensemble — 1.0.** Les fonctions de
+   l'étape 2 prennent les corps de `xmltree` ; reste le mécanique : 238 accès aux attributs
+   (`el.get(qn(...))`, constantes précalculées sur le chemin chaud), 82 recherches, 27
+   navigations, 132 annotations. bs4 quitte les dépendances ; le `xfail` du fichier `tab:` saute.
+   **C'est l'étape la plus risquée** : les éditions de structure de `sheet.py` (découpe des
+   répétitions, `_unrepeat_*`, `_take_back_rows`, 22 navigations vers le parent ou les frères,
+   dans des groupes de lignes), l'alias `Cell.attrs` écrit à travers lui-même, `_touched_tag`, et
+   la vitesse de `Sheet.load`, à remesurer contre la projection. Balayage attendu à zéro, hors
+   fichiers chiffrés (qui lèvent) et préfixes non standard (qui se lisent).
+6. **Le chemin chaud et la mesure.** `Cell.__init__` et `Sheet.load` en appels lxml natifs, banc
+   complet contre la section 12 de DOCS.md, CHANGELOG et DOCS de la 1.0 (les échappatoires
+   devenues lxml, nommées une à une).
+
+Pourquoi cet ordre : du plus isolé au plus couplé, et pour que chaque différence de balayage ait
+une seule cause possible. Les étapes 1 et 2 ne changent rien à ce qu'on lit ou écrit, et le
+balayage le prouve ; la 3 change peut-être quelque chose, et seulement ce qu'elle vise ; la 5
+change de bibliothèque sans changer de logique, puisque toute la logique délicate a déjà été
+déplacée et testée à l'étape 2. La bascule elle-même ne peut pas être découpée : tant que
+`content.xml` et `styles.xml` partagent leur code, il n'y a pas d'état intermédiaire où l'un est
+en lxml et l'autre en bs4.
+
+Ruptures d'API à annoncer à la 1.0 : `reader.data`, `styles_data`, `meta_data`, `settings_data`,
+`reader.tables`, `sheet.table`, `cell.cell` deviennent des éléments ou arbres lxml ; `Cell.attrs`
+et `Sheet.attrs` selon la décision ci-dessous ; `export_content_xml(pretty=True)` sort
+l'indentation de lxml. Changements de comportement : un fichier chiffré ou mal formé lève au lieu
+de s'ouvrir vide ; un fichier aux préfixes non standard se lit.
+
+### À décider
+
+- **Fusionner le prototype quand ?** `meta_data` y devient lxml : sur `master` avant la 1.0, ce
+  serait une rupture dans une 0.x. Soit la branche attend l'étape 5, soit on la fusionne sans le
+  portage de `properties.py` (la couche et ses tests seuls ne cassent rien).
+- **`Cell.attrs` et `Sheet.attrs`** : les retirer, exposer `el.attrib` (clés `{URI}local`), ou
+  garder une vue en lecture aux clés préfixées (`prefixed()` existe). DOCS.md en montre l'usage.
+  Même question pour les clés de `cell_properties` et `text_properties` ; je garderais le préfixe
+  de la spécification, qui ne dépend pas du fichier.
+- **Analyse stricte** : recommandée (le corpus ne contient aucun XML que `recover=True` aurait dû
+  réparer), avec détection du chiffrement par le manifeste pour un message clair.
+- **`of:` non déclaré** : à l'écriture d'une formule, déclarer `of` sur la racine s'il manque, ou
+  écrire avec le préfixe que le document lie à OpenFormula (`prefix_of()`) — 5 fichiers réels sont
+  concernés.
+- **Plancher de lxml** : `lxml>=4.6` aujourd'hui. Les roues des Python récents imposent de fait
+  une 5.x ; le relever à la 1.0 ne coûte rien.
+
