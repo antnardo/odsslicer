@@ -312,8 +312,17 @@ path is `meta.xml`, a few hundred bytes whatever the size of the sheet. The proj
 where the rewrite's gain shows. Two things this table shows besides:
 
 - **"generate + save" is superlinear**: ×12 from 1,000 to 10,000 rows, then ×50 to 100,000,
-  and 175 to 242 s where DOCS.md says 42 s. It is bulk writing, unrelated to this study, and the
-  same on `master`: proposed separately.
+  and 175 to 242 s where DOCS.md says 42 s, on `master` as on this branch. It turned out to be a
+  cost of bs4, found in a separate session (branch `claude/elated-colden-aad4ed`, 246 s → 32 s):
+  since 0.14.0, growing a sheet adds each row with `insert_after`, and bs4's `insert_after`
+  finds the element's position with `parent.index(self)`, which walks the parent's children. One
+  row after another, that is N²/2 comparisons. lxml's `addnext` relinks a node in constant time:
+  measured on 2,000 then 8,000 rows added one after the other, bs4 goes from 25 ms to 377 ms,
+  lxml from 1 ms to 3 ms. The same walk is behind bs4's `insert_before`, `extract` and
+  `decompose`: every removal and insertion of the inventory (27 + 21 sites) costs a pass over
+  the siblings today, and nothing on lxml. Not lxml's `parent.insert(i, el)` and
+  `parent.index(el)`, which walk too: a port moves next to a known element with
+  `addnext`/`addprevious`, never by index.
 - `to_numpy` and `sort` vary by a factor of two at 10,000 rows between runs: the machine's
   background load, not the code.
 

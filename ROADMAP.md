@@ -417,6 +417,13 @@ mesurent sont à côté (`lxml_inventory.py`, `lxml_corpus_scan.py`, `lxml_profi
   deux fois plus vite que bs4 (un proxy Python par élément atteint) : la projection donne **×5,8**
   (12,2 s → 2,1 s) et **un pic mémoire divisé par deux** (1,9 Go → 0,9 Go), pas ×15. Les ~28 s
   d'ouverture de la décision ne se retrouvent pas : 12 à 15 s ici, comme dans DOCS.md.
+- **Un coût de bs4 caché dans les éditions** : `insert_after`, `insert_before`, `extract` et
+  `decompose` cherchent la position de l'élément en parcourant tous ses frères. C'est la
+  régression quadratique de `grow_to` trouvée à part (246 s → 32 s pour générer 100 000 lignes,
+  branche `claude/elated-colden-aad4ed`), et `insert_rows` a la même. En lxml, `addnext` et
+  `addprevious` sont en temps constant (8 000 lignes ajoutées l'une après l'autre : 3 ms contre
+  377 ms) ; `parent.insert(i, …)` et `parent.index(…)` restent linéaires, donc le portage
+  s'interdit l'indice et se place toujours à côté d'un élément connu.
 - **Le prototype** : `xmltree.py` (pas une façade : le code appelle lxml directement, le module ne
   porte que ce qui diffère assez pour coûter un bogue), et `properties.py` porté avec les lignes
   de `reader.py` qui lisent et écrivent `meta.xml`. Coût : 30 points d'appel, 3 lignes de
