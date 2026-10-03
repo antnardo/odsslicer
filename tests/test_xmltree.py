@@ -23,6 +23,7 @@ from odsslicer.xmltree import (
     following,
     insert_after,
     new,
+    paragraph_text,
     parse,
     preceding,
     prefix_of,
@@ -30,11 +31,12 @@ from odsslicer.xmltree import (
     qn,
     remove,
     serialize,
+    set_paragraph_text,
     set_text,
     text,
     unwrap,
 )
-from odsslicer.xmlutils import _parse_xml
+from odsslicer.xmlutils import _paragraph_text, _parse_xml, _set_paragraph_text
 
 TABLE = NAMESPACES["table"]
 DECLARATIONS = " ".join(f'xmlns:{prefix}="{uri}"' for prefix, uri in NAMESPACES.items())
@@ -346,6 +348,39 @@ class TestText:
         assert etree.tostring(p, method="c14n", exclusive=True) == b"<text:p>neuf</text:p>".replace(
             b"<text:p>", f'<text:p xmlns:text="{NAMESPACES["text"]}">'.encode()
         )
+
+
+class TestParagraphText:
+    """What a cell says, ODF's whitespace elements included (0.14.3): the
+    lxml versions behave as the bs4 ones in `xmlutils`."""
+
+    @pytest.mark.parametrize(
+        "xml",
+        [
+            "<text:p>plain</text:p>",
+            "<text:p/>",
+            '<text:p>a<text:s text:c="3"/>b</text:p>',
+            "<text:p><text:s/>lead<text:tab/>tab<text:line-break/>next</text:p>",
+            '<text:p>a<text:span>b<text:s text:c="2"/>c</text:span>d<text:s text:c="x"/>e</text:p>',
+            "<text:p>a<!-- not said -->b</text:p>",
+            LINKED,
+        ],
+    )
+    def test_paragraph_text_matches_bs4(self, xml):
+        assert paragraph_text(lxml_fragment(xml)) == _paragraph_text(bs4_fragment(xml))
+
+    def test_naive_text_drops_the_encoded_spaces(self):
+        assert text(lxml_fragment('<text:p>a<text:s text:c="3"/>b</text:p>')) == "ab"
+
+    @pytest.mark.parametrize(
+        "value", ["plain", "", "a  b", "   lead", "a\tb", " ", "a   b    c\t\td ", "x \t y"]
+    )
+    def test_set_paragraph_text_matches_bs4(self, value):
+        soup_p, lxml_p = bs4_fragment(LINKED), lxml_fragment(LINKED)
+        _set_paragraph_text(soup_p, value)
+        set_paragraph_text(lxml_p, value)
+        assert same(soup_p, lxml_p)
+        assert paragraph_text(lxml_p) == value
 
 
 # ---------------------------------------------------------------------------

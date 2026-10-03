@@ -24,7 +24,8 @@ hand translation gets it wrong:
   after it lands past the text: in mixed content (`<text:p>`, `<text:span>`,
   `<text:a>`) each of these loses or duplicates what the cell says.
   `remove()`, `clone()`, `insert_after()` and `unwrap()` keep the text where
-  it was, as bs4 does.
+  it was, as bs4 does. Writing mixed content is writing tails:
+  `set_paragraph_text()` puts the text after each `<text:s/>` in its tail.
 - **Search.** bs4's `find_all` searches descendants unless told
   `recursive=False`, and never returns the element it starts from; lxml's
   `el.iter(name)` includes `el` itself, `el.findall(name)` looks at children
@@ -37,6 +38,7 @@ hand translation gets it wrong:
 """
 
 import copy
+import re
 from collections.abc import Iterator
 from typing import cast
 
@@ -57,6 +59,7 @@ __all__ = [
     "qn",
     "remove",
     "serialize",
+    "set_paragraph_text",
     "set_text",
     "text",
     "unwrap",
@@ -293,3 +296,87 @@ def unwrap(element: etree._Element) -> None:
         inner[-1].tail = (inner[-1].tail or "") + (element.tail or "")
         element.tail = None
     remove(element)
+
+
+_S, _TAB, _LINE_BREAK, _C = (qn(name) for name in ("text:s", "text:tab", "text:line-break", "text:c"))
+# a run of spaces, or a tab: what `set_paragraph_text` cannot leave as is
+_WHITESPACE_RUN = re.compile(r"( +|\t)")
+
+
+def _spaces(element: etree._Element) -> str:
+    try:
+        return " " * max(int(element.get(_C, "1")), 1)
+    except ValueError:
+        return " "
+
+
+def paragraph_text(paragraph: etree._Element) -> str:
+    """The text of a `<text:p>` as a spreadsheet application shows it: `text`
+    with the whitespace ODF writes as elements put back - `<text:s text:c="N"/>`
+    as N spaces, `<text:tab/>` as a tab, `<text:line-break/>` as a newline.
+    `xmlutils._paragraph_text` on lxml: see it for why."""
+    if len(paragraph) == 0:
+        return paragraph.text or ""  # one text node, the common case
+    parts: list[str] = []
+
+    def walk(element: etree._Element) -> None:
+        if element.text:
+            parts.append(element.text)
+        for child in element:
+            if isinstance(child.tag, str):  # not a comment, whose text says nothing
+                if child.tag == _S:
+                    parts.append(_spaces(child))
+                elif child.tag == _TAB:
+                    parts.append("\t")
+                elif child.tag == _LINE_BREAK:
+                    parts.append("\n")
+                walk(child)
+            if child.tail:
+                parts.append(child.tail)
+
+    walk(paragraph)
+    return "".join(parts)
+
+
+def set_paragraph_text(paragraph: etree._Element, value: str) -> None:
+    """Make `value` the whole content of `paragraph`, a run of spaces written
+    as one space and `<text:s text:c="N-1"/>` (all of it as `<text:s/>` at the
+    start), a tab as `<text:tab/>` - as LibreOffice writes them, and as
+    `xmlutils._set_paragraph_text` does on bs4. In lxml the text after each
+    element is that element's tail, which is where it goes."""
+    set_text(paragraph, "")
+    paragraph.text = None
+    if "  " not in value and "\t" not in value and not value.startswith(" "):
+        paragraph.text = value
+        return
+    last: etree._Element | None = None
+    pending = ""
+    for i, piece in enumerate(_WHITESPACE_RUN.split(value)):
+        if i % 2 == 0:
+            pending += piece
+            continue
+        if piece == "\t":
+            element = new("text:tab")
+        else:
+            at_start = i == 1 and not pending
+            spaces = len(piece) if at_start else len(piece) - 1
+            if not at_start:
+                pending += " "
+            if spaces == 0:
+                continue
+            element = new("text:s")
+            if spaces > 1:
+                element.set(_C, str(spaces))
+        if pending:
+            if last is None:
+                paragraph.text = pending
+            else:
+                last.tail = pending
+            pending = ""
+        paragraph.append(element)
+        last = element
+    if pending:
+        if last is None:
+            paragraph.text = pending
+        else:
+            last.tail = pending
