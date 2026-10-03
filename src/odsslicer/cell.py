@@ -36,7 +36,14 @@ from .formulas import (
     _shift_odf_formula,
 )
 from .styles import CellStyle, _render_date_time_from_format, _render_number_from_format
-from .xmlutils import _ODF_NAMESPACES, _blank_template, _ensure_style_child, _new_qualified_tag
+from .xmlutils import (
+    _ODF_NAMESPACES,
+    _blank_template,
+    _ensure_style_child,
+    _new_qualified_tag,
+    _paragraph_text,
+    _set_paragraph_text,
+)
 
 if TYPE_CHECKING:
     from .reader import ODSReader
@@ -256,7 +263,7 @@ class Comment:
 
     @property
     def text(self) -> "str | None":
-        paragraphs = [p.get_text() for p in self._tag.find_all("text:p")]
+        paragraphs = [_paragraph_text(p) for p in self._tag.find_all("text:p")]
         return "\n".join(paragraphs) if paragraphs else None
 
     @text.setter
@@ -265,7 +272,7 @@ class Comment:
             p.decompose()
         for line in (value or "").split("\n"):
             p = _blank_template(self._tag, "text:p")
-            p.string = line
+            _set_paragraph_text(p, line)
             self._tag.append(p)
 
     @property
@@ -352,12 +359,11 @@ class Cell:
         # children - an unscoped find_all() would also match those nested
         # inside an office:annotation (a cell comment, see Cell.comment).
         paragraphs = self.cell.find_all("text:p", recursive=False)
-        # `p.string` is only ever a plain str when text:p has EXACTLY one text
-        # child; it's None both for a genuinely empty <text:p/> (e.g. a formula
-        # whose cached result is "") and for one with several children (spans,
-        # line breaks...) - `str(None)` would then wrongly become the literal
-        # string "None" instead of the cell's actual (possibly empty) text.
-        self.text: str | None = "\n".join(p.get_text() for p in paragraphs) if paragraphs else None
+        # `_paragraph_text`, not `p.string` - None both for a genuinely empty
+        # <text:p/> (a formula whose cached result is "") and for one with
+        # several children (spans...) - nor `get_text()`, which drops the
+        # spaces, tabs and line breaks ODF writes as elements (issue #27).
+        self.text: str | None = "\n".join(_paragraph_text(p) for p in paragraphs) if paragraphs else None
         # A value its declared type cannot be read from - a malformed date, a
         # type no reader knows (KeyError) - must not take the whole sheet
         # down with it: the cell reads as its displayed text instead, and
@@ -885,7 +891,7 @@ class Cell:
             extra.decompose()
         for i, line in enumerate(lines):
             p = paragraphs[i] if i < len(paragraphs) else self._new_text_paragraph()
-            p.string = line
+            _set_paragraph_text(p, line)
         self.text = text
 
     def _new_text_paragraph(self) -> Tag:
@@ -1238,9 +1244,9 @@ class Cell:
         if a is None:
             a = _blank_template(self.cell, "text:a")
             a.attrs["xmlns:xlink"] = _ODF_NAMESPACES["xlink"]
-            text = p.get_text()
+            # the paragraph's content moves into the link as it is - spans and
+            # encoded spaces included - rather than flattened to its text
             for child in list(p.children):
-                child.extract()
-            a.string = text
+                a.append(child.extract())
             p.append(a)
         a.attrs["xlink:href"] = url

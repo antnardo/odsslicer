@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 
 from conftest import (
+    ENCODED_WHITESPACE,
     FIXTURES_DIR,
     PRINT_TITLE_WIDTHS_XML,
     PRINT_TITLE_XML,
@@ -32,6 +33,7 @@ from conftest import (
     chart_ranges,
     document_in,
     empty_cells,
+    encoded_whitespace_ods,
     formula_cell,
     note_cell,
     number_cell,
@@ -570,6 +572,62 @@ def test_writing_a_multi_line_value_writes_one_paragraph_per_line(writable_reade
     out = tmp_path / "out.ods"
     writable_reader.save(out)
     assert ODSReader(out).sheet("Sheet1")["A1"].value == "ligne 1\nligne 2\nligne 3"
+
+
+class TestEncodedWhitespace:
+    """Spaces, tabs and line breaks ODF writes as elements (issue #27)."""
+
+    @pytest.mark.parametrize(("row", "shown"), list(enumerate(shown for _, shown in ENCODED_WHITESPACE)))
+    def test_reading_gives_the_text_libreoffice_shows(self, tmp_path, row, shown):
+        sheet = ODSReader(encoded_whitespace_ods(tmp_path / "ws.ods")).sheet("Sheet1")
+        assert sheet[row, 0].text == shown
+        assert sheet[row, 0].value == shown
+
+    @pytest.mark.parametrize(
+        ("value", "paragraphs"),
+        [
+            ("a   b", ['a <text:s text:c="2"/>b']),
+            ("  lead", ['<text:s text:c="2"/>lead']),
+            ("trail  ", ["trail <text:s/>"]),
+            (" ", ["<text:s/>"]),
+            ("a\tb", ["a<text:tab/>b"]),
+            ("a b", ["a b"]),
+            ("x  \n  y", ["x <text:s/>", '<text:s text:c="2"/>y']),
+        ],
+    )
+    def test_writing_encodes_runs_the_way_libreoffice_does(self, tmp_path, value, paragraphs):
+        r = ODSReader.new()
+        r.sheet("Sheet1")["A1"].value = value
+        out = tmp_path / "out.ods"
+        r.save(out)
+        cell = saved_table(out).find("table:table-cell")
+        assert [p.decode_contents() for p in cell.find_all("text:p")] == paragraphs
+        assert ODSReader(out).sheet("Sheet1")["A1"].value == value
+
+    def test_rewriting_a_cell_drops_its_previous_encoded_spaces(self, tmp_path):
+        r = ODSReader(encoded_whitespace_ods(tmp_path / "ws.ods"))
+        r.sheet("Sheet1")["A1"].value = "plain"
+        out = tmp_path / "out.ods"
+        r.save(out)
+        cell = saved_table(out).find("table:table-cell")
+        assert cell.find("text:s") is None
+        assert ODSReader(out).sheet("Sheet1")["A1"].value == "plain"
+
+    def test_a_hyperlink_keeps_the_encoded_spaces_it_wraps(self, tmp_path):
+        r = ODSReader(encoded_whitespace_ods(tmp_path / "ws.ods"))
+        r.sheet("Sheet1")["A1"].hyperlink = "https://example.org"
+        out = tmp_path / "out.ods"
+        r.save(out)
+        reread = ODSReader(out).sheet("Sheet1")["A1"]
+        assert (reread.hyperlink, reread.value) == ("https://example.org", "a   b")
+
+    def test_a_comment_reads_and_writes_its_encoded_spaces(self, tmp_path):
+        r = ODSReader.new()
+        r.sheet("Sheet1")["A1"].comment = "two  spaces"
+        out = tmp_path / "out.ods"
+        r.save(out)
+        assert saved_table(out).find("office:annotation").find("text:s") is not None
+        assert ODSReader(out).sheet("Sheet1")["A1"].comment.text == "two  spaces"
 
 
 @pytest.mark.parametrize(

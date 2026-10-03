@@ -308,10 +308,10 @@ passe de plus ; en nommer quelques-unes aurait perdu en silence celles oubliées
   l'affiche telle quelle (vérifié par conversion d'un fichier portant chaque cas), et 2 des 250
   vrais fichiers balayés en portent : LibreOffice code les espaces répétés en `<text:s/>`, mais
   d'autres producteurs les écrivent en clair.
-- Reste ouvert, dans toutes les versions : `cell.text` ignore `<text:s text:c="N"/>`, donc
-  `a<text:s text:c="3"/>b` se lit `ab` là où LibreOffice affiche `a   b`. C'est la forme que
-  LibreOffice écrit lui-même pour deux espaces ou plus : défaut courant, à corriger à part
-  (`text:tab` et `text:line-break` à vérifier en même temps).
+- Corrigé en 0.14.3 ([#27](https://github.com/antnardo/odsslicer/issues/27)) : `cell.text`
+  ignorait `<text:s text:c="N"/>`, `<text:tab/>` et `<text:line-break/>`, que LibreOffice écrit
+  pour deux espaces ou plus, une tabulation, un saut de ligne manuel. Lus et écrits désormais
+  comme LibreOffice.
 
 La relecture de la régénération paresseuse a aussi trouvé un chemin d'écriture sans drapeau :
 `add_condition` sur un format de nombre de `styles.xml` (celui d'un style de cellule nommé, le

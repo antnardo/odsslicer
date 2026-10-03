@@ -164,6 +164,13 @@ line in ODF — `cell.text` and a string `cell.value` join them with `\n`, and w
 containing `\n` writes one paragraph per line in return (a literal newline *inside* a
 paragraph is plain whitespace to ODF, so it would not survive).
 
+Whitespace reads as the spreadsheet shows it. ODF writes what has to survive a consumer that
+collapses whitespace as elements — `<text:s text:c="3"/>` for three spaces, `<text:tab/>`,
+`<text:line-break/>` (Shift+Enter, read as `\n`) — and `cell.text` turns them back into
+characters; spaces written literally by some other producer read as written, as LibreOffice
+shows them. Writing encodes runs the way LibreOffice does: `"a   b"` becomes
+`a <text:s text:c="2"/>b`, a leading space `<text:s/>`, a tab `<text:tab/>`.
+
 Available formats are listed in `odsslicer.FORMATS` (ODF format -> conversion callable).
 
 ### Dates, times and durations
@@ -1436,7 +1443,8 @@ issue it was reported in.
 2. **`Cell.text`/`str(cell)` returned the literal string `"None"`** for a cell whose
    `<text:p>` is empty or spread across several nodes (`<text:span>`), because bs4's
    `p.string` is `None` whenever there isn't exactly one text child. Fixed with
-   `p.get_text()`.
+   `p.get_text()` — which in turn dropped the spaces, tabs and line breaks ODF writes as
+   elements, fixed in 0.14.3 ([#27](https://github.com/antnardo/odsslicer/issues/27)).
 3. **Growing an empty sheet (or one with a trailing empty row) could corrupt it on the next
    save/reload** — `load()` discarded such rows from memory but not from the XML, and
    `grow_to` appended after them. Fixed: stray rows were discarded first — and are now taken

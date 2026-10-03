@@ -6,7 +6,7 @@ import io
 import re
 from typing import cast
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, CData, NavigableString, Tag
 from lxml import etree
 
 # Standard OASIS namespace URIs, used as a last-resort fallback to build a
@@ -112,3 +112,89 @@ def _is_forked_style_name(name: "str | None", prefix: str) -> bool:
     if not name:
         return False
     return re.match(rf"^{re.escape(prefix)}\d+$", name) is not None
+
+
+# Builds the tags `_set_paragraph_text` inserts: `new_tag` only borrows the XML
+# builder from it (an empty element then serialises as `<text:s/>`), the tags
+# are never attached to it - and a factory spares a walk up to the document.
+_TAG_FACTORY = BeautifulSoup("", "xml")
+
+# A run of spaces, or a tab: what `_set_paragraph_text` cannot leave as is.
+_WHITESPACE_RUN = re.compile(r"( +|\t)")
+
+
+def _space_count(tag: Tag) -> int:
+    try:
+        return max(int(cast(str, tag.attrs.get("text:c", "1"))), 1)
+    except ValueError:
+        return 1
+
+
+def _paragraph_text(paragraph: Tag) -> str:
+    """The text of a `<text:p>` as a spreadsheet application shows it.
+
+    ODF lets a consumer collapse the whitespace a paragraph holds literally,
+    so a producer writes what has to survive as elements: `<text:s text:c="N"/>`
+    for N spaces, `<text:tab/>`, `<text:line-break/>`. LibreOffice does it for
+    every run of two spaces or more, every leading space, every tab and every
+    Shift+Enter. BeautifulSoup's `get_text()` concatenates the text nodes only,
+    which dropped all of them (issue #27): "a<text:s text:c="2"/>b" read "ab".
+
+    Literal whitespace is kept as written rather than collapsed: LibreOffice
+    shows it that way, which is what the reader of a cell expects to get."""
+    only = paragraph.string
+    if only is not None and type(only) is NavigableString:
+        # one text node and nothing else, the common case, decided without a walk
+        return str(only)
+    parts: list[str] = []
+    for node in paragraph.descendants:
+        if isinstance(node, Tag):
+            if node.prefix != "text":
+                continue
+            if node.name == "s":
+                parts.append(" " * _space_count(node))
+            elif node.name == "tab":
+                parts.append("\t")
+            elif node.name == "line-break":
+                parts.append("\n")
+        elif type(node) is NavigableString or isinstance(node, CData):
+            parts.append(str(node))
+    return "".join(parts)
+
+
+def _set_paragraph_text(paragraph: Tag, text: str) -> None:
+    """Make `text` the whole content of `paragraph`, a `<text:p>` or an element
+    inside one, encoding its whitespace the way LibreOffice does: a run of
+    spaces as one literal space followed by `<text:s text:c="N-1"/>`, all of it
+    as `<text:s/>` at the start of the paragraph, a tab as `<text:tab/>`.
+
+    Literal whitespace would read back the same in LibreOffice, but ODF lets
+    any consumer collapse it - an encoded run survives every one of them. A
+    newline is the caller's business: in a cell it starts a new paragraph."""
+    if "  " not in text and "\t" not in text and not text.startswith(" "):
+        paragraph.string = text
+        return
+    paragraph.clear()
+    pending = ""
+    for i, piece in enumerate(_WHITESPACE_RUN.split(text)):
+        if i % 2 == 0:
+            pending += piece
+            continue
+        if piece == "\t":
+            element = _TAG_FACTORY.new_tag("tab", namespace=_ODF_NAMESPACES["text"], nsprefix="text")
+        else:
+            at_start = i == 1 and not pending
+            spaces = len(piece) if at_start else len(piece) - 1
+            if not at_start:
+                pending += " "
+            if spaces == 0:
+                continue
+            element = _TAG_FACTORY.new_tag("s", namespace=_ODF_NAMESPACES["text"], nsprefix="text")
+            if spaces > 1:
+                element.attrs["text:c"] = str(spaces)
+        if pending:
+            paragraph.append(NavigableString(pending))
+            pending = ""
+        paragraph.append(element)
+    if pending:
+        paragraph.append(NavigableString(pending))

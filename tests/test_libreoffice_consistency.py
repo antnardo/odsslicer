@@ -22,6 +22,7 @@ import pytest
 from bs4 import BeautifulSoup
 
 from conftest import (
+    ENCODED_WHITESPACE,
     FIXTURES_DIR,
     PRINT_TITLE_WIDTHS_XML,
     PRINT_TITLE_XML,
@@ -29,6 +30,7 @@ from conftest import (
     chart_frame,
     document_in,
     empty_cells,
+    encoded_whitespace_ods,
     formula_cell,
     libreoffice_shows,
     note_cell,
@@ -826,6 +828,28 @@ def test_libreoffice_round_trips_a_multi_line_cell(writable_reader, tmp_path, li
     assert "<text:p>ligne 1</text:p><text:p>ligne 2</text:p><text:p>ligne 3</text:p>" in xml
     reopened = ODSReader(libreoffice_export(out, "ods")).sheet("Sheet1")
     assert reopened["A1"].value == "ligne 1\nligne 2\nligne 3"
+
+
+@requires_soffice
+def test_libreoffice_shows_encoded_whitespace_as_odsslicer_reads_it(tmp_path):
+    # issue #27: <text:s/>, <text:tab/> and <text:line-break/> were dropped
+    path = encoded_whitespace_ods(tmp_path / "ws.ods")
+    shown = [row[0] for row in libreoffice_shows(path, tmp_path)]
+    assert shown == [text for _, text in ENCODED_WHITESPACE]
+    sheet = ODSReader(path).sheet("Sheet1")
+    assert [sheet[r, 0].value for r in range(len(shown))] == shown
+
+
+@requires_soffice
+def test_libreoffice_shows_written_runs_of_whitespace_as_written(tmp_path):
+    values = ["a   b", "  lead", "trail  ", "a\tb", "x  \n  y", " "]
+    r = ODSReader.new()
+    s = r.sheet("Sheet1")
+    for row, value in enumerate(values):
+        s[row, 0].value = value
+    out = tmp_path / "out.ods"
+    r.save(out)
+    assert [row[0] for row in libreoffice_shows(out, tmp_path)] == values
 
 
 @requires_soffice

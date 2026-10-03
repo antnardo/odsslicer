@@ -144,7 +144,11 @@ def _fragment(xml):
     declarations = " ".join(
         f'xmlns:{prefix}="{uri}"' for prefix, uri in _FRAGMENT_NAMESPACES.items()
     )
-    soup = BeautifulSoup(f"<fragment {declarations}>{xml}</fragment>", "xml")
+    # whitespace kept as written, as odsslicer parses a package part: by
+    # default BeautifulSoup squeezes a text node of spaces only to one
+    soup = BeautifulSoup(
+        f"<fragment {declarations}>{xml}</fragment>", "xml", preserve_whitespace_tags={"fragment"}
+    )
     root = soup.find("fragment")
     return [child.extract() for child in list(root.children) if isinstance(child, Tag)]
 
@@ -336,6 +340,31 @@ def empty_cells(repeat=1, style=None):
     if repeat > 1:
         attrs += f' table:number-columns-repeated="{repeat}"'
     return f"<table:table-cell{attrs}/>"
+
+
+# Paragraphs encoding whitespace as ODF elements, and the text LibreOffice
+# shows for them - checked with `libreoffice_shows` (issue #27). LibreOffice
+# writes the first four forms itself; the literal runs come from other producers.
+ENCODED_WHITESPACE = [
+    ('<text:p>a<text:s text:c="3"/>b</text:p>', "a   b"),
+    ("<text:p>a<text:s/>b</text:p>", "a b"),
+    ('<text:p><text:s text:c="2"/>lead</text:p>', "  lead"),
+    ("<text:p>a<text:tab/>b</text:p>", "a\tb"),
+    ("<text:p>a<text:line-break/>b</text:p>", "a\nb"),
+    ('<text:p>a<text:span>x<text:s text:c="2"/>y</text:span>b</text:p>', "ax  yb"),
+    ('<text:p>a <text:s text:c="2"/>b</text:p><text:p>c</text:p>', "a   b\nc"),
+    ("<text:p>a   b</text:p>", "a   b"),
+    ("<text:p>  </text:p>", "  "),
+]
+
+
+def encoded_whitespace_ods(path):
+    """A document whose column A holds `ENCODED_WHITESPACE`, one per row."""
+    rows = "".join(
+        table_row(f'<table:table-cell office:value-type="string">{xml}</table:table-cell>')
+        for xml, _ in ENCODED_WHITESPACE
+    )
+    return ods_with_sheet(path, rows)
 
 
 def table_row(*cells, repeat=1):
