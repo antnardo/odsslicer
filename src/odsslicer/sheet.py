@@ -106,6 +106,21 @@ def _rescue_drawings(cell_tag: Tag, heir: "Tag | None") -> None:
         heir.append(drawing.extract())
 
 
+def _position_after(tag: Tag) -> int:
+    """The index, among its parent's children, right after `tag`, counted
+    from the end: what bs4's `insert_after` would insert at.
+
+    bs4 finds that index with `parent.index(tag)`, a scan from the first
+    child. Placing rows one after the other below a sheet's last row then
+    scans the whole sheet each time - and writing a column past the data
+    grows the sheet one row per cell, so 100,000 rows written that way cost
+    5 billion comparisons, minutes instead of seconds (0.14.0 to 0.14.3).
+    What follows a sheet's last row is a few elements at most - conditional
+    formats, named ranges - so counting them is next to free."""
+    parent = cast(Tag, tag.parent)
+    return len(parent.contents) - sum(1 for _ in tag.next_siblings)
+
+
 # The sizes applications pad a sheet to with repeated blank rows and cells:
 # 1,048,576 rows - 65,536 before LibreOffice 3.3 and Excel 2007 - and 16,384
 # columns - 1,024 before LibreOffice 7.4. A sheet padded to one of them keeps
@@ -949,13 +964,13 @@ class Sheet:
                 self.n_rows += 1
             previous = row_tag
         template = self._empty_row_template(self.n_cols)
+        # inserted by index, found once (see `_position_after`)
+        parent = self.table if previous is None else cast(Tag, previous.parent)
+        position = len(parent.contents) if previous is None else _position_after(previous)
         while self.n_rows < n_rows:
             new_row_tag = copy.deepcopy(template)
-            if previous is None:
-                self.table.append(new_row_tag)
-            else:
-                previous.insert_after(new_row_tag)
-            previous = new_row_tag
+            parent.insert(position, new_row_tag)
+            position += 1
             self.rows.append(
                 [
                     Cell(cell_tag, row=self.n_rows, col=c, sheet=self)

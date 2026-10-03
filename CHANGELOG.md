@@ -7,6 +7,16 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Writing past the data is linear in the rows written again.** Since 0.14.0, each row a write
+  grows the sheet by was placed after the sheet's last row with BeautifulSoup's
+  `insert_after`, which looks that row up by scanning the table from its first row; writing a
+  column grows the sheet one row per cell, so a column of N rows past the data cost N²/2
+  comparisons. `benchmarks/bench.py`'s bulk writes at 100,000 rows took 246 s instead of 32 s.
+  The new rows now go in at an index counted from the end of the table, where only what
+  follows its last row (named ranges, conditional formats) has to be counted.
+
 ## [0.14.3] — 2026-10-03
 
 ### Fixed

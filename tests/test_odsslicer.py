@@ -21,6 +21,7 @@ from typing import ClassVar
 
 import numpy as np
 import pytest
+from bs4 import Tag
 
 from conftest import (
     ENCODED_WHITESPACE,
@@ -1526,6 +1527,40 @@ def test_writing_past_the_data_takes_back_the_rows_below_it(tmp_path):
     data = {"A1": "1", "A2": "2", "A3": "3"}
     assert cells_with_content(reread.sheet("Sheet1")) == {**data, "B5": "beside", "A8": 8.0}
     assert addresses_holding(saved_table(path), _is_shape) == ["A5"]
+
+
+def test_writing_past_the_data_keeps_what_follows_the_rows_after_them(tmp_path):
+    # the new rows go right after the grid's last row, before what a table
+    # holds after its rows - here its named ranges
+    xml = "<table:table-column/>" + table_row(text_cell("a")) + "<table:named-expressions/>"
+    path = ods_with_sheet(tmp_path / "named.ods", xml)
+    r = ODSReader(path)
+    r.sheet("Sheet1")["A3"].value = "c"
+    r.sheet("Sheet1")["A4"].value = "d"
+    r.save()
+    children = [child.name for child in saved_table(path).find_all(True, recursive=False)]
+    assert children == ["table-column", *["table-row"] * 4, "named-expressions"]
+    assert cells_with_content(ODSReader(path).sheet("Sheet1")) == {"A1": "a", "A3": "c", "A4": "d"}
+
+
+def test_writing_a_column_past_the_data_never_scans_the_table_for_a_row(monkeypatch):
+    # regression (0.14.0 to 0.14.3): each new row went in with bs4's
+    # insert_after, whose parent.index() scans the table from its first row,
+    # and writing a column past the data grows the sheet one row per cell -
+    # quadratic: generate+save of benchmarks/bench.py took 246 s at 100,000 rows, not 32 s
+    scanned = []
+    index = Tag.index
+
+    def counting_index(self, element):
+        if getattr(element, "name", None) == "table-row":
+            scanned.append(element)
+        return index(self, element)
+
+    monkeypatch.setattr(Tag, "index", counting_index)
+    sheet = ODSReader.new().sheet("Sheet1")
+    sheet[0:200, 0].value = [[float(i)] for i in range(200)]
+    assert sheet.size == (200, 1)
+    assert scanned == []
 
 
 # more than 1,000 empty rows between the data and a shape, which LibreOffice
