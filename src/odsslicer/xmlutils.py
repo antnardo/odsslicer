@@ -90,14 +90,6 @@ def _encrypted_parts(manifest: bytes) -> set[str]:
     return encrypted
 
 
-def _blank_template(root: Tag, tag_name: str) -> Tag:
-    """A new `tag_name` element for the document `root` stands in: `new`,
-    which used to be this, a blank copy of an existing element of the
-    document. Kept for `properties.py` alone, which the 1.0 branch ports to
-    lxml whole; everything else calls `new` itself."""
-    return new(tag_name, near=root)
-
-
 def _ensure_style_child(style_tag: Tag, tag_name: str) -> Tag:
     """The `tag_name` properties child of `style_tag` (e.g.
     `<style:table-cell-properties>` under a `<style:style>`), creating a
