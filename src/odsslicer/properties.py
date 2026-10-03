@@ -1,45 +1,58 @@
-"""DocumentProperties: structured, writable access to meta.xml."""
+"""DocumentProperties: structured, writable access to meta.xml.
+
+The first module on lxml alone (see `xmltree`), as the feasibility study's
+prototype: `meta.xml` is read by nothing else, so its tree changes library
+with this module and with the two lines of `ODSReader` that parse and
+serialise it - a module moves with the part it reads, not on its own.
+
+Elements are looked for among the children of `<office:meta>`, where ODF
+puts them, rather than anywhere below it as bs4's `find` did."""
 
 import datetime as dt
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
-from bs4 import Tag
+from lxml import etree
 
-from .xmlutils import _blank_template
+from .xmltree import children, new, qn, remove, set_text, text
 
 if TYPE_CHECKING:
     from .reader import ODSReader
 
 
-def _parse_user_defined_value(tag: Tag) -> "str | float | bool | dt.date":
+_META_NAME = qn("meta:name")
+_META_VALUE_TYPE = qn("meta:value-type")
+
+
+def _parse_user_defined_value(tag: etree._Element) -> "str | float | bool | dt.date":
     """The typed Python value behind one `<meta:user-defined>` element,
     per its `meta:value-type` (`"string"` if absent, per the ODF spec)."""
-    value_type = tag.get("meta:value-type", "string")
-    text = tag.get_text()
+    value_type = tag.get(_META_VALUE_TYPE, "string")
+    content = text(tag)
     if value_type == "float":
-        return float(text)
+        return float(content)
     if value_type == "boolean":
-        return text == "true"
+        return content == "true"
     if value_type == "date":
-        return dt.date.fromisoformat(text[:10])
-    return text
+        return dt.date.fromisoformat(content[:10])
+    return content
 
 
-def _write_user_defined_value(tag: Tag, value: "str | float | bool | dt.date") -> None:
+def _write_user_defined_value(tag: etree._Element, value: "str | float | bool | dt.date") -> None:
     """Set `<meta:user-defined>`'s text content and `meta:value-type` from
     a Python value - the reverse of `_parse_user_defined_value`."""
     if isinstance(value, bool):
-        tag.attrs["meta:value-type"] = "boolean"
-        tag.string = "true" if value else "false"
+        tag.set(_META_VALUE_TYPE, "boolean")
+        set_text(tag, "true" if value else "false")
     elif isinstance(value, (int, float)):
-        tag.attrs["meta:value-type"] = "float"
-        tag.string = str(value)
+        tag.set(_META_VALUE_TYPE, "float")
+        set_text(tag, str(value))
     elif isinstance(value, dt.date):
-        tag.attrs["meta:value-type"] = "date"
-        tag.string = value.isoformat()
+        tag.set(_META_VALUE_TYPE, "date")
+        set_text(tag, value.isoformat())
     elif isinstance(value, str):
-        tag.attrs.pop("meta:value-type", None)  # "string" is the implicit default
-        tag.string = value
+        if _META_VALUE_TYPE in tag.attrib:  # "string" is the implicit default
+            del tag.attrib[_META_VALUE_TYPE]
+        set_text(tag, value)
     else:
         raise TypeError(f"unsupported custom property value type: {type(value)!r}")
 
@@ -59,29 +72,29 @@ class DocumentProperties:
     def __init__(self, reader: "ODSReader") -> None:
         self._reader = reader
 
-    def _office_meta(self) -> Tag:
-        root = cast(Tag, self._reader.meta_data.find("office:document-meta"))
-        meta = cast("Tag | None", root.find("office:meta"))
+    def _office_meta(self) -> etree._Element:
+        root = self._reader.meta_data.getroot()
+        meta = root.find(qn("office:meta"))
         if meta is None:
-            meta = _blank_template(self._reader.meta_data, "office:meta")
+            meta = new("office:meta")
             root.append(meta)
         return meta
 
     def _get_text(self, tag_name: str) -> "str | None":
-        tag = self._office_meta().find(tag_name)
-        return tag.get_text() if tag is not None else None
+        tag = self._office_meta().find(qn(tag_name))
+        return text(tag) if tag is not None else None
 
     def _set_text(self, tag_name: str, value: "str | None") -> None:
         meta = self._office_meta()
-        tag = cast("Tag | None", meta.find(tag_name))
+        tag = meta.find(qn(tag_name))
         if value is None:
             if tag is not None:
-                tag.decompose()
+                remove(tag)
             return
         if tag is None:
-            tag = _blank_template(self._reader.meta_data, tag_name)
+            tag = new(tag_name)
             meta.append(tag)
-        tag.string = value
+        set_text(tag, value)
 
     @property
     def title(self) -> "str | None":
@@ -128,16 +141,16 @@ class DocumentProperties:
     @property
     def keywords(self) -> list[str]:
         """`meta:keyword` values (0+), in document order."""
-        return [tag.get_text() for tag in self._office_meta().find_all("meta:keyword")]
+        return [text(tag) for tag in children(self._office_meta(), "meta:keyword")]
 
     @keywords.setter
     def keywords(self, values: "list[str] | tuple[str, ...] | None") -> None:
         meta = self._office_meta()
-        for tag in meta.find_all("meta:keyword"):
-            tag.decompose()
+        for tag in list(children(meta, "meta:keyword")):
+            remove(tag)
         for value in values or ():
-            tag = _blank_template(self._reader.meta_data, "meta:keyword")
-            tag.string = value
+            tag = new("meta:keyword")
+            set_text(tag, value)
             meta.append(tag)
 
     @property
@@ -153,12 +166,14 @@ class DocumentProperties:
         property - use `props["name"]`/`props["name"] = value` to read or
         write a single one instead."""
         return {
-            tag.get("meta:name"): _parse_user_defined_value(tag)
-            for tag in self._office_meta().find_all("meta:user-defined")
+            tag.get(_META_NAME): _parse_user_defined_value(tag)
+            for tag in children(self._office_meta(), "meta:user-defined")
         }
 
-    def _find_custom(self, name: str) -> "Tag | None":
-        return cast("Tag | None", self._office_meta().find("meta:user-defined", attrs={"meta:name": name}))
+    def _find_custom(self, name: str) -> "etree._Element | None":
+        # not an ElementPath predicate: a name holding a quote would break it
+        tags = children(self._office_meta(), "meta:user-defined")
+        return next((tag for tag in tags if tag.get(_META_NAME) == name), None)
 
     def __getitem__(self, name: str) -> "str | float | bool | dt.date":
         tag = self._find_custom(name)
@@ -169,8 +184,7 @@ class DocumentProperties:
     def __setitem__(self, name: str, value: "str | float | bool | dt.date") -> None:
         tag = self._find_custom(name)
         if tag is None:
-            tag = _blank_template(self._reader.meta_data, "meta:user-defined")
-            tag.attrs["meta:name"] = name
+            tag = new("meta:user-defined", {"meta:name": name})
             self._office_meta().append(tag)
         _write_user_defined_value(tag, value)
 
@@ -178,7 +192,7 @@ class DocumentProperties:
         tag = self._find_custom(name)
         if tag is None:
             raise KeyError(name)
-        tag.decompose()
+        remove(tag)
 
     def __contains__(self, name: str) -> bool:
         return self._find_custom(name) is not None

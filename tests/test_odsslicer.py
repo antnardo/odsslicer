@@ -39,6 +39,7 @@ from conftest import (
     formula_cell,
     note_cell,
     number_cell,
+    ods_with_prefixes,
     ods_with_sheet,
     saved_table,
     shape_cell,
@@ -5719,6 +5720,35 @@ def test_save_round_trip_after_setting_document_properties(writable_reader, tmp_
     assert ODSReader(out).sheet("Sheet1")["A1"].value == "texte simple"
 
 
+def test_document_properties_read_and_write_a_meta_xml_with_other_prefixes(tmp_path, test_ods_path):
+    # meta.xml is on lxml alone (the feasibility study's prototype): its
+    # elements are found by namespace, whatever prefixes the file chose,
+    # and a new one comes out with the file's prefix, not a new declaration
+    rebound = ods_with_prefixes(
+        test_ods_path,
+        tmp_path / "rebound.ods",
+        {
+            "urn:oasis:names:tc:opendocument:xmlns:meta:1.0": "m",
+            "http://purl.org/dc/elements/1.1/": "d",
+        },
+    )
+    reader = ODSReader(rebound)
+    p = reader.properties
+    assert p.creator == "Antonin Marchand"
+    assert p.generator.startswith("LibreOffice/")
+    p.title = "Mon classeur"
+    p["Client"] = "Acme Corp"
+    reader.save(tmp_path / "out.ods")
+
+    meta = zipfile.ZipFile(tmp_path / "out.ods").read("meta.xml")
+    assert b"<d:title>Mon classeur</d:title>" in meta
+    assert b'<m:user-defined m:name="Client">Acme Corp</m:user-defined>' in meta
+    assert b"xmlns:dc=" not in meta and b"xmlns:meta=" not in meta
+    reread = ODSReader(tmp_path / "out.ods").properties
+    assert (reread.title, reread["Client"]) == ("Mon classeur", "Acme Corp")
+    assert reread.creator == "Antonin Marchand"
+
+
 # ---------------------------------------------------------------------------
 # Cell.comment (Comment, office:annotation)
 # ---------------------------------------------------------------------------
@@ -6069,6 +6099,24 @@ def test_removing_a_hyperlink_keeps_the_text(writable_reader):
     s["A1"].hyperlink = None
     assert s["A1"].hyperlink is None
     assert s["A1"].value == "texte simple"
+
+
+def test_removing_a_link_on_part_of_the_text_keeps_the_text_around_it(tmp_path):
+    # bs4's unwrap() keeps the text after the link; lxml has no unwrap, and
+    # the obvious stand-in drops that text (see tests/test_xmltree.py) - a
+    # port of cell.py has to keep this passing
+    path = ods_with_sheet(
+        tmp_path / "linked.ods",
+        table_row(
+            '<table:table-cell office:value-type="string"><text:p>Voir '
+            '<text:a xlink:href="https://example.com">ici</text:a> pour le détail</text:p></table:table-cell>'
+        ),
+    )
+    cell = ODSReader(path).sheet("Sheet1")["A1"]
+    assert cell.hyperlink == "https://example.com"
+    cell.hyperlink = None
+    assert cell.hyperlink is None
+    assert cell.cell.find("text:p").get_text() == "Voir ici pour le détail"
 
 
 def test_overwriting_the_value_clears_the_hyperlink(writable_reader):

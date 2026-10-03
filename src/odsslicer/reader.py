@@ -15,6 +15,7 @@ from .libreoffice import _recalculate_file
 from .properties import DocumentProperties
 from .sheet import Sheet
 from .styles import _NUMBER_STYLE_TAGS, NumberFormat
+from .xmltree import parse, serialize
 from .xmlutils import _blank_template, _encrypted_parts, _new_qualified_tag, _parse_xml
 
 logger = logging.getLogger("odsslicer")
@@ -112,7 +113,8 @@ class ODSReader:
         # included - see `_parse_xml`
         self.data = _parse_xml(self.content)
         self.styles_data = _parse_xml(self.styles)
-        self.meta_data = _parse_xml(self.meta)
+        # on lxml alone, the feasibility study's prototype - see `properties`
+        self.meta_data = parse(self.meta)
         # `settings.xml` holds nothing a cell needs, so it is parsed only if
         # something asks for it - see `settings_data`
         self._settings_data: BeautifulSoup | None = None
@@ -396,7 +398,7 @@ class ODSReader:
             path = self.file
         regenerated = {
             "content.xml": self.data.encode("utf-8"),
-            "meta.xml": self.meta_data.encode("utf-8"),
+            "meta.xml": serialize(self.meta_data, self.meta),
         }
         regenerated.update(
             (name, part.encode("utf-8")) for name, part in self._lazy_parts().items() if name in self._touched
