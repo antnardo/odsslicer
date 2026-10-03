@@ -141,8 +141,11 @@ def xml_rows(path: Path, sheet_index: int, needed_rows: int, needed_cols: int) -
 
     from bs4 import BeautifulSoup
 
+    # Whitespace kept as written, as LibreOffice shows it: by default
+    # BeautifulSoup squeezes a text node of spaces only to one, which would
+    # flag a cell the library reads right as misplaced.
     with zipfile.ZipFile(path) as zf:
-        soup = BeautifulSoup(zf.read("content.xml"), "xml")
+        soup = BeautifulSoup(zf.read("content.xml"), "xml", preserve_whitespace_tags={"document-content"})
     tables = soup.find_all("table:table")
     if sheet_index >= len(tables):
         return []
