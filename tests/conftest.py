@@ -412,3 +412,37 @@ REPEATED_RUN_XML = (
 @pytest.fixture()
 def repeated_run_ods(tmp_path):
     return ods_with_sheet(tmp_path / "run.ods", REPEATED_RUN_XML)
+
+
+def rebind_prefix(markup, uri, prefix):
+    """`markup`, an XML part, with namespace `uri` bound to `prefix` instead
+    of whatever prefix it had - the same document to any namespace-aware
+    reader, LibreOffice included, as `tests/test_xmltree.py` checks. The
+    root is rebuilt with the new declaration and its children moved under
+    it: lxml then names every element and attribute of `uri` with the
+    prefix in scope, the new one."""
+    from lxml import etree
+
+    root = etree.fromstring(markup)
+    nsmap = {(prefix if bound == uri else old): bound for old, bound in root.nsmap.items()}
+    rebuilt = etree.Element(root.tag, nsmap=nsmap)
+    for key, value in root.attrib.items():
+        rebuilt.set(key, value)
+    rebuilt.text = root.text
+    for child in list(root):
+        rebuilt.append(child)
+    return etree.tostring(rebuilt, xml_declaration=True, encoding="UTF-8")
+
+
+def ods_with_prefixes(src, dst, rebinding):
+    """Copy the package `src` to `dst`, its XML parts rebound by
+    `rebinding`, `{uri: new prefix}` (see `rebind_prefix`). Returns `dst`."""
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename in ("content.xml", "styles.xml", "meta.xml"):
+                for uri, prefix in rebinding.items():
+                    data = rebind_prefix(data, uri, prefix)
+            stored = item.filename == "mimetype"
+            zout.writestr(item, data, compress_type=zipfile.ZIP_STORED if stored else zipfile.ZIP_DEFLATED)
+    return dst
