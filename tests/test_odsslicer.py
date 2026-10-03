@@ -14,6 +14,7 @@ Et une section dédiée à l'écriture (Cell.value = ... / ODSReader.save()).
 import datetime as dt
 import math
 import warnings
+import zipfile
 from decimal import Decimal
 from fractions import Fraction
 from typing import ClassVar
@@ -1781,6 +1782,22 @@ def test_a_chart_is_saved_as_it_was_when_no_edit_moves_it(tmp_path):
     r.sheet("Sheet1")["A9"].value = "no move"
     r.save()
     assert chart_ranges(path) == before
+
+
+def test_a_chart_part_no_edit_moves_is_copied_through_byte_for_byte(tmp_path):
+    # its ranges being the same is not enough: a chart holds plenty odsslicer
+    # does not model, and serialising its tree would reflow all of it (see
+    # test_reader.py, "what a save leaves alone")
+    path = _chart_workbook(tmp_path)
+    with zipfile.ZipFile(path) as package:
+        before = package.read("Object 1/content.xml")
+
+    r = ODSReader(path)
+    r.sheet("Sheet1")["A9"].value = "no move"
+    r.save()
+
+    with zipfile.ZipFile(path) as package:
+        assert package.read("Object 1/content.xml") == before
 
 
 def test_save_round_trip(writable_reader, tmp_path):

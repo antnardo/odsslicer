@@ -5,6 +5,60 @@ All notable changes to `odsslicer` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
 still change between minor versions.
 
+## [Unreleased]
+
+### Fixed
+
+- **A number format padded with spaces keeps its padding through a save.** BeautifulSoup
+  squeezes a text node made of whitespace only to a single character while parsing, so
+  `<number:text>   </number:text>` — the padding of an accounting format, by which the amounts
+  of a column line up — came back as one space from any part written out of its tree:
+  `content.xml` on every save of every version so far, for a format applied to a cell directly
+  rather than through a named style (none of the test fixtures holds one there, which is why it
+  went unseen; LibreOffice writes a number style where the cell style using it lives). Every
+  part is now parsed with its document element named as whitespace-preserving, which keeps
+  every text node under it as written, whatever element holds it — nothing in ODF has to be
+  named for that, and nothing can be forgotten. On the eight fixtures, a part written out of
+  its tree now comes back identical in canonical form (C14N) to what it was, `styles.xml`
+  included, where it lost 34 such nodes over three files before. Opening a document costs a few
+  per cent more for it, and no memory. One visible consequence on reading: a cell paragraph
+  made of spaces only, which no spreadsheet application writes (LibreOffice encodes a run of
+  spaces as `<text:s/>`), now reads as written rather than as one space.
+- **A condition added to a number format of `styles.xml` is written back.** `add_condition` on
+  the format of a named cell style — the one behind most formatted cells of a LibreOffice
+  document — wrote into a tree that `save()` copied through unchanged, so the condition was
+  silently dropped. Such a write now tells `save()` to serialise the part (`_touched_tag`).
+  The same loss was possible, in theory, for a row, column or sheet style of `styles.xml`
+  bearing a name odsslicer reserves for the styles it forks (`ors1`, `ocos1`, `ots1`...): such a
+  style is now forked into `content.xml` like any other instead of being written into. No real
+  producer names a style that way.
+
+### Added
+
+- **`settings.xml` is parsed on demand** (`ODSReader.settings_data`): the part holding what the
+  application remembers of the window — frozen panes, the active sheet, the cursor — was read as
+  bytes and never looked at. Nothing a cell needs lives there, so a document that never asks for
+  it is never parsed; a file shipping none, as Excel does, gives a blank skeleton to write into.
+  Nothing in the library writes there yet: this is the groundwork for frozen panes and page
+  layout, which both need a part other than `content.xml` written back.
+
+### Changed
+
+- **`save()` regenerates a part only once something wrote to its tree**, and copies every other
+  zip member byte for byte. `content.xml` and `meta.xml` are regenerated as before; `styles.xml`,
+  `settings.xml`, the manifest, the thumbnail and a chart's own content are now written back only
+  when the library touched them — a chart's content was rewritten as soon as a structural edit had
+  parsed it, even when no range of it moved.
+
+  This keeps "values change, styling does not" a property of the code. Measured on the eight test
+  fixtures: parsing and serialising back reorders the attributes of a third to a half of the start
+  tags, writes `&apos;` out as `'`, rewrites the XML declaration — and, until the fix above,
+  squeezed a whitespace-only text node to a single space. A part nothing touched never goes
+  through any of it. The invariant is under test on all eight fixtures, and asserted by
+  `benchmarks/sweep_real_files.py` on real files. A file shipping no `settings.xml` now reads a
+  blank skeleton into `reader.settings` rather than `b""`, as `reader.styles` and `reader.meta`
+  already did for a missing part.
+
 ## [0.14.1] — 2026-09-27
 
 ### Fixed

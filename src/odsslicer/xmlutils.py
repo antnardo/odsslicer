@@ -1,10 +1,13 @@
-"""Low-level helpers for building/cloning namespace-qualified ODF XML elements."""
+"""Low-level helpers for building/cloning namespace-qualified ODF XML elements,
+and for parsing a package part without losing anything it says."""
 
 import copy
+import io
 import re
 from typing import cast
 
 from bs4 import BeautifulSoup, Tag
+from lxml import etree
 
 # Standard OASIS namespace URIs, used as a last-resort fallback to build a
 # namespace-qualified tag from scratch when the document has no existing tag
@@ -20,6 +23,36 @@ _ODF_NAMESPACES = {
     "dc": "http://purl.org/dc/elements/1.1/",
     "xlink": "http://www.w3.org/1999/xlink",
 }
+
+
+def _root_local_name(markup: bytes) -> "str | None":
+    """The local name of the document element of `markup` - `document-content`
+    for a `content.xml` - read from its first start tag only, so that the
+    cost does not grow with the document; `None` if it has none."""
+    try:
+        for _, element in etree.iterparse(io.BytesIO(markup), events=("start",)):
+            return cast(str, etree.QName(element).localname)
+    except etree.XMLSyntaxError:
+        return None
+    return None
+
+
+def _parse_xml(markup: bytes) -> BeautifulSoup:
+    """`markup`, a part of the package, parsed into a tree that serialises
+    back to what it says - including every run of whitespace.
+
+    BeautifulSoup squeezes any text node made of whitespace only to a single
+    character while parsing (`endData()`), unless an element named in
+    `preserve_whitespace_tags` is open: for a number format padded with
+    spaces, `<number:text>   </number:text>`, that is a real loss. Naming
+    the elements whose whitespace matters would mean deciding what each one
+    means, and a forgotten one would lose its spaces in silence; naming the
+    document element instead keeps every text node under it, which is all of
+    them - the tree then holds what the file holds, whether odsslicer
+    understands it or not. The check is per opened element, so this costs a
+    few per cent of the parse and nothing in memory."""
+    root = _root_local_name(markup)
+    return BeautifulSoup(markup, "xml", preserve_whitespace_tags={root} if root is not None else set())
 
 
 def _new_qualified_tag(tag_name: str) -> Tag:

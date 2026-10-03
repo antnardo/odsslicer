@@ -213,9 +213,11 @@ gros des quatre : conception d'API avant code.
   chargement les trouve déjà (recherche récursive), mais insertion, suppression et bornes de
   groupe demandent du soin.
 - **La marche commune** : volets figés (`settings.xml`) et mise en page (`style:master-page`,
-  `style:page-layout` dans `styles.xml`) sont hors de portée tant que `save()` recopie ces deux
-  parties telles quelles. Les régénérer comme `content.xml` et `meta.xml` est le vrai préalable,
-  et sert les deux d'un coup.
+  `style:page-layout` dans `styles.xml`) demandaient que `save()` sache réécrire ces deux
+  parties. La mécanique est là (régénération paresseuse, voir ci-dessous) ; ce qui reste pour
+  les deux fonctionnalités, c'est le modèle et l'API — et la réserve de la mesure : la
+  sérialisation abîme un format de nombre rembourré d'espaces, donc une partie qu'on réécrit ne
+  revient pas intacte.
 - **Création de graphiques** : écrire une partie `Object N/content.xml` et ses entrées de
   manifeste. La lecture est déjà là (les plages des graphiques sont lues et réécrites) ; créer
   reste un chantier à part entière.
@@ -247,6 +249,72 @@ Comment lever la limitation sans perdre la promesse :
    réellement la sérialisation bs4/lxml, donc ce qu'on accepterait pour les deux autres parties.
 4. Sérialiser l'arbre analysé, jamais reconstruire : ce qu'odsslicer ne comprend pas (éléments
    inconnus, données binaires, parties d'une extension) doit traverser sans être interprété.
+
+#### Ce que la mesure a dit, et ce qui est fait (2026-10-01)
+
+Les points 1, 2 et 4 sont faits : `save()` recopie toute partie que rien n'a touchée, y compris
+le `content.xml` d'un graphique, `settings.xml` s'analyse au premier accès
+(`ODSReader.settings_data`), et l'invariant est sous test sur les huit fixtures du dépôt comme
+dans le balayage.
+
+Le point 3 a été mesuré sur ces huit fixtures (les six de `tests/wild/`, `TEST.ods`,
+`WHOLEROW.ods`), et il **retient la main** : la sérialisation est fidèle au sens, pas à l'octet,
+et pour `styles.xml` pas même au sens.
+
+- Un aller-retour sans édition ne réécrit que `content.xml` et `meta.xml` : 8 fichiers sur 8,
+  ce qui confirme le relevé des 28.
+- Ce que la sérialisation change, sans rien perdre : la déclaration XML
+  (`encoding="UTF-8" standalone="yes"` → `encoding="utf-8"`, et les CRLF d'Excel passent en LF),
+  l'ordre des attributs (de 34 % à 53 % des balises ouvrantes selon le fichier — 1 427 sur 3 110
+  pour le plus gros `content.xml`), `&apos;` et `&quot;` rendus en caractères (jusqu'à 123 dans
+  un fichier), un élément vide replié en `<x/>` (0 → 4 dans un `meta.xml`). Le poids bouge de
+  −615 à +0 octets. Les 35 déclarations de namespace restent toutes, aucune balise ni attribut
+  ne disparaît : la forme canonique C14N des deux parties est identique avant et après.
+- Ce que la sérialisation **perdait** : BeautifulSoup normalise tout nœud de texte entièrement
+  blanc à un seul caractère (`'   '` → `' '`, `'\t\n '` → `'\n'`) — c'est `endData()` dans bs4,
+  pas lxml, qui le fait seul est fidèle. Sur `styles.xml`, cela touchait 34
+  `<number:text>   </number:text>` répartis sur 3 fichiers sur 8 (8, 13 et 13) : des formats
+  comptables qui perdaient leur rembourrage, donc un alignement de colonne changé dans le
+  tableur. La forme C14N de ces trois `styles.xml` n'était **pas** identique après un
+  aller-retour.
+- Le même défaut atteignait `content.xml`, sérialisé à chaque `save()`, dans toutes les
+  versions publiées (reproduit sur la 0.14.1) : un `<number:text>   </number:text>` injecté dans
+  ses styles automatiques ressortait à un espace. Aucune fixture n'en porte, parce que
+  LibreOffice écrit un style de nombre là où vit le style de cellule qui l'utilise : dans
+  `styles.xml` pour un style nommé, dans `content.xml` pour un format appliqué directement à
+  une cellule — le cas d'un format comptable choisi dans la barre d'outils.
+
+#### Le blanc est conservé (2026-10-01)
+
+Le levier est bien `preserve_whitespace_tags`, mais ni l'une ni l'autre des deux voies
+envisagées : bs4 compare ce jeu au **nom local** de chaque balise ouverte (`text`, pas
+`number:text`), et ne réduit un nœud blanc que si **aucune** balise du jeu n'est ouverte. Il
+suffit donc d'y mettre l'élément racine du document — `document-content`, `document-styles`…,
+lu sur la première balise ouvrante, à coût constant (`_parse_xml`) — pour que tout ce qu'il
+contient soit conservé tel quel, sans nommer une seule balise ODF (règle 4 respectée) et sans
+passe sur les octets. Passer tous les noms de balises du document reviendrait au même, avec une
+passe de plus ; en nommer quelques-unes aurait perdu en silence celles oubliées.
+
+- Après correction, les 8 fixtures reviennent identiques en forme C14N pour chaque partie
+  sérialisée — `content.xml`, `meta.xml`, et `styles.xml` quand on force sa sérialisation —, les
+  34 nœuds rembourrés compris. Les seules différences restantes sont la déclaration XML, l'ordre
+  des attributs, `&apos;`/`&quot;` rendus en caractères et `<x></x>` replié en `<x/>`, sans perte.
+- Coût : la vérification se fait à chaque balise ouverte et fermée, soit +1,1 % à 1 000 lignes,
+  +1,9 % à 10 000 et +2,4 % à 100 000 sur l'ouverture (fichiers de `benchmarks/bench.py`, processus
+  frais entrelacés, médiane ; voir la section 12 de `DOCS.md`), rien en mémoire.
+- Un effet de bord à connaître : un paragraphe de cellule entièrement blanc (`<text:p>   </text:p>`,
+  qu'aucun tableur n'écrit — LibreOffice code les espaces répétés en `<text:s/>`) se lit désormais
+  tel quel, trois espaces, là où il se lisait réduit à un.
+
+La relecture de la régénération paresseuse a aussi trouvé un chemin d'écriture sans drapeau :
+`add_condition` sur un format de nombre de `styles.xml` (celui d'un style de cellule nommé, le
+cas le plus courant dans un document LibreOffice) écrivait dans un arbre que `save()` recopiait,
+donc perdait la condition en silence — déjà vrai sur `master`, où `styles.xml` était toujours
+recopié. L'écriture pose maintenant le drapeau (`_touched_tag`), et chaque chemin pouvant
+atteindre une partie recopiée a un test qui échoue si on retire son drapeau.
+
+Conséquence pour la mise en page et les volets figés : plus rien ne retient la main sur la
+mécanique. Ce qui reste est le modèle et l'API de chacune des deux fonctionnalités.
 
 ## Vers 1.0 — se passer de BeautifulSoup, lxml seul (décidé le 2026-10-01)
 
@@ -289,10 +357,9 @@ ce qu'exige une réécriture de cœur, et c'est déjà en place.
 
 ### Ordre à tenir
 
-1. **D'abord le correctif des blancs**, malgré cette décision : le même défaut atteint
-   `content.xml`, qui est sérialisé à chaque `save()` dans les versions **publiées** — un format
-   comptable perd son rembourrage sans que personne ne le voie. À vérifier et corriger pour
-   lui-même (voir [[projet-odsslicer-parties-paresseuses]] et la tâche en cours).
+1. ~~D'abord le correctif des blancs~~ — fait, publié en 0.14.2 avec la régénération
+   paresseuse (voir « Le blanc est conservé » ci-dessus). La migration part de là : lxml seul
+   doit garder au moins cette fidélité, et les tests qui l'épinglent la vérifient.
 2. **Puis l'étude de faisabilité** : inventaire des points d'appel par famille, prototype de la
    couche d'accès (nommage `{URI}local`, carte de namespaces, clonage, insertion), mesure sur
    1 000 / 10 000 / 100 000 lignes contre la section 12 de DOCS.md.

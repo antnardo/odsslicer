@@ -87,7 +87,9 @@ sheet.name                  # "Sheet1"
 ```
 
 `ODSReader` parses `content.xml`, `styles.xml` and `meta.xml` (via BeautifulSoup/lxml) into
-in-memory trees. `ODSReader.sheet(name)` raises `KeyError` for an unknown name.
+in-memory trees. `settings.xml` — what the application remembers of the window rather than of
+the document — is parsed only if something asks for it (`reader.settings_data`), since reading
+a cell never needs it. `ODSReader.sheet(name)` raises `KeyError` for an unknown name.
 
 `sheet.size` covers the data, empty rows and columns between it included. A note counts as
 data, as in LibreOffice: the grid reaches a note on an empty cell, however far. What
@@ -311,10 +313,30 @@ rather than getting a style of its own; `ODSReader.new()` documents are in Frenc
 
 `ODSReader.save(path=None)` rewrites the `.ods`: `content.xml` and `meta.xml` are regenerated
 from the in-memory trees; every other zip member (`styles.xml`, `settings.xml`,
-`manifest.xml`, thumbnail...) is copied through unchanged from the source file, and the ODF
-convention (`mimetype` first, uncompressed) is respected. With no argument, `save()` overwrites
-the source file — except for a document created with `ODSReader.new()`, which has no source
-file and requires an explicit path.
+`manifest.xml`, a chart's own content, thumbnail...) is copied through byte for byte from the
+source file, unless the library wrote to its tree, and the ODF convention (`mimetype` first,
+uncompressed) is respected. With no argument, `save()` overwrites the source file — except for
+a document created with `ODSReader.new()`, which has no source file and requires an explicit
+path.
+
+Copying by default is what makes “values change, styling does not” a property of the code
+rather than a hope. Parsing XML and serialising it back is faithful in meaning but not to the
+byte, and the difference is measurable: on the eight test fixtures a round trip reorders the
+attributes of a third to a half of the start tags, writes `&apos;` out as `'`, collapses an empty
+element to `<x/>` and rewrites the XML declaration. It is faithful in meaning, though: the
+canonical form (C14N) of every part written out of its tree is identical to the original's, on
+all eight fixtures — including every run of whitespace, which BeautifulSoup would otherwise
+squeeze to one character in a text node made of nothing else, and `<number:text>   </number:text>`
+is a number format whose padding that is (34 such nodes across three of those fixtures). The
+parts are parsed with their document element named as whitespace-preserving, so that holds for
+any element, not only the ones odsslicer knows. A part nothing touched never goes through any of
+it, so none of it can reach a file where only values were edited.
+
+A write into a part that is copied through has to say so: the library records it
+(`_touched_part`, or `_touched_tag` for a write into a tag found rather than made), and
+`save()` serialises that part — `add_condition` on a number format of `styles.xml`, the one
+behind a named cell style, is such a write. An edit nothing recorded would be dropped by the
+copy, silently: every such path is under test.
 
 `save()` never writes into the workbook itself: it writes the new file under a temporary name
 in the same folder (`.name.ods.<random>.tmp`), has it reach the disk, then renames it over the
@@ -1314,6 +1336,12 @@ What the numbers mean in practice:
   document size).
 - **Copying into new columns** pays for growing every existing row first (`grow_to`) — the
   cost is proportional to the sheet's height, not just the copied block.
+- **Keeping whitespace as written costs a few per cent on open, and no memory.** Every part is
+  parsed with its document element named as whitespace-preserving (see [`Cell.value` and `save()`](#cellvalue-and-save)), and
+  BeautifulSoup then checks each element it opens and closes. Measured on the same synthetic
+  workbooks, open time in fresh processes, interleaved, median of 7 runs (3 at 100,000 rows),
+  before and after that change on one machine: +1.1 % at 1,000 rows, +1.9 % at 10,000, +2.4 % at
+  100,000; peak RSS within 0.5 % at every size.
 - A subtle one, fixed in 0.10: writing values of a format with **no example anywhere in the
   document** (e.g. the first dates into a numbers-only sheet) used to trigger a full-document
   scan per cell (~33 ms each on a 10k-row sheet). The display-inference lookups are now lazy;

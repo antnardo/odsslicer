@@ -1565,9 +1565,15 @@ class Sheet:
         (e.g. `.visible`) the previously-shared style carried, since these
         are resolved from one single style tag rather than a chain."""
         if _is_forked_style_name(current_name, prefix):
-            tag = self.reader._find_style(current_name, family=family)
+            # a fork lives in the automatic styles of `content.xml`, and only
+            # a tag from there is written to in place: a style of
+            # `styles.xml` that happens to bear such a name is forked like
+            # any other, since save() copies that part through untouched
+            tag = self.reader._automatic_styles().find(
+                "style:style", attrs={"style:name": current_name, "style:family": family}, recursive=False
+            )
             if tag is not None:
-                return tag
+                return cast(Tag, tag)
         old_tag = self.reader._find_style(current_name, family=family) if current_name else None
         tag = self.reader._new_style_tag(family, prefix)
         if old_tag is not None:

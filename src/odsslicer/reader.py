@@ -15,7 +15,7 @@ from .libreoffice import _recalculate_file
 from .properties import DocumentProperties
 from .sheet import Sheet
 from .styles import _NUMBER_STYLE_TAGS, NumberFormat
-from .xmlutils import _blank_template, _new_qualified_tag
+from .xmlutils import _blank_template, _new_qualified_tag, _parse_xml
 
 logger = logging.getLogger("odsslicer")
 
@@ -41,6 +41,15 @@ _BLANK_META_XML = (
     b' office:version="1.2">'
     b"<office:meta/>"
     b"</office:document-meta>"
+)
+_BLANK_SETTINGS_XML = (
+    b'<?xml version="1.0" encoding="UTF-8"?>\n'
+    b'<office:document-settings'
+    b' xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"'
+    b' xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0"'
+    b' office:version="1.2">'
+    b"<office:settings/>"
+    b"</office:document-settings>"
 )
 
 
@@ -85,10 +94,20 @@ class ODSReader:
             # Document meta information, such as the author or the time of the last save action.
             self.meta = read_optional("meta.xml", _BLANK_META_XML)
             # Application-specific settings, such as the window size or printer information.
-            self.settings = read_optional("settings.xml", b"")
-        self.data = BeautifulSoup(self.content, "xml")
-        self.styles_data = BeautifulSoup(self.styles, "xml")
-        self.meta_data = BeautifulSoup(self.meta, "xml")
+            self.settings = read_optional("settings.xml", _BLANK_SETTINGS_XML)
+        # parsed so that they serialise back to what they say, whitespace
+        # included - see `_parse_xml`
+        self.data = _parse_xml(self.content)
+        self.styles_data = _parse_xml(self.styles)
+        self.meta_data = _parse_xml(self.meta)
+        # `settings.xml` holds nothing a cell needs, so it is parsed only if
+        # something asks for it - see `settings_data`
+        self._settings_data: BeautifulSoup | None = None
+        # The parts save() regenerates only once something here wrote to
+        # their tree; until then it copies their bytes through, which is
+        # what keeps the promise that editing values leaves the styling
+        # exactly as the spreadsheet application wrote it (see save()).
+        self._touched: set[str] = set()
         self.tables = self.data.find_all("table:table")
         self.sheets_names = [table["table:name"] for table in self.tables]
         self._sheets: dict[str, Sheet | None] = dict.fromkeys(self.sheets_names)
@@ -114,6 +133,54 @@ class ODSReader:
         """Structured, writable access to `meta.xml`'s document properties
         - see `DocumentProperties`."""
         return DocumentProperties(self)
+
+    @property
+    def settings_data(self) -> BeautifulSoup:
+        """`settings.xml` - what the application remembers of the window
+        rather than of the document: frozen panes, the active sheet, the
+        cursor's position - parsed on first access.
+
+        Reading a cell never needs it, and `save()` copies its bytes
+        through, so a document nothing asks it of is never parsed at all:
+        the cost is paid by the code that wants it. A missing part (Excel
+        ships none) gives the blank skeleton above, so that writing to it
+        works the same way.
+
+        Whatever writes here must call `_touched_part("settings.xml")`, or
+        `save()` will copy the original bytes over the change."""
+        if self._settings_data is None:
+            self._settings_data = _parse_xml(self.settings)
+        return self._settings_data
+
+    def _touched_part(self, name: str) -> None:
+        """Record that the in-memory tree of package part `name` no longer
+        matches the file, so that `save()` serialises it instead of copying
+        its bytes through."""
+        self._touched.add(name)
+
+    def _touched_tag(self, tag: Tag) -> None:
+        """Record a write to `tag`, wherever it lives: the part whose tree
+        holds it is then serialised by `save()`. For a tag of `content.xml`
+        or `meta.xml`, which are always regenerated, there is nothing to
+        record. The way for code that writes to a tag it found rather than
+        made - a number format of `styles.xml`, say - to say so without
+        knowing which part it came from."""
+        top: Tag = tag
+        while top.parent is not None:
+            top = top.parent  # up to the document itself, the BeautifulSoup object
+        for name, part in self._lazy_parts().items():
+            if part is top:
+                self._touched_part(name)
+
+    def _lazy_parts(self) -> "dict[str, BeautifulSoup]":
+        """The parsed parts `save()` writes back only once touched, by the
+        name they have in the package. `settings.xml` is absent until
+        something parses it; so is a chart's content (see `_charts`)."""
+        parts: dict[str, BeautifulSoup] = {"styles.xml": self.styles_data}
+        if self._settings_data is not None:
+            parts["settings.xml"] = self._settings_data
+        parts.update({name: part for name, part in self._parts.items() if part is not None})
+        return parts
 
     def _find_style(self, name: "str | None", family: "str | None" = None) -> "Tag | None":
         """A `<style:style>` by name (optionally constrained to a
@@ -269,12 +336,24 @@ class ODSReader:
 
         `content.xml` (sheets, cell data, automatic styles, formulas) and
         `meta.xml` (`.properties` - title, author, custom properties...)
-        are regenerated from their in-memory trees; every other zip member
-        (`styles.xml`, `settings.xml`, `manifest.xml`, thumbnail...) is
-        copied through unchanged from the source file. Defaults to
-        overwriting `self.file` - except for a document created with
-        `ODSReader.new()`, which has no source file of its own and
-        requires an explicit `path`.
+        are regenerated from their in-memory trees. Every other zip member
+        - `styles.xml`, `settings.xml`, `manifest.xml`, a chart's own
+        content, the thumbnail - is copied through byte for byte, unless
+        something in the library wrote to its tree, in which case that tree
+        is serialised (`_touched_part`). Defaults to overwriting
+        `self.file` - except for a document created with `ODSReader.new()`,
+        which has no source file of its own and requires an explicit
+        `path`.
+
+        Copying by default is what makes "we change values, not styling" a
+        property of the code rather than a hope: parsing and serialising
+        back is faithful in meaning but not to the byte - attributes come
+        out in another order, an empty element collapses to `<x/>`, `&apos;`
+        becomes `'`. (It used to lose something too: a run of spaces in a
+        text node was squeezed to one, which for `<number:text>   </number:text>`
+        in a number format cost it its padding - every part is now parsed so
+        that whitespace comes back as written, see `_parse_xml`.) A part
+        nothing touched never goes through any of it.
 
         The file is written under a temporary name in the same folder, then
         renamed over `path`: a program reading it meanwhile sees either the
@@ -311,7 +390,9 @@ class ODSReader:
             "meta.xml": self.meta_data.encode("utf-8"),
         }
         regenerated.update(
-            (name, part.encode("utf-8")) for name, part in self._parts.items() if part is not None
+            (name, part.encode("utf-8"))
+            for name, part in self._lazy_parts().items()
+            if name in self._touched
         )
         with ZipFile(self.file) as src:
             entries = [
@@ -358,10 +439,13 @@ class ODSReader:
                 self._drawing_tags = ([], [])
         return self._drawing_tags
 
-    def _charts(self) -> "list[BeautifulSoup]":
+    def _charts(self) -> "list[tuple[str, BeautifulSoup]]":
         """The content of every chart embedded in the document, each the
         `content.xml` of an object of the package (`Object 1/`...) that a
-        `<draw:object>` points at, parsed once and kept for save()."""
+        `<draw:object>` points at, parsed once and kept for save(), with
+        the name it has in the package: parsing one is not editing it, so
+        a caller about to rewrite its ranges has to say so
+        (`_touched_part`) for save() to write the tree back."""
         wanted = []
         for tag in self._drawings()[1]:
             href = cast(str, tag.get("xlink:href", "")).removeprefix("./").rstrip("/")
@@ -372,9 +456,9 @@ class ODSReader:
             with ZipFile(self.file) as package:
                 members = set(package.namelist())
                 for name in missing:
-                    part = BeautifulSoup(package.read(name), "xml") if name in members else None
+                    part = _parse_xml(package.read(name)) if name in members else None
                     self._parts[name] = part if part and part.find("office:chart") else None
-        return [part for name in wanted if (part := self._parts[name]) is not None]
+        return [(name, part) for name in wanted if (part := self._parts[name]) is not None]
 
     def _remap_drawing_references(self, target_sheet: str, remap: _Remap) -> None:
         """After a structural edit of `target_sheet`, have what drawings hold
@@ -395,7 +479,8 @@ class ODSReader:
             if "draw:notify-on-update-of-ranges" in tag.attrs:
                 ranges = cast(str, tag["draw:notify-on-update-of-ranges"])
                 tag["draw:notify-on-update-of-ranges"] = _remap_range_list(ranges, target_sheet, remap)
-        for chart in self._charts():
+        for name, chart in self._charts():
+            self._touched_part(name)
             for attr in self._CHART_RANGE_ATTRS:
                 for tag in chart.find_all(attrs={attr: True}):
                     tag[attr] = _remap_range_list(cast(str, tag[attr]), target_sheet, remap)
@@ -410,7 +495,8 @@ class ODSReader:
             if "draw:notify-on-update-of-ranges" in tag.attrs:
                 ranges = cast(str, tag["draw:notify-on-update-of-ranges"])
                 tag["draw:notify-on-update-of-ranges"] = _rename_range_list(ranges, old_name, new_name)
-        for chart in self._charts():
+        for name, chart in self._charts():
+            self._touched_part(name)
             for attr in self._CHART_RANGE_ATTRS:
                 for tag in chart.find_all(attrs={attr: True}):
                     tag[attr] = _rename_range_list(cast(str, tag[attr]), old_name, new_name)

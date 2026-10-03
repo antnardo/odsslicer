@@ -37,7 +37,7 @@ Issues = "https://github.com/antnardo/odsslicer/issues"
 
 [project.optional-dependencies]
 test = ["pytest", "ruff"]
-typecheck = ["mypy", "types-beautifulsoup4"]
+typecheck = ["mypy", "types-beautifulsoup4", "lxml-stubs"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

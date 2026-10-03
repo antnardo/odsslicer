@@ -16,7 +16,12 @@ Four phases, each answering a different question:
    column, repeats counted. This walks `content.xml` independently of the
    library, so a positioning bug cannot hide behind its own loader.
 3. **write** - after writing past the data and inside it, does saving and
-   reading back leave every other cell alone?
+   reading back leave every other cell alone? And do the parts `save()` is
+   meant to copy through - `styles.xml`, `settings.xml`, a chart's own
+   content, the manifest, the thumbnail - come back out of the zip byte for
+   byte? That is the mechanical form of "we change values, not styling":
+   parsing and serialising XML back is faithful in meaning but not to the
+   byte, so a part nothing touched must never go through it.
 4. **open** - does anything raise? A file both versions fail on the same way
    is fine (macOS aliases and truncated zips are common); a new failure is
    not.
@@ -215,9 +220,30 @@ def grid_mismatches(sheet: object, path: Path, index: int) -> list[str]:
     return bad
 
 
+# The package parts `save()` regenerates from their in-memory tree; every
+# other member of the zip has to come back out of it unchanged.
+REGENERATED_PARTS = {"content.xml", "meta.xml"}
+
+
+def rewritten_parts(before: Path, after: Path) -> list[str]:
+    """The members of `after` that do not match `before` byte for byte,
+    `content.xml` and `meta.xml` aside - a member added or dropped counts."""
+    import zipfile
+
+    with zipfile.ZipFile(before) as src, zipfile.ZipFile(after) as dst:
+        names = set(src.namelist()) | set(dst.namelist())
+        return sorted(
+            name
+            for name in names - REGENERATED_PARTS
+            if name not in src.namelist()
+            or name not in dst.namelist()
+            or src.read(name) != dst.read(name)
+        )
+
+
 def write_and_reread(table: object, path: Path, write_dir: Path) -> dict:
     """Write past the data and inside it, save, read back: only the cells
-    written may differ."""
+    written may differ, and only the regenerated parts of the package."""
     import datetime as dt
 
     sheet = table.sheets[0]  # type: ignore[attr-defined]
@@ -238,6 +264,9 @@ def write_and_reread(table: object, path: Path, write_dir: Path) -> dict:
         sheet[r, c].value = value
     out = write_dir / f"{path.stem}-{os.getpid()}.ods"
     table.save(out)  # type: ignore[attr-defined]
+    # before reading it back, while both files are still on disk: editing
+    # values must leave every other part of the package exactly as it was
+    rewritten = rewritten_parts(path, out)
 
     from odsslicer import ODSReader
 
@@ -249,7 +278,12 @@ def write_and_reread(table: object, path: Path, write_dir: Path) -> dict:
     )
     kept = sum(1 for (r, c) in targets if repr(reread[r, c].value) != "None")
     out.unlink(missing_ok=True)
-    return {"unrelated_changed": changed, "targets_written": kept, "targets": len(targets)}
+    return {
+        "unrelated_changed": changed,
+        "targets_written": kept,
+        "targets": len(targets),
+        "rewritten_parts": rewritten,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -262,6 +296,7 @@ class Findings:
     read_differences: list[str] = field(default_factory=list)
     grid_violations: list[str] = field(default_factory=list)
     write_failures: list[str] = field(default_factory=list)
+    copied_parts_rewritten: list[str] = field(default_factory=list)
     new_errors: list[str] = field(default_factory=list)
     swept: int = 0
     unreadable: int = 0
@@ -299,6 +334,8 @@ def compare(current: dict, baseline: dict | None, findings: Findings, do_write: 
         w = current["write"]
         if w.get("unrelated_changed") or (w.get("targets_written", 0) < w.get("targets", 0)):
             findings.write_failures.append(f"{path}: {w}")
+        if w.get("rewritten_parts"):
+            findings.copied_parts_rewritten.append(f"{path}: {w['rewritten_parts']}")
     if baseline is None or baseline["error"]:
         return
     if len(baseline["sheets"]) != len(current["sheets"]):
@@ -393,6 +430,7 @@ def report(f: Findings, baseline_src: Path | None) -> int:
         ("read differences", f.read_differences),
         ("grid vs XML violations", f.grid_violations),
         ("write/reread failures", f.write_failures),
+        ("copied parts rewritten by a save", f.copied_parts_rewritten),
         ("new errors", f.new_errors),
     ):
         print(f"  {len(items)} {label}")
@@ -400,7 +438,8 @@ def report(f: Findings, baseline_src: Path | None) -> int:
             print(f"      {item}")
         if len(items) > 15:
             print(f"      ... and {len(items) - 15} more")
-    return 1 if (f.grid_violations or f.write_failures or f.new_errors) else 0
+    bad = f.grid_violations or f.write_failures or f.copied_parts_rewritten or f.new_errors
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":
