@@ -254,6 +254,17 @@ class TestTail:
         assert text(p) == "Voir ici pour le détail"
         assert len(p) == 0
 
+    def test_naive_move_of_a_paragraphs_content_loses_the_text_before_its_first_child(self):
+        # what `cell.hyperlink = url` does since 0.14.3, `a.append(child.extract())`
+        # for every child: the text before the first child is no child in lxml
+        p = lxml_fragment("<text:p>Voir <text:span>ici</text:span> et là</text:p>")
+        a = new("text:a")
+        for child in list(p):
+            a.append(child)  # its tail goes along, as wanted
+        p.append(a)
+        assert text(p) == "Voir ici et là"  # still there, but outside the link
+        assert text(a) == "ici et là"
+
     @pytest.mark.parametrize(
         "xml",
         [

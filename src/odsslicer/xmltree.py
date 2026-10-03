@@ -52,6 +52,7 @@ __all__ = [
     "following",
     "insert_after",
     "new",
+    "paragraph_text",
     "parse",
     "preceding",
     "prefix_of",
@@ -131,9 +132,11 @@ def prefix_of(element: etree._Element, uri: str) -> "str | None":
 
 
 def parse(markup: bytes) -> "etree._ElementTree":
-    """`markup`, a part of the package, as an lxml tree - whitespace,
-    attribute order and character references kept as written, which bs4
-    needed `preserve_whitespace_tags` for.
+    """`markup`, a part of the package, as an lxml tree - whitespace and
+    attribute order kept as written, which bs4 needed
+    `preserve_whitespace_tags` for (whitespace) and could not do (order).
+    Escapes are not kept, by any parser: `&apos;` comes back as `'`, which
+    is why `save()` copies an untouched part rather than serialise it.
 
     Strict: a part that is not well-formed XML raises
     `lxml.etree.XMLSyntaxError`. bs4 recovers instead, and on 492 real
@@ -204,7 +207,9 @@ def following(element: etree._Element, *names: str) -> "Iterator[etree._Element]
 def text(element: etree._Element) -> str:
     """Everything `element` says, its descendants' text included and
     comments left out - bs4's `get_text()`. Not `element.text`, which stops
-    at the first child: `a<text:s/>b` would read `a`."""
+    at the first child: `a<text:span>b</text:span>` would read `a`. A cell's
+    paragraph wants `paragraph_text()`, which reads the spaces ODF writes as
+    elements too."""
     return "".join(cast("Iterator[str]", element.itertext()))
 
 
