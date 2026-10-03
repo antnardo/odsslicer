@@ -1,6 +1,6 @@
 """`ODSReader.save()`: writing the file, what it leaves alone, and what it keeps.
 
-Three things are checked here. First, the write itself (issue #8): `save()`
+Four things are checked here. First, the write itself (issue #8): `save()`
 used to truncate its target and write the new zip into it, so a program
 reading the file meanwhile got a partial zip, and a save stopped midway left
 the workbook unreadable - these tests stop a save at each of its steps, and
@@ -8,11 +8,14 @@ read the file on disk while the zip is being written. Second, that the parts
 `save()` copies through really are copied, byte for byte, and only serialised
 once something wrote to their tree - and that every write into such a tree
 says so. Third, that a part which is serialised says what it said: in
-particular that no run of whitespace is lost on the way.
+particular that no run of whitespace is lost on the way. Fourth, that a
+password-protected package is refused when it is opened, before a save could
+write what its encrypted parts parse to - nothing - over them.
 """
 
 import os
 import pathlib
+import random
 import re
 import stat
 import zipfile
@@ -21,8 +24,8 @@ import pytest
 from lxml import etree
 
 from conftest import FIXTURES_DIR
-from odsslicer import ODSReader
-from odsslicer.xmlutils import _parse_xml, _root_local_name
+from odsslicer import EncryptedDocumentError, ODSReader
+from odsslicer.xmlutils import _encrypted_parts, _parse_xml, _root_local_name
 
 
 def _edited(path):
@@ -482,3 +485,82 @@ def test_a_style_of_styles_xml_bearing_a_fork_s_name_is_forked_rather_than_writt
 
     assert after["styles.xml"] == before["styles.xml"]
     assert ODSReader(tmp_path / "saved.ods").sheet("Sheet1").row_style(0).height == "2cm"
+
+
+# ---------------------------------------------------------------------------
+# A password-protected package is refused, not read as empty
+# ---------------------------------------------------------------------------
+#
+# Its parts are ciphertext, which `_parse_xml` recovers from as from any broken
+# markup: the document read as one with no sheets, and `save()` - over the
+# source file, by default - wrote a `content.xml` holding the XML declaration
+# alone in place of the encrypted one. LibreOffice's own test files
+# (sc/qa/unit/data/ods/password*.ods) are the real-world case; the fixture
+# below is TEST.ods with its manifest saying the same of `content.xml`.
+
+ODF_MANIFEST = b"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"
+OPENOFFICE_MANIFEST = b"http://openoffice.org/2001/manifest"
+OPENOFFICE_DOCTYPE = (
+    b'<!DOCTYPE manifest:manifest PUBLIC "-//OpenOffice.org//DTD Manifest 1.0//EN" "Manifest.dtd">\n'
+)
+# what LibreOffice writes for a part encrypted the pre-3.4 way, checksums made up
+ENCRYPTION_DATA = (
+    b'<manifest:encryption-data manifest:checksum-type="SHA1/1K"'
+    b' manifest:checksum="wnowfp29iYFoFfSCRvaKpQ==">'
+    b'<manifest:algorithm manifest:algorithm-name="Blowfish CFB"'
+    b' manifest:initialisation-vector="qOnQzN5IFMw="/>'
+    b'<manifest:key-derivation manifest:key-derivation-name="PBKDF2" manifest:key-size="16"'
+    b' manifest:iteration-count="1024" manifest:salt="Vl97+rK9tMG+QExYbQjkkg=="/>'
+    b"</manifest:encryption-data>"
+)
+CONTENT_ENTRY = b'<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>'
+
+
+def _encrypted(tmp_path, namespace=ODF_MANIFEST, doctype=b""):
+    """TEST.ods with `content.xml` declared encrypted in a manifest of
+    `namespace`, and replaced by bytes as meaningless as ciphertext."""
+
+    def mark_encrypted(manifest):
+        assert CONTENT_ENTRY in manifest, "TEST.ods is expected to list content.xml in its manifest"
+        entry = CONTENT_ENTRY[:-2] + b">" + ENCRYPTION_DATA + b"</manifest:file-entry>"
+        manifest = manifest.replace(CONTENT_ENTRY, entry).replace(ODF_MANIFEST, namespace)
+        declaration, rest = manifest.split(b"\n", 1)
+        return declaration + b"\n" + doctype + rest
+
+    path = _with_part_edited(FIXTURES_DIR / "TEST.ods", tmp_path, "META-INF/manifest.xml", mark_encrypted)
+    return _with_part_edited(path, tmp_path, "content.xml", lambda _: random.Random(0).randbytes(941))
+
+
+@pytest.mark.parametrize(
+    "namespace, doctype",
+    [(ODF_MANIFEST, b""), (OPENOFFICE_MANIFEST, OPENOFFICE_DOCTYPE)],
+    ids=["odf", "openoffice"],
+)
+def test_opening_a_password_protected_package_raises_and_leaves_it_untouched(namespace, doctype, tmp_path):
+    path = _encrypted(tmp_path, namespace, doctype)
+    before = path.read_bytes()
+
+    with pytest.raises(EncryptedDocumentError, match="password-protected"):
+        ODSReader(path)
+
+    assert path.read_bytes() == before
+
+
+def test_a_password_protected_package_is_a_value_error(tmp_path):
+    # the error callers already catch for a file odsslicer cannot read
+    with pytest.raises(ValueError):
+        ODSReader(_encrypted(tmp_path))
+
+
+@pytest.mark.parametrize("manifest", [b"", b"no markup at all", b"<manifest:manifest"], ids=repr)
+def test_a_manifest_that_does_not_parse_declares_nothing_encrypted(manifest):
+    assert _encrypted_parts(manifest) == set()
+
+
+def test_a_manifest_declares_encrypted_only_the_entries_carrying_encryption_data():
+    with zipfile.ZipFile(FIXTURES_DIR / "TEST.ods") as package:
+        manifest = package.read("META-INF/manifest.xml")
+    assert _encrypted_parts(manifest) == set()
+
+    entry = CONTENT_ENTRY[:-2] + b">" + ENCRYPTION_DATA + b"</manifest:file-entry>"
+    assert _encrypted_parts(manifest.replace(CONTENT_ENTRY, entry)) == {"content.xml"}

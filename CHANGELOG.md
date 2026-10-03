@@ -7,6 +7,25 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A password-protected document is refused when opened, rather than read as empty and
+  destroyed on save.** Its parts are stored encrypted, and the parser recovers from ciphertext as
+  from any broken markup: `ODSReader` opened LibreOffice's own `passwordOld.ods` without an error
+  and with no sheets, and `save()` — over the source file, by default — wrote a `content.xml`
+  holding the XML declaration alone (39 bytes) in place of the 941 encrypted ones. Every released
+  version was affected. `META-INF/manifest.xml` is now read before any part is parsed, and a
+  package whose `content.xml` it declares encrypted (`manifest:encryption-data`) raises
+  `EncryptedDocumentError`; the file is left as it was. Manifests in the OpenOffice.org 1.x
+  namespace are recognised too. Checked on LibreOffice's three encrypted test files, Blowfish and
+  AES alike. odsslicer does not decrypt: open the file in LibreOffice and save it without a
+  password to read it here.
+
+### Added
+
+- **`EncryptedDocumentError`**, raised by `ODSReader` for a password-protected document. It is a
+  `ValueError`, so code already catching that for a file it cannot read keeps working.
+
 ## [0.14.3] — 2026-10-03
 
 ### Fixed
