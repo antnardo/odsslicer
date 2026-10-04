@@ -121,6 +121,30 @@ def _position_after(tag: Tag) -> int:
     return len(parent.contents) - sum(1 for _ in tag.next_siblings)
 
 
+def _split_repetitions(tag: Tag, attr: str, n: int) -> list[Tag]:
+    """Replace `tag`, repeated `n` times by `attr`, with `n` copies of it
+    that no longer carry `attr`, in place. Returns the copies, in order.
+
+    The copies go in by index, found once (see `_position_after`): placed
+    one after the other with bs4's `insert_after`, each looked the one
+    before up with `parent.index()`, a scan from the first child, so
+    splitting a run of n rows p rows down cost n × (p + n/2) comparisons -
+    23 s to write one cell in a run of 20,000 repeated rows below 50,000
+    others, 1.6 s to set the width of a column defined by one
+    `<table:table-column>` repeated 16,384 times, as LibreOffice pads a
+    sheet. One `insert` per copy: `Tag.insert` takes several only since
+    bs4 4.13."""
+    copies = [copy.deepcopy(tag) for _ in range(n)]
+    for copy_tag in copies:
+        copy_tag.attrs.pop(attr, None)
+    parent = cast(Tag, tag.parent)
+    position = parent.index(tag)
+    tag.replace_with(copies[0])
+    for k, copy_tag in enumerate(copies[1:], start=position + 1):
+        parent.insert(k, copy_tag)
+    return copies
+
+
 # The sizes applications pad a sheet to with repeated blank rows and cells:
 # 1,048,576 rows - 65,536 before LibreOffice 3.3 and Excel 2007 - and 16,384
 # columns - 1,024 before LibreOffice 7.4. A sheet padded to one of them keeps
@@ -473,14 +497,7 @@ class Sheet:
             return
 
         run = self._run_of(row)
-        copies = [copy.deepcopy(row_tag) for _ in range(n)]
-        for c in copies:
-            c.attrs.pop("table:number-rows-repeated", None)
-        row_tag.replace_with(copies[0])
-        prev = copies[0]
-        for nxt in copies[1:]:
-            prev.insert_after(nxt)
-            prev = nxt
+        copies = _split_repetitions(row_tag, "table:number-rows-repeated", n)
 
         for r, copy_tag in zip(run, copies, strict=True):
             j = 0
@@ -506,14 +523,7 @@ class Sheet:
             start -= 1
         run = self._run_of(row)  # before the split detaches `cell_tag`
 
-        copies = [copy.deepcopy(cell_tag) for _ in range(n)]
-        for copy_of_cell in copies:
-            copy_of_cell.attrs.pop("table:number-columns-repeated", None)
-        cell_tag.replace_with(copies[0])
-        prev = copies[0]
-        for nxt in copies[1:]:
-            prev.insert_after(nxt)
-            prev = nxt
+        copies = _split_repetitions(cell_tag, "table:number-columns-repeated", n)
 
         for r in run:
             for c, copy_tag in enumerate(copies, start=start):
@@ -1550,14 +1560,7 @@ class Sheet:
                 break
             seen += int(tag.attrs.get("table:number-columns-repeated", "1"))
 
-        copies = [copy.deepcopy(col_tag) for _ in range(n)]
-        for c in copies:
-            c.attrs.pop("table:number-columns-repeated", None)
-        col_tag.replace_with(copies[0])
-        prev = copies[0]
-        for nxt in copies[1:]:
-            prev.insert_after(nxt)
-            prev = nxt
+        copies = _split_repetitions(col_tag, "table:number-columns-repeated", n)
         return copies[col - start]
 
     def column_style(self, col: int) -> "ColumnStyle | None":

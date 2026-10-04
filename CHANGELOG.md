@@ -26,6 +26,18 @@ still change between minor versions.
   once per row instead of once per new cell, which matters for wide rows:
   `insert_columns(1000, 1000)` on 200 rows of 1,000 columns took 6.7 s instead of 2.9 s
   (Apple M4, Python 3.14, median of 3 interleaved fresh-process runs on the same machine).
+- **Splitting a repeated row, cell or column definition is linear in its repetitions.** A
+  row LibreOffice wrote once with `table:number-rows-repeated`, a cell with
+  `table:number-columns-repeated`, or a column definition likewise, becomes one element per
+  repetition when written to or styled, and each copy was placed after the previous one with
+  BeautifulSoup's `insert_after`, which looks it up by scanning from the first row (or cell, or
+  definition): a run of n repetitions p elements down cost n × (p + n/2) comparisons. Writing one
+  cell in a run of 20,000 repeated rows below 50,000 took 23 s instead of 0.36 s (2.8 s instead
+  of 0.31 s at the top of the sheet), `insert_columns` on such a run 2.9 s instead of 0.50 s,
+  writing into a cell repeated 16,384 times 1.7 s instead of 0.14 s, and setting the width of a
+  column defined by one `<table:table-column>` repeated 16,384 times — how LibreOffice pads a
+  sheet — 1.6 s instead of 0.04 s (same machine and method). The copies now go in by an index
+  found once.
 
 ## [0.14.3] — 2026-10-03
 

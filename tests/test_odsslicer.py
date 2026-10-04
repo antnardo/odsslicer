@@ -1597,6 +1597,51 @@ def test_inserting_columns_scans_each_row_for_a_cell_at_most_once(monkeypatch, c
     assert sheet.to_list() == [values[:col] + [None] * 100 + values[col:]] * 20
 
 
+# Splitting a repeated element looks it up twice - once replacing it with its
+# first copy, once placing the others - wherever it lies and however many
+# times it repeats. Regression: each copy went in with insert_after, a scan
+# from the first child up to the copy before.
+
+
+def test_writing_into_repeated_rows_scans_the_table_for_a_row_at_most_twice(tmp_path, monkeypatch):
+    # writing one cell in a run of 20,000 repeated rows below 50,000 took 23 s, not 0.36 s
+    xml = "".join(table_row(number_cell(i)) for i in range(100)) + table_row(text_cell("x"), repeat=200)
+    sheet = ODSReader(ods_with_sheet(tmp_path / "rows.ods", xml)).sheet("Sheet1")
+    scanned = _count_index_lookups(monkeypatch, "table-row")
+    sheet[200, 0].value = "y"
+    assert len(scanned) <= 2
+    expected = [[float(i)] for i in range(100)] + [["x"]] * 200
+    expected[200] = ["y"]
+    assert sheet.to_list() == expected
+
+
+def test_writing_into_repeated_cells_scans_the_row_for_a_cell_at_most_twice(tmp_path, monkeypatch):
+    # in a cell repeated 16,384 times: 1.7 s, not 0.14 s
+    repeated = (
+        '<table:table-cell table:number-columns-repeated="200" office:value-type="string">'
+        "<text:p>x</text:p></table:table-cell>"
+    )
+    xml = table_row(*(number_cell(c) for c in range(100)), repeated)
+    sheet = ODSReader(ods_with_sheet(tmp_path / "cells.ods", xml)).sheet("Sheet1")
+    scanned = _count_index_lookups(monkeypatch, "table-cell")
+    sheet[0, 200].value = "y"
+    assert len(scanned) <= 2
+    expected = [float(c) for c in range(100)] + ["x"] * 200
+    expected[200] = "y"
+    assert sheet.to_list() == [expected]
+
+
+def test_styling_a_repeated_column_scans_the_definitions_at_most_twice(tmp_path, monkeypatch):
+    # in a definition repeated 16,384 times, as LibreOffice pads a sheet: 1.6 s, not 0.04 s
+    xml = '<table:table-column table:number-columns-repeated="200"/>' + table_row(text_cell("a"))
+    sheet = ODSReader(ods_with_sheet(tmp_path / "columns.ods", xml)).sheet("Sheet1")
+    scanned = _count_index_lookups(monkeypatch, "table-column")
+    sheet.column_style(100).width = "3cm"
+    assert len(scanned) <= 2
+    assert len(sheet.table.find_all("table:table-column")) == 200
+    assert [sheet.column_style(c).width for c in (99, 100, 101)] == [None, "3cm", None]
+
+
 # more than 1,000 empty rows between the data and a shape, which LibreOffice
 # writes as one element: the grid ends above them
 _FAR_BELOW_XML = (
