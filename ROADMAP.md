@@ -336,9 +336,10 @@ propriétés obscures, peu utilisées, et le paquet n'a pas d'utilisateurs à m�
 (0.14.3), fichiers chiffrés refusés et éditions de feuille linéaires, bs4 ≥ 4.13 (0.15.0). Depuis,
 sur `master` : la couche d'accès lxml, `src/odsslicer/xmltree.py` et ses 84 tests
 (`tests/test_xmltree.py`), que rien n'utilise encore ; le code formaté par ruff, vérifié par la CI.
-L'étude est sur la branche `claude/lxml-study`, poussée sur GitHub, rebasée sur ce `master` :
-`properties.py` porté avec `meta.xml` — l'étape 0 du plan ci-dessous —, l'étude
-(`benchmarks/LXML_STUDY.md`) et ses scripts.
+L'étude (`benchmarks/LXML_STUDY.md`) et ses scripts (`benchmarks/lxml_*.py`) sont sur `master`
+aussi. Seul reste sur la branche `claude/lxml-study`, poussée sur GitHub et rebasée sur `master`,
+le portage de `properties.py` avec `meta.xml` — l'étape 0 du plan ci-dessous —, parce qu'il fait
+de `meta_data` un arbre lxml.
 
 **Lire, dans l'ordre** : cette section ; « Ce que l'étude a établi », « Plan d'engagement » et
 « À décider » plus bas ; puis `benchmarks/LXML_STUDY.md` (en anglais), dont la section 2, les
@@ -505,9 +506,8 @@ contre la dernière version publiée, sauf différence annoncée. Les étapes 2 
 peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_data`,
 `settings_data`) et attendent la 1.0, que publie l'étape 5.
 
-0. ~~**Couche d'accès et `meta.xml`**~~ — fait sur la branche de l'étude. Attention : `meta_data`
-   y devient un arbre lxml, donc la branche ne doit pas partir dans une 0.14.x telle quelle (voir
-   « À décider »).
+0. ~~**Couche d'accès et `meta.xml`**~~ — fait : la couche sur `master`, le portage de
+   `meta.xml` sur `claude/lxml-study`, où `meta_data` devient un arbre lxml ; il attend la 1.0.
 1. **`settings.xml` et le contenu des graphiques.** Deux parties que seul `reader.py` lit
    (`settings_data`, `_charts`, la réécriture de leurs plages) : petit, et le premier usage de la
    couche sur un chemin de `save()` qui recopie ou régénère. `_touched_tag` apprend à remonter à
@@ -558,12 +558,10 @@ réparé en silence ; un fichier aux préfixes non standard se lit.
 
 ### À décider
 
-- **Fusionner le prototype quand ?** `meta_data` y devient lxml : sur `master` avant la 1.0, ce
-  serait une rupture dans une 0.x. Rebasée le 2026-10-04 sur la v0.15.0 (refus des
-  fichiers chiffrés, éditions de feuille linéaires), la branche balaye à zéro partout contre lui
-  (250 fichiers, écriture sur 150) : le fichier chiffré lève la même erreur des deux côtés,
-  avant que l'analyse stricte n'intervienne. Soit la branche attend l'étape 5, soit on la
-  fusionne sans le portage de `properties.py` (la couche et ses tests seuls ne cassent rien).
+- ~~**Fusionner le prototype quand ?**~~ Tranché le 2026-10-04 : la couche et ses tests sur
+  `master`, le portage de `properties.py` sur `claude/lxml-study` jusqu'à la 1.0 (voir « Pour
+  démarrer »). Rebasée sur la v0.15.0, la branche balayait à zéro partout (250 fichiers, écriture
+  sur 150), le fichier chiffré levant la même erreur des deux côtés.
 - **`Cell.attrs` et `Sheet.attrs`** : les retirer, exposer `el.attrib` (clés `{URI}local`), ou
   garder une vue en lecture aux clés préfixées (`prefixed()` existe). DOCS.md en montre l'usage.
   Même question pour les clés de `cell_properties` et `text_properties` ; je garderais le préfixe

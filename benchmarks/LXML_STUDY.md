@@ -5,8 +5,11 @@ BeautifulSoup, lxml seul"), on top of v0.14.3, then rebased on 2026-10-04 onto v
 linear-time sheet edits, bs4 4.13 or later; the counts and measurements below are those of
 v0.14.3). Where to start the migration from is at the top of the lxml section of `ROADMAP.md`
 ("Pour démarrer"). It is a study and a prototype, not the
-migration: one small module is ported (`properties.py`, with the `meta.xml` part it reads), the
-rest of the package is untouched. The plan that follows from it is in `ROADMAP.md`, in French
+migration. What it built is in two places: the access layer, `src/odsslicer/xmltree.py` and its
+tests, merged on `master` on its own, where nothing uses it yet; and one small module ported on
+top of it (`properties.py`, with the `meta.xml` part it reads), which turns `reader.meta_data`
+into an lxml tree and so stays on the branch `claude/lxml-study` until 1.0. "This branch" below
+means that one. The plan that follows from it is in `ROADMAP.md`, in French
 like the rest of that file.
 
 Everything here can be measured again:
