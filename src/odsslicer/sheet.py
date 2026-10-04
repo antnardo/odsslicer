@@ -125,23 +125,19 @@ def _split_repetitions(tag: Tag, attr: str, n: int) -> list[Tag]:
     """Replace `tag`, repeated `n` times by `attr`, with `n` copies of it
     that no longer carry `attr`, in place. Returns the copies, in order.
 
-    The copies go in by index, found once (see `_position_after`): placed
-    one after the other with bs4's `insert_after`, each looked the one
-    before up with `parent.index()`, a scan from the first child, so
-    splitting a run of n rows p rows down cost n × (p + n/2) comparisons -
+    `replace_with` looks `tag` up once and puts all the copies in its place
+    (see `_position_after`). Placed one after the other with bs4's
+    `insert_after`, each copy looked the one before up with
+    `parent.index()`, a scan from the first child, so splitting a run of
+    n rows p rows down cost n × (p + n/2) comparisons -
     23 s to write one cell in a run of 20,000 repeated rows below 50,000
     others, 1.6 s to set the width of a column defined by one
     `<table:table-column>` repeated 16,384 times, as LibreOffice pads a
-    sheet. One `insert` per copy: `Tag.insert` takes several only since
-    bs4 4.13."""
+    sheet."""
     copies = [copy.deepcopy(tag) for _ in range(n)]
     for copy_tag in copies:
         copy_tag.attrs.pop(attr, None)
-    parent = cast(Tag, tag.parent)
-    position = parent.index(tag)
-    tag.replace_with(copies[0])
-    for k, copy_tag in enumerate(copies[1:], start=position + 1):
-        parent.insert(k, copy_tag)
+    tag.replace_with(*copies)
     return copies
 
 

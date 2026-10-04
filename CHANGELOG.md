@@ -7,6 +7,12 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires `beautifulsoup4` 4.13 or later**, up from 4.9: inserting columns and splitting
+  repeated elements now hand BeautifulSoup several elements in one `insert` or `replace_with`
+  call, which 4.13 is the first to accept.
+
 ### Fixed
 
 - **Writing past the data is linear in the rows written again.** Since 0.14.0, each row a write
@@ -36,8 +42,8 @@ still change between minor versions.
   of 0.31 s at the top of the sheet), `insert_columns` on such a run 2.9 s instead of 0.50 s,
   writing into a cell repeated 16,384 times 1.7 s instead of 0.14 s, and setting the width of a
   column defined by one `<table:table-column>` repeated 16,384 times — how LibreOffice pads a
-  sheet — 1.6 s instead of 0.04 s (same machine and method). The copies now go in by an index
-  found once.
+  sheet — 1.6 s instead of 0.04 s (same machine and method). The element is now looked up
+  once and replaced by all its copies at once.
 
 ## [0.14.3] — 2026-10-03
 

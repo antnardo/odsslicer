@@ -13,7 +13,7 @@ authors = [{ name = "Anto", email = "antonin.marchand@normalesup.org" }]
 requires-python = ">=3.10"
 keywords = ["ods", "odf", "opendocument", "spreadsheet", "libreoffice", "openoffice", "calc", "numpy"]
 dependencies = [
-    "beautifulsoup4>=4.9",
+    "beautifulsoup4>=4.13",
     "lxml>=4.6",
     "numpy>=1.20",
 ]
