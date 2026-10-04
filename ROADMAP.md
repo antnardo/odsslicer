@@ -423,7 +423,14 @@ mesurent sont à côté (`lxml_inventory.py`, `lxml_corpus_scan.py`, `lxml_profi
   branche `claude/elated-colden-aad4ed`), et `insert_rows` a la même. En lxml, `addnext` et
   `addprevious` sont en temps constant (8 000 lignes ajoutées l'une après l'autre : 3 ms contre
   377 ms) ; `parent.insert(i, …)` et `parent.index(…)` restent linéaires, donc le portage
-  s'interdit l'indice et se place toujours à côté d'un élément connu.
+  s'interdit l'indice et se place toujours à côté d'un élément connu. Les trois correctifs faits
+  à part depuis (`grow_to`, `insert_rows`/`insert_columns`, `_split_repetitions` ; branches
+  `claude/elated-colden-aad4ed` → `claude/magical-bose-5c5ee4` → `claude/brave-bhabha-6af5ae`,
+  avec bs4 relevé à 4.13) cherchent l'indice une fois puis insèrent par
+  `parent.insert(position + k, …)` : juste sur bs4, quadratique traduit tel quel en lxml, où
+  `insert(i)` parcourt la liste jusqu'à `i` (20 000 copies 50 000 lignes plus bas : 2,6 s par
+  indice, 9 ms par `addnext` en chaîne). À l'étape 5, ces sites deviennent des `insert_after`
+  successifs.
 - **Le prototype** : `xmltree.py` (pas une façade : le code appelle lxml directement, le module ne
   porte que ce qui diffère assez pour coûter un bogue), et `properties.py` porté avec les lignes
   de `reader.py` qui lisent et écrivent `meta.xml`. Coût : 30 points d'appel, 3 lignes de

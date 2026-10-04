@@ -322,7 +322,12 @@ where the rewrite's gain shows. Two things this table shows besides:
   `decompose`: every removal and insertion of the inventory (27 + 21 sites) costs a pass over
   the siblings today, and nothing on lxml. Not lxml's `parent.insert(i, el)` and
   `parent.index(el)`, which walk too: a port moves next to a known element with
-  `addnext`/`addprevious`, never by index.
+  `addnext`/`addprevious`, never by index. The fixes made since in separate sessions (`grow_to`, then
+  `insert_rows`/`insert_columns` and the splitting of repeated rows, cells and column
+  definitions) find the index once and insert with `parent.insert(position + k, el)`: right on
+  bs4, quadratic again if translated word for word, since lxml's `insert(i)` walks to `i` on
+  every call - 20,000 copies 50,000 rows down take 2.6 s by index, 9 ms as a chain of
+  `addnext`. The port turns them into successive `insert_after`.
 - `to_numpy` and `sort` vary by a factor of two at 10,000 rows between runs: the machine's
   background load, not the code.
 
