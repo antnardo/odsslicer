@@ -7,6 +7,8 @@ still change between minor versions.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-10-04
+
 ### Fixed
 
 - **A password-protected document is refused when opened, rather than read as empty and
@@ -645,7 +647,8 @@ typed cell values (text, number, percentage, currency, date, time, boolean), for
 repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
-[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.14.3...HEAD
+[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/antnardo/odsslicer/compare/v0.14.3...v0.15.0
 [0.14.3]: https://github.com/antnardo/odsslicer/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/antnardo/odsslicer/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/antnardo/odsslicer/compare/v0.14.0...v0.14.1

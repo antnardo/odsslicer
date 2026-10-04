@@ -1353,7 +1353,7 @@ What the numbers mean in practice:
   document** (e.g. the first dates into a numbers-only sheet) used to trigger a full-document
   scan per cell (~33 ms each on a 10k-row sheet). The display-inference lookups are now lazy;
   the same writes cost ~1 ms each.
-- Another, fixed in 0.14.4: **writing past the data grows the sheet one row per cell**, and
+- Another, fixed in 0.15.0: **writing past the data grows the sheet one row per cell**, and
   from 0.14.0 each new row was placed after the last one with BeautifulSoup's `insert_after`,
   which finds that row by scanning the table from its first row — so writing a column of N
   rows past the data cost N²/2 comparisons. `generate + save` above took 246 s at 100,000 rows
