@@ -1,7 +1,9 @@
 # Dropping BeautifulSoup for lxml alone: feasibility study
 
 Prepared on 2026-10-03 for the decision recorded in `ROADMAP.md` ("Vers 1.0 — se passer de
-BeautifulSoup, lxml seul"), on top of v0.14.3. It is a study and a prototype, not the
+BeautifulSoup, lxml seul"), on top of v0.14.3, then rebased on 2026-10-04 onto `master` (v0.14.3
+with encrypted packages refused and linear-time sheet edits; the counts and measurements below
+are those of v0.14.3). It is a study and a prototype, not the
 migration: one small module is ported (`properties.py`, with the `meta.xml` part it reads), the
 rest of the package is untouched. The plan that follows from it is in `ROADMAP.md`, in French
 like the rest of that file.
@@ -177,8 +179,10 @@ repair a real XML file, and on well-formed parts it changes nothing. What recove
 encrypted file is worse than an error: it opens as a document with **no sheet**, and `save()`
 writes a 39-byte `content.xml` (the XML declaration) over the 941 encrypted bytes, or over the
 source file itself when no path is given. `parse()` is strict: such a file raises
-`XMLSyntaxError`. Better still, detect the encryption in the manifest and say so: proposed
-separately, since it is a bug of today's releases.
+`XMLSyntaxError`. Better still, detect the encryption in the manifest and say so: done
+separately and merged on `master` (2026-10-04), which reads the manifest before any part and
+raises `EncryptedDocumentError`. Strict parsing is left guarding what the manifest cannot tell:
+a truncated or malformed part, which recovery completes without a word (tested).
 
 Three smaller pitfalls are tested in the same file: `el.iter(name)` includes `el` itself where
 bs4's `find_all` does not; `el.text` stops at the first child where `get_text()` reads
@@ -211,12 +215,11 @@ edit, and each guard was broken once to see a test fail.
 with its own prefixes; the partial-link guard above). The module got simpler: no cast, no
 template copied to create an element.
 
-The real-files sweep against v0.14.3 (250 files, writing on 150) found no read difference, no
-grid violation, no write failure and no copied part rewritten, and **one new error**: one of the
-two encrypted files of LibreOffice's test suite now raises `XMLSyntaxError` when opened, its
-encrypted `meta.xml` going through the strict parser, where v0.14.3 opened it as a document
-with no sheet. That is pitfall 4 doing what it should, but on a 0.x line it is a change of
-behaviour all the same.
+The real-files sweep (250 files, writing on 150) is at zero everywhere against `master` as
+rebased on: no read difference, no grid violation, no write failure, no copied part rewritten,
+no new error. Against v0.14.3, before the encryption fix was merged, it had found one new error:
+an encrypted file raising `XMLSyntaxError` from its strictly parsed `meta.xml`, where v0.14.3
+opened it with no sheet. Both versions now raise `EncryptedDocumentError` before parsing.
 
 What the port teaches about the cost per module is less the line count than the coupling. Moving
 `properties.py` meant moving `meta.xml`, and nothing else reads it. For `cell.py`, `sheet.py` and

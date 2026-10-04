@@ -408,9 +408,10 @@ mesurent sont à côté (`lxml_inventory.py`, `lxml_corpus_scan.py`, `lxml_profi
   document casserait justement le fichier `tab:`, qui n'a pas de clé `table`. Le document compte
   pour les préfixes **dans les valeurs** : `of:=` d'une formule. Le corpus a 5 fichiers dont les
   formules sont en `of:` sans que `of` soit déclaré.
-- **Un défaut actuel, trouvé en route** : un fichier chiffré s'ouvre sans erreur avec zéro
-  feuille, et `save()` écrit un `content.xml` vide par-dessus (c'est le `recover=True` de bs4).
-  Proposé à part, à corriger dans la 0.14.x.
+- **Un défaut trouvé en route** : un fichier chiffré s'ouvrait sans erreur avec zéro feuille, et
+  `save()` écrivait un `content.xml` vide par-dessus (c'est le `recover=True` de bs4). Corrigé à
+  part et fusionné sur `master` le 2026-10-04 : le manifeste est lu avant toute partie, et un
+  paquet chiffré lève `EncryptedDocumentError`.
 - **Le chiffre qui décide** : à 100 000 lignes, ouvrir puis charger la feuille, c'est 94 % de bs4
   — l'analyse, la navigation, et le ramasse-miettes que ses millions d'objets Python occupent (un
   tiers de l'ouverture). Le travail propre d'odsslicer pèse 6 %. Mais lxml ne parcourt l'arbre que
@@ -470,7 +471,7 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
    imputée.
 4. **Décisions d'API, écrites dans DOCS.md avant le code** : ce que deviennent `Cell.attrs`,
    `Sheet.attrs`, les clés de `cell_properties`/`text_properties` (voir « À décider »), et le
-   message d'erreur d'un fichier chiffré ou mal formé.
+   message d'erreur d'un fichier mal formé (un fichier chiffré a déjà le sien).
 5. **La bascule : `content.xml` et `styles.xml` sur lxml, ensemble — 1.0.** Les fonctions de
    l'étape 2 prennent les corps de `xmltree` ; reste le mécanique : 238 accès aux attributs
    (`el.get(qn(...))`, constantes précalculées sur le chemin chaud), 82 recherches, 27
@@ -479,7 +480,7 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
    répétitions, `_unrepeat_*`, `_take_back_rows`, 22 navigations vers le parent ou les frères,
    dans des groupes de lignes), l'alias `Cell.attrs` écrit à travers lui-même, `_touched_tag`, et
    la vitesse de `Sheet.load`, à remesurer contre la projection. Balayage attendu à zéro, hors
-   fichiers chiffrés (qui lèvent) et préfixes non standard (qui se lisent).
+   fichiers aux préfixes non standard (qui se lisent) ; le corpus n'en a pas.
 6. **Le chemin chaud et la mesure.** `Cell.__init__` et `Sheet.load` en appels lxml natifs, banc
    complet contre la section 12 de DOCS.md, CHANGELOG et DOCS de la 1.0 (les échappatoires
    devenues lxml, nommées une à une).
@@ -495,23 +496,25 @@ en lxml et l'autre en bs4.
 Ruptures d'API à annoncer à la 1.0 : `reader.data`, `styles_data`, `meta_data`, `settings_data`,
 `reader.tables`, `sheet.table`, `cell.cell` deviennent des éléments ou arbres lxml ; `Cell.attrs`
 et `Sheet.attrs` selon la décision ci-dessous ; `export_content_xml(pretty=True)` sort
-l'indentation de lxml. Changements de comportement : un fichier chiffré ou mal formé lève au lieu
-de s'ouvrir vide ; un fichier aux préfixes non standard se lit.
+l'indentation de lxml. Changements de comportement : un fichier mal formé lève au lieu de s'ouvrir
+réparé en silence ; un fichier aux préfixes non standard se lit.
 
 ### À décider
 
 - **Fusionner le prototype quand ?** `meta_data` y devient lxml : sur `master` avant la 1.0, ce
-  serait une rupture dans une 0.x. Le balayage de la branche contre la 0.14.3 (250 fichiers) est à
-  zéro partout sauf une erreur nouvelle, et voulue : un fichier chiffré lève à l'ouverture, son
-  `meta.xml` passant par l'analyse stricte, là où la 0.14.3 l'ouvrait sans feuille. Soit la
-  branche attend l'étape 5, soit on la fusionne sans le portage de `properties.py` (la couche et
-  ses tests seuls ne cassent rien).
+  serait une rupture dans une 0.x. Rebasée le 2026-10-04 sur `master` (0.14.3, refus des
+  fichiers chiffrés, éditions de feuille linéaires), la branche balaye à zéro partout contre lui
+  (250 fichiers, écriture sur 150) : le fichier chiffré lève la même erreur des deux côtés,
+  avant que l'analyse stricte n'intervienne. Soit la branche attend l'étape 5, soit on la
+  fusionne sans le portage de `properties.py` (la couche et ses tests seuls ne cassent rien).
 - **`Cell.attrs` et `Sheet.attrs`** : les retirer, exposer `el.attrib` (clés `{URI}local`), ou
   garder une vue en lecture aux clés préfixées (`prefixed()` existe). DOCS.md en montre l'usage.
   Même question pour les clés de `cell_properties` et `text_properties` ; je garderais le préfixe
   de la spécification, qui ne dépend pas du fichier.
-- **Analyse stricte** : recommandée (le corpus ne contient aucun XML que `recover=True` aurait dû
-  réparer), avec détection du chiffrement par le manifeste pour un message clair.
+- **Analyse stricte** : recommandée. Le corpus ne contient aucun XML que `recover=True` aurait
+  dû réparer, et le chiffrement est désormais détecté par le manifeste, avant l'analyse : la
+  stricte ne garde plus que les parties tronquées ou mal formées, que bs4 complète sans rien
+  dire.
 - **`of:` non déclaré** : à l'écriture d'une formule, déclarer `of` sur la racine s'il manque, ou
   écrire avec le préfixe que le document lie à OpenFormula (`prefix_of()`) — 5 fichiers réels sont
   concernés.
