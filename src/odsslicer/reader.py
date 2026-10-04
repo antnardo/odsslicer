@@ -15,7 +15,7 @@ from .libreoffice import _recalculate_file
 from .properties import DocumentProperties
 from .sheet import Sheet
 from .styles import _NUMBER_STYLE_TAGS, NumberFormat
-from .xmlutils import _blank_template, _new_qualified_tag, _parse_xml
+from .xmlutils import _blank_template, _encrypted_parts, _new_qualified_tag, _parse_xml
 
 logger = logging.getLogger("odsslicer")
 
@@ -68,6 +68,11 @@ def _same_number_format(a: Tag, b: Tag) -> bool:
     return definition(a) == definition(b)
 
 
+class EncryptedDocumentError(ValueError):
+    """The package is password-protected: its content is encrypted, and
+    odsslicer reads none of it rather than read it as an empty document."""
+
+
 class ODSReader:
     _from_template: bool = False  # set by new(): no source file to default save() to
 
@@ -87,6 +92,14 @@ class ODSReader:
             def read_optional(name: str, fallback: bytes) -> bytes:
                 return zip.read(name) if name in members else fallback
 
+            # Before anything is parsed: an encrypted part parses as an
+            # empty document, and a save would write it over the data -
+            # see `_encrypted_parts`.
+            if "content.xml" in _encrypted_parts(read_optional("META-INF/manifest.xml", b"")):
+                raise EncryptedDocumentError(
+                    f"{self.file} is password-protected: odsslicer cannot decrypt it."
+                    " Open it in LibreOffice and save it without a password to read it here."
+                )
             # Document content and automatic styles used in the content.
             self.content = zip.read("content.xml")
             # Styles used in the document content and automatic styles used in the styles themselves.

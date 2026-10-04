@@ -7,14 +7,19 @@ still change between minor versions.
 
 ## [Unreleased]
 
-### Changed
-
-- **Requires `beautifulsoup4` 4.13 or later**, up from 4.9: inserting columns and splitting
-  repeated elements now hand BeautifulSoup several elements in one `insert` or `replace_with`
-  call, which 4.13 is the first to accept.
-
 ### Fixed
 
+- **A password-protected document is refused when opened, rather than read as empty and
+  destroyed on save.** Its parts are stored encrypted, and the parser recovers from ciphertext as
+  from any broken markup: `ODSReader` opened LibreOffice's own `passwordOld.ods` without an error
+  and with no sheets, and `save()` — over the source file, by default — wrote a `content.xml`
+  holding the XML declaration alone (39 bytes) in place of the 941 encrypted ones. Every released
+  version was affected. `META-INF/manifest.xml` is now read before any part is parsed, and a
+  package whose `content.xml` it declares encrypted (`manifest:encryption-data`) raises
+  `EncryptedDocumentError`; the file is left as it was. Manifests in the OpenOffice.org 1.x
+  namespace are recognised too. Checked on LibreOffice's three encrypted test files, Blowfish and
+  AES alike. odsslicer does not decrypt: open the file in LibreOffice and save it without a
+  password to read it here.
 - **Writing past the data is linear in the rows written again.** Since 0.14.0, each row a write
   grows the sheet by was placed after the sheet's last row with BeautifulSoup's
   `insert_after`, which looks that row up by scanning the table from its first row; writing a
@@ -44,6 +49,17 @@ still change between minor versions.
   column defined by one `<table:table-column>` repeated 16,384 times — how LibreOffice pads a
   sheet — 1.6 s instead of 0.04 s (same machine and method). The element is now looked up
   once and replaced by all its copies at once.
+
+### Added
+
+- **`EncryptedDocumentError`**, raised by `ODSReader` for a password-protected document. It is a
+  `ValueError`, so code already catching that for a file it cannot read keeps working.
+
+### Changed
+
+- **Requires `beautifulsoup4` 4.13 or later**, up from 4.9: inserting columns and splitting
+  repeated elements now hand BeautifulSoup several elements in one `insert` or `replace_with`
+  call, which 4.13 is the first to accept.
 
 ## [0.14.3] — 2026-10-03
 

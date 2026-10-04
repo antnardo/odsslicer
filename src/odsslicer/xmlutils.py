@@ -55,6 +55,39 @@ def _parse_xml(markup: bytes) -> BeautifulSoup:
     return BeautifulSoup(markup, "xml", preserve_whitespace_tags={root} if root is not None else set())
 
 
+def _encrypted_parts(manifest: bytes) -> set[str]:
+    """The paths `manifest`, a `META-INF/manifest.xml`, declares encrypted:
+    those whose `file-entry` carries an `encryption-data` element.
+
+    A password-protected package stores its parts encrypted, and nothing in
+    the zip says so but the manifest: `_parse_xml` recovers from the bytes
+    as from any broken markup and gives an empty tree, so the document reads
+    as one with no sheets, and a save writes that emptiness over the data.
+    Recognising ciphertext after the fact would be a guess; the manifest
+    states it. Elements and attributes are matched by local name: files from
+    OpenOffice.org 1.x and from LibreOffice saving in that format declare the
+    manifest in `http://openoffice.org/2001/manifest` rather than the ODF
+    namespace (LibreOffice's own `passwordWrongSHA.ods` is one), with a
+    DOCTYPE that is never loaded. A manifest that does not parse declares
+    nothing - it is no reason to refuse a package that is otherwise fine."""
+    parser = etree.XMLParser(resolve_entities=False, no_network=True)
+    try:
+        root = etree.fromstring(manifest, parser)
+    except etree.XMLSyntaxError:
+        return set()
+    encrypted = set()
+    for entry in root.iter(etree.Element):
+        if etree.QName(entry).localname != "file-entry":
+            continue
+        children = entry.iterchildren(etree.Element)
+        if not any(etree.QName(child).localname == "encryption-data" for child in children):
+            continue
+        for name, value in entry.attrib.items():
+            if etree.QName(name).localname == "full-path":
+                encrypted.add(str(value))
+    return encrypted
+
+
 def _new_qualified_tag(tag_name: str) -> Tag:
     """Build a detached `<tag_name/>` from scratch, with its own `xmlns:`
     declaration so the "table:"/"text:" prefix resolves correctly - safe to

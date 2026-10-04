@@ -24,7 +24,7 @@ from .constants import (
 )
 from .libreoffice import LIBREOFFICE_COMMAND, recalculate
 from .properties import DocumentProperties
-from .reader import ODSReader
+from .reader import EncryptedDocumentError, ODSReader
 from .sheet import Sheet
 from .styles import Border, CellStyle, ColumnStyle, NumberFormat, RowStyle, TableStyle
 
@@ -50,6 +50,7 @@ __all__ = [
     "ColumnStyle",
     "Comment",
     "DocumentProperties",
+    "EncryptedDocumentError",
     "NumberFormat",
     "ODSReader",
     "RowStyle",
