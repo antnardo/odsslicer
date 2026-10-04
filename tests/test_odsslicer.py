@@ -21,6 +21,7 @@ from typing import ClassVar
 
 import numpy as np
 import pytest
+from bs4 import Tag
 
 from conftest import (
     ENCODED_WHITESPACE,
@@ -1526,6 +1527,118 @@ def test_writing_past_the_data_takes_back_the_rows_below_it(tmp_path):
     data = {"A1": "1", "A2": "2", "A3": "3"}
     assert cells_with_content(reread.sheet("Sheet1")) == {**data, "B5": "beside", "A8": 8.0}
     assert addresses_holding(saved_table(path), _is_shape) == ["A5"]
+
+
+def test_writing_past_the_data_keeps_what_follows_the_rows_after_them(tmp_path):
+    # the new rows go right after the grid's last row, before what a table
+    # holds after its rows - here its named ranges
+    xml = "<table:table-column/>" + table_row(text_cell("a")) + "<table:named-expressions/>"
+    path = ods_with_sheet(tmp_path / "named.ods", xml)
+    r = ODSReader(path)
+    r.sheet("Sheet1")["A3"].value = "c"
+    r.sheet("Sheet1")["A4"].value = "d"
+    r.save()
+    children = [child.name for child in saved_table(path).find_all(True, recursive=False)]
+    assert children == ["table-column", *["table-row"] * 4, "named-expressions"]
+    assert cells_with_content(ODSReader(path).sheet("Sheet1")) == {"A1": "a", "A3": "c", "A4": "d"}
+
+
+def _count_index_lookups(monkeypatch, name):
+    """The elements named `name` looked up with bs4's `Tag.index`, a scan
+    from the parent's first child, from now on."""
+    scanned = []
+    index = Tag.index
+
+    def counting_index(self, element):
+        if getattr(element, "name", None) == name:
+            scanned.append(element)
+        return index(self, element)
+
+    monkeypatch.setattr(Tag, "index", counting_index)
+    return scanned
+
+
+def test_writing_a_column_past_the_data_never_scans_the_table_for_a_row(monkeypatch):
+    # regression (0.14.0 to 0.14.3): each new row went in with bs4's
+    # insert_after, whose parent.index() scans the table from its first row,
+    # and writing a column past the data grows the sheet one row per cell -
+    # quadratic: generate+save of benchmarks/bench.py took 246 s at 100,000 rows, not 32 s
+    scanned = _count_index_lookups(monkeypatch, "table-row")
+    sheet = ODSReader.new().sheet("Sheet1")
+    sheet[0:200, 0].value = [[float(i)] for i in range(200)]
+    assert sheet.size == (200, 1)
+    assert scanned == []
+
+
+@pytest.mark.parametrize("row", [0, 100, 200])
+def test_inserting_rows_scans_the_table_for_a_row_at_most_once(monkeypatch, row):
+    # regression: each new row went in with bs4's insert_before or
+    # insert_after, whose parent.index() scans the table from its first row -
+    # insert_rows(n, n) on n rows took 8.2 s at 20,000 rows, not 0.25 s
+    sheet = ODSReader.new().sheet("Sheet1")
+    sheet[0:200, 0].value = [[float(i)] for i in range(200)]
+    scanned = _count_index_lookups(monkeypatch, "table-row")
+    sheet.insert_rows(row, 200)
+    assert len(scanned) <= 1
+    values = [float(i) for i in range(200)]
+    assert sheet.to_list() == [[v] for v in values[:row] + [None] * 200 + values[row:]]
+
+
+@pytest.mark.parametrize("col", [0, 50, 100])
+def test_inserting_columns_scans_each_row_for_a_cell_at_most_once(monkeypatch, col):
+    # same within each row, one scan per new cell: insert_columns(1000, 1000)
+    # on 200 rows of 1,000 columns took 6.7 s, not 2.9 s
+    sheet = ODSReader.new().sheet("Sheet1")
+    sheet[0:20, 0:100].value = [[float(c) for c in range(100)] for _ in range(20)]
+    scanned = _count_index_lookups(monkeypatch, "table-cell")
+    sheet.insert_columns(col, 100)
+    assert len(scanned) <= 20
+    values = [float(c) for c in range(100)]
+    assert sheet.to_list() == [values[:col] + [None] * 100 + values[col:]] * 20
+
+
+# Splitting a repeated element looks it up once, wherever it lies and however
+# many times it repeats. Regression: each copy went in with insert_after, a
+# scan from the first child up to the copy before.
+
+
+def test_writing_into_repeated_rows_scans_the_table_for_a_row_at_most_once(tmp_path, monkeypatch):
+    # writing one cell in a run of 20,000 repeated rows below 50,000 took 23 s, not 0.36 s
+    xml = "".join(table_row(number_cell(i)) for i in range(100)) + table_row(text_cell("x"), repeat=200)
+    sheet = ODSReader(ods_with_sheet(tmp_path / "rows.ods", xml)).sheet("Sheet1")
+    scanned = _count_index_lookups(monkeypatch, "table-row")
+    sheet[200, 0].value = "y"
+    assert len(scanned) <= 1
+    expected = [[float(i)] for i in range(100)] + [["x"]] * 200
+    expected[200] = ["y"]
+    assert sheet.to_list() == expected
+
+
+def test_writing_into_repeated_cells_scans_the_row_for_a_cell_at_most_once(tmp_path, monkeypatch):
+    # in a cell repeated 16,384 times: 1.7 s, not 0.14 s
+    repeated = (
+        '<table:table-cell table:number-columns-repeated="200" office:value-type="string">'
+        "<text:p>x</text:p></table:table-cell>"
+    )
+    xml = table_row(*(number_cell(c) for c in range(100)), repeated)
+    sheet = ODSReader(ods_with_sheet(tmp_path / "cells.ods", xml)).sheet("Sheet1")
+    scanned = _count_index_lookups(monkeypatch, "table-cell")
+    sheet[0, 200].value = "y"
+    assert len(scanned) <= 1
+    expected = [float(c) for c in range(100)] + ["x"] * 200
+    expected[200] = "y"
+    assert sheet.to_list() == [expected]
+
+
+def test_styling_a_repeated_column_scans_the_definitions_at_most_once(tmp_path, monkeypatch):
+    # in a definition repeated 16,384 times, as LibreOffice pads a sheet: 1.6 s, not 0.04 s
+    xml = '<table:table-column table:number-columns-repeated="200"/>' + table_row(text_cell("a"))
+    sheet = ODSReader(ods_with_sheet(tmp_path / "columns.ods", xml)).sheet("Sheet1")
+    scanned = _count_index_lookups(monkeypatch, "table-column")
+    sheet.column_style(100).width = "3cm"
+    assert len(scanned) <= 1
+    assert len(sheet.table.find_all("table:table-column")) == 200
+    assert [sheet.column_style(c).width for c in (99, 100, 101)] == [None, "3cm", None]
 
 
 # more than 1,000 empty rows between the data and a shape, which LibreOffice

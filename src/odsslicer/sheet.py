@@ -106,6 +106,41 @@ def _rescue_drawings(cell_tag: Tag, heir: "Tag | None") -> None:
         heir.append(drawing.extract())
 
 
+def _position_after(tag: Tag) -> int:
+    """The index, among its parent's children, right after `tag`, counted
+    from the end: what bs4's `insert_after` would insert at.
+
+    bs4 finds that index with `parent.index(tag)`, a scan from the first
+    child. Placing rows one after the other below a sheet's last row then
+    scans the whole sheet each time - and writing a column past the data
+    grows the sheet one row per cell, so 100,000 rows written that way cost
+    5 billion comparisons, minutes instead of seconds (0.14.0 to 0.14.3).
+    What follows a sheet's last row is a few elements at most - conditional
+    formats, named ranges - so counting them is next to free."""
+    parent = cast(Tag, tag.parent)
+    return len(parent.contents) - sum(1 for _ in tag.next_siblings)
+
+
+def _split_repetitions(tag: Tag, attr: str, n: int) -> list[Tag]:
+    """Replace `tag`, repeated `n` times by `attr`, with `n` copies of it
+    that no longer carry `attr`, in place. Returns the copies, in order.
+
+    `replace_with` looks `tag` up once and puts all the copies in its place
+    (see `_position_after`). Placed one after the other with bs4's
+    `insert_after`, each copy looked the one before up with
+    `parent.index()`, a scan from the first child, so splitting a run of
+    n rows p rows down cost n × (p + n/2) comparisons -
+    23 s to write one cell in a run of 20,000 repeated rows below 50,000
+    others, 1.6 s to set the width of a column defined by one
+    `<table:table-column>` repeated 16,384 times, as LibreOffice pads a
+    sheet."""
+    copies = [copy.deepcopy(tag) for _ in range(n)]
+    for copy_tag in copies:
+        copy_tag.attrs.pop(attr, None)
+    tag.replace_with(*copies)
+    return copies
+
+
 # The sizes applications pad a sheet to with repeated blank rows and cells:
 # 1,048,576 rows - 65,536 before LibreOffice 3.3 and Excel 2007 - and 16,384
 # columns - 1,024 before LibreOffice 7.4. A sheet padded to one of them keeps
@@ -458,14 +493,7 @@ class Sheet:
             return
 
         run = self._run_of(row)
-        copies = [copy.deepcopy(row_tag) for _ in range(n)]
-        for c in copies:
-            c.attrs.pop("table:number-rows-repeated", None)
-        row_tag.replace_with(copies[0])
-        prev = copies[0]
-        for nxt in copies[1:]:
-            prev.insert_after(nxt)
-            prev = nxt
+        copies = _split_repetitions(row_tag, "table:number-rows-repeated", n)
 
         for r, copy_tag in zip(run, copies, strict=True):
             j = 0
@@ -491,14 +519,7 @@ class Sheet:
             start -= 1
         run = self._run_of(row)  # before the split detaches `cell_tag`
 
-        copies = [copy.deepcopy(cell_tag) for _ in range(n)]
-        for copy_of_cell in copies:
-            copy_of_cell.attrs.pop("table:number-columns-repeated", None)
-        cell_tag.replace_with(copies[0])
-        prev = copies[0]
-        for nxt in copies[1:]:
-            prev.insert_after(nxt)
-            prev = nxt
+        copies = _split_repetitions(cell_tag, "table:number-columns-repeated", n)
 
         for r in run:
             for c, copy_tag in enumerate(copies, start=start):
@@ -949,13 +970,13 @@ class Sheet:
                 self.n_rows += 1
             previous = row_tag
         template = self._empty_row_template(self.n_cols)
+        # inserted by index, found once (see `_position_after`)
+        parent = self.table if previous is None else cast(Tag, previous.parent)
+        position = len(parent.contents) if previous is None else _position_after(previous)
         while self.n_rows < n_rows:
             new_row_tag = copy.deepcopy(template)
-            if previous is None:
-                self.table.append(new_row_tag)
-            else:
-                previous.insert_after(new_row_tag)
-            previous = new_row_tag
+            parent.insert(position, new_row_tag)
+            position += 1
             self.rows.append(
                 [
                     Cell(cell_tag, row=self.n_rows, col=c, sheet=self)
@@ -1253,16 +1274,23 @@ class Sheet:
                 after = cast(Tag, self.rows[-1][0].cell.parent)
         self.n_cols = max(self.n_cols, 1)  # a row holds a cell at least
         template = self._empty_row_template(self.n_cols)
+        # inserted by index, found once: bs4's insert_before and insert_after
+        # look it up with parent.index(), a scan from the first child, so
+        # placing each row with them cost count times the insertion point's
+        # position - 8 s for 20,000 rows inserted below 20,000
+        if before is not None:
+            parent = cast(Tag, before.parent)
+            position = parent.index(before)
+        elif after is not None:
+            parent = cast(Tag, after.parent)
+            position = _position_after(after)
+        else:
+            parent = self.table
+            position = len(parent.contents)
         new_rows = []
         for k in range(count):
             row_tag = copy.deepcopy(template)
-            if before is not None:
-                before.insert_before(row_tag)
-            elif after is not None:
-                after.insert_after(row_tag)
-                after = row_tag
-            else:
-                self.table.append(row_tag)
+            parent.insert(position + k, row_tag)
             new_rows.append(
                 [Cell(t, row=row + k, col=c, sheet=self) for c, t in enumerate(row_tag.find_all(TAG_CELL))]
             )
@@ -1311,20 +1339,19 @@ class Sheet:
             self._unrepeat_row(r)
         for r in range(self.n_rows):
             new_tags = [self._empty_cell_template() for _ in range(count)]
+            # by index, found once per row, as in `insert_rows`
             if col < self.n_cols:
                 self._unrepeat_col(r, col)
                 anchor = self.rows[r][col].cell
-                for tag in new_tags:
-                    anchor.insert_before(tag)
+                row_tag = cast(Tag, anchor.parent)
+                row_tag.insert(row_tag.index(anchor), *new_tags)
             else:
                 previous = self.rows[r][-1].cell
-                for tag in new_tags:
-                    previous.insert_after(tag)
-                    previous = tag
+                row_tag = cast(Tag, previous.parent)
+                row_tag.insert(_position_after(previous), *new_tags)
             self.rows[r][col:col] = [Cell(t, row=r, col=col + k, sheet=self) for k, t in enumerate(new_tags)]
             for c in range(col + count, len(self.rows[r])):
                 self.rows[r][c].col = c
-            row_tag = cast(Tag, self.rows[r][0].cell.parent)
             self._give_back_cells(row_tag, count, self.n_cols + count)
         if self.n_rows > 0:
             self.n_cols += count
@@ -1529,14 +1556,7 @@ class Sheet:
                 break
             seen += int(tag.attrs.get("table:number-columns-repeated", "1"))
 
-        copies = [copy.deepcopy(col_tag) for _ in range(n)]
-        for c in copies:
-            c.attrs.pop("table:number-columns-repeated", None)
-        col_tag.replace_with(copies[0])
-        prev = copies[0]
-        for nxt in copies[1:]:
-            prev.insert_after(nxt)
-            prev = nxt
+        copies = _split_repetitions(col_tag, "table:number-columns-repeated", n)
         return copies[col - start]
 
     def column_style(self, col: int) -> "ColumnStyle | None":

@@ -7,6 +7,44 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires `beautifulsoup4` 4.13 or later**, up from 4.9: inserting columns and splitting
+  repeated elements now hand BeautifulSoup several elements in one `insert` or `replace_with`
+  call, which 4.13 is the first to accept.
+
+### Fixed
+
+- **Writing past the data is linear in the rows written again.** Since 0.14.0, each row a write
+  grows the sheet by was placed after the sheet's last row with BeautifulSoup's
+  `insert_after`, which looks that row up by scanning the table from its first row; writing a
+  column grows the sheet one row per cell, so a column of N rows past the data cost N²/2
+  comparisons. `benchmarks/bench.py`'s bulk writes at 100,000 rows took 246 s instead of 32 s.
+  The new rows now go in at an index counted from the end of the table, where only what
+  follows its last row (named ranges, conditional formats) has to be counted.
+- **`insert_rows` and `insert_columns` are linear in the rows and cells inserted.** Since
+  0.12.0, each new row was placed with BeautifulSoup's `insert_before` or `insert_after`, which
+  looks the neighbouring row up by scanning the table from its first row, so inserting N rows
+  cost N times the insertion point's position: `insert_rows(n, n)` on an n-row sheet took
+  8.2 s at 20,000 rows instead of 0.25 s (0.55 s instead of 0.07 s at 5,000), and inserting
+  them halfway down 5.5 s instead of 0.30 s. The insertion index is now found once per call.
+  `insert_columns` placed its new cells the same way within each row and now looks the index up
+  once per row instead of once per new cell, which matters for wide rows:
+  `insert_columns(1000, 1000)` on 200 rows of 1,000 columns took 6.7 s instead of 2.9 s
+  (Apple M4, Python 3.14, median of 3 interleaved fresh-process runs on the same machine).
+- **Splitting a repeated row, cell or column definition is linear in its repetitions.** A
+  row LibreOffice wrote once with `table:number-rows-repeated`, a cell with
+  `table:number-columns-repeated`, or a column definition likewise, becomes one element per
+  repetition when written to or styled, and each copy was placed after the previous one with
+  BeautifulSoup's `insert_after`, which looks it up by scanning from the first row (or cell, or
+  definition): a run of n repetitions p elements down cost n × (p + n/2) comparisons. Writing one
+  cell in a run of 20,000 repeated rows below 50,000 took 23 s instead of 0.36 s (2.8 s instead
+  of 0.31 s at the top of the sheet), `insert_columns` on such a run 2.9 s instead of 0.50 s,
+  writing into a cell repeated 16,384 times 1.7 s instead of 0.14 s, and setting the width of a
+  column defined by one `<table:table-column>` repeated 16,384 times — how LibreOffice pads a
+  sheet — 1.6 s instead of 0.04 s (same machine and method). The element is now looked up
+  once and replaced by all its copies at once.
+
 ## [0.14.3] — 2026-10-03
 
 ### Fixed
