@@ -36,7 +36,9 @@ Repository = "https://github.com/antnardo/odsslicer"
 Issues = "https://github.com/antnardo/odsslicer/issues"
 
 [project.optional-dependencies]
-test = ["pytest", "ruff"]
+# ruff pinned to a minor version: its formatting style only changes between minors, and
+# CI checks the format
+test = ["pytest", "ruff>=0.16,<0.17"]
 typecheck = ["mypy", "types-beautifulsoup4", "lxml-stubs"]
 
 [tool.setuptools.packages.find]

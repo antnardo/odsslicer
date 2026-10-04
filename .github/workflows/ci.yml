@@ -50,6 +50,8 @@ jobs:
       # collected 506 findings against it.
       - name: ruff (the rules the project selected)
         run: ruff check src tests benchmarks
+      - name: ruff format (the code is formatted by ruff, as the repository's convention says)
+        run: ruff format --check src tests benchmarks
 
   typecheck:
     runs-on: ubuntu-latest
