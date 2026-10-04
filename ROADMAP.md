@@ -330,6 +330,62 @@ objets bs4 (`reader.data`, `styles_data`, `meta_data`, `settings_data`, `cell.ce
 propriétés obscures, peu utilisées, et le paquet n'a pas d'utilisateurs à ménager. À faire à la
 **1.0**, annoncée comme telle, pas au fil d'une 0.14.x.
 
+### Pour démarrer (état au 2026-10-04)
+
+**Où en est-on.** La 0.15.0 est publiée : blancs conservés (0.14.2), `<text:s/>` lu et écrit
+(0.14.3), fichiers chiffrés refusés et éditions de feuille linéaires, bs4 ≥ 4.13 (0.15.0). L'étude
+est faite, sur la branche `claude/lxml-study`, **locale, non poussée**, rebasée sur la v0.15.0 :
+`src/odsslicer/xmltree.py` (la couche d'accès, 84 tests dans `tests/test_xmltree.py`), et
+`properties.py` porté avec `meta.xml` — l'étape 0 du plan ci-dessous.
+
+**Lire, dans l'ordre** : cette section ; « Ce que l'étude a établi », « Plan d'engagement » et
+« À décider » plus bas ; puis `benchmarks/LXML_STUDY.md` (en anglais), dont la section 2, les
+pièges, avant d'écrire la moindre ligne ; enfin `xmltree.py` et ses tests, qui sont la spécification
+exécutable de chaque piège.
+
+**À trancher avant la première ligne** — une seule décision bloque :
+
+1. **Où vit le travail.** Les étapes 2 à 4 ne cassent rien et sortent de `master` en 0.15.x ; les
+   étapes 0, 1, 5 et 6 changent le type d'une échappatoire et attendent la 1.0. Recommandation :
+   fusionner **dès le départ** `xmltree.py` et ses tests sur `master`, sans le portage de
+   `properties.py` (rien n'en dépend, rien ne casse), pour que l'étape 2 écrive ses fonctions
+   bs4 sous les mêmes noms et contre les mêmes tests de parité ; garder le reste de
+   `claude/lxml-study` comme branche de la 1.0, rebasée après chaque 0.15.x.
+
+Les autres attendent leur étape : `Cell.attrs`/`Sheet.attrs` et les clés de propriétés à l'étape
+4 ; `of:` non déclaré au portage de `formulas.py` (étape 5) ; analyse stricte (recommandée, par
+l'étude comme par la session qui l'a relue) et plancher de lxml à la 1.0.
+
+**Avant aussi : le formatage.** `ruff format --check` échoue sur 22 fichiers, alors que la
+convention du dépôt est le code formaté par ruff. Reformater **avant** la migration, en un commit
+seul, puis ajouter la vérification à la CI : sinon chaque diff de la migration mêle formatage et
+logique, et la relecture devient impossible.
+
+**Par où commencer** : l'étape 2 sur `master`, module `xmlutils` d'abord (création d'éléments :
+57 sites, `_blank_template`, `_new_qualified_tag`, `EMPTY_CELL_BS`, `_TAG_FACTORY` → `new`). C'est
+publiable, le balayage la vérifie, et c'est là que se règlent une fois pour toutes les pièges du
+`tail`. L'étape 1 (`settings.xml`, graphiques) se fait sur la branche 1.0, en parallèle ou après.
+
+**À ne pas oublier en route** :
+
+- **Jamais d'insertion par indice en lxml** : `insert(i)` y parcourt la liste. Les sites hérités
+  des correctifs de la 0.15.0 sont tous dans `sheet.py` — `_position_after` et ses trois
+  appelants (`_take_back_rows`, `insert_rows`, `insert_columns`), et `_split_repetitions`
+  (`replace_with(*copies)`) — et deviennent à l'étape 5 des `insert_after` successifs.
+- **Enfants ou descendants** : 47 recherches comptent sur le défaut récursif de bs4 ; c'est
+  l'étape 3, et c'est là que se cachent les bogues (la note lue comme valeur).
+- **Le `tail`** : deux sites travaillent dans du texte mixte, tous deux dans `hyperlink`
+  (`cell.py`), et `set_paragraph_text` doit mettre le texte suivant `<text:s/>` dans son `tail`.
+
+**Vérifier chaque étape** — dans un venv propre au worktree, jamais dans `~/Envs/main` :
+`pytest` (suite LibreOffice comprise), `mypy`, `ruff check src tests benchmarks`, puis
+`benchmarks/sweep_real_files.py --baseline v0.15.0 --limit 250 --write-limit 150` (7 minutes
+pour 250 fichiers ; 500 dépassent 30 minutes : le lancer en arrière-plan avec un délai long).
+Toute différence de lecture se tranche contre LibreOffice (`soffice --headless --convert-to
+csv`), jamais contre odsslicer, et le balayage n'imprime jamais le contenu d'une cellule. Deux
+sessions qui lancent LibreOffice en même temps font échouer ses tests par intermittence :
+relancer seul avant de conclure.
+
 ### Ce que ça rapporte, mesuré
 
 Sur un `content.xml` réel de 185 Ko (`tests/wild/libreoffice26_linux_streets.ods`) :
@@ -357,7 +413,8 @@ attributs, les échappements et les blancs (vérifié). Plus de perte de rembour
 
 ### Ce que ça coûte
 
-Réécriture du cœur, pas un échange de bibliothèque : **~490 points d'appel** dans 7 015 lignes de
+Réécriture du cœur, pas un échange de bibliothèque : **~490 points d'appel** (estimation du
+2026-10-01 ; l'inventaire de l'étude en compte 519, voir plus bas) dans 7 015 lignes de
 `src` — `.attrs` 181, annotations `Tag` 121, `find`/`find_all` 83, plus `decompose`,
 `insert_before`/`insert_after`, `get_text`, `.string`, `deepcopy`. Les sélecteurs changent de
 nature : bs4 accepte le nom préfixé (`"table:table-cell"`), lxml veut `{URI}local` avec une carte
@@ -410,7 +467,7 @@ mesurent sont à côté (`lxml_inventory.py`, `lxml_corpus_scan.py`, `lxml_profi
   formules sont en `of:` sans que `of` soit déclaré.
 - **Un défaut trouvé en route** : un fichier chiffré s'ouvrait sans erreur avec zéro feuille, et
   `save()` écrivait un `content.xml` vide par-dessus (c'est le `recover=True` de bs4). Corrigé à
-  part et fusionné sur `master` le 2026-10-04 : le manifeste est lu avant toute partie, et un
+  part et publié en 0.15.0 : le manifeste est lu avant toute partie, et un
   paquet chiffré lève `EncryptedDocumentError`.
 - **Le chiffre qui décide** : à 100 000 lignes, ouvrir puis charger la feuille, c'est 94 % de bs4
   — l'analyse, la navigation, et le ramasse-miettes que ses millions d'objets Python occupent (un
@@ -421,13 +478,12 @@ mesurent sont à côté (`lxml_inventory.py`, `lxml_corpus_scan.py`, `lxml_profi
 - **Un coût de bs4 caché dans les éditions** : `insert_after`, `insert_before`, `extract` et
   `decompose` cherchent la position de l'élément en parcourant tous ses frères. C'est la
   régression quadratique de `grow_to` trouvée à part (246 s → 32 s pour générer 100 000 lignes,
-  branche `claude/elated-colden-aad4ed`), et `insert_rows` a la même. En lxml, `addnext` et
+  corrigée en 0.15.0), et `insert_rows` avait la même. En lxml, `addnext` et
   `addprevious` sont en temps constant (8 000 lignes ajoutées l'une après l'autre : 3 ms contre
   377 ms) ; `parent.insert(i, …)` et `parent.index(…)` restent linéaires, donc le portage
-  s'interdit l'indice et se place toujours à côté d'un élément connu. Les trois correctifs faits
-  à part depuis (`grow_to`, `insert_rows`/`insert_columns`, `_split_repetitions` ; branches
-  `claude/elated-colden-aad4ed` → `claude/magical-bose-5c5ee4` → `claude/brave-bhabha-6af5ae`,
-  avec bs4 relevé à 4.13) cherchent l'indice une fois puis insèrent par
+  s'interdit l'indice et se place toujours à côté d'un élément connu. Les trois correctifs publiés
+  en 0.15.0 (`grow_to`, `insert_rows`/`insert_columns`, `_split_repetitions`, avec bs4 relevé
+  à 4.13) cherchent l'indice une fois puis insèrent par
   `parent.insert(position + k, …)` : juste sur bs4, quadratique traduit tel quel en lxml, où
   `insert(i)` parcourt la liste jusqu'à `i` (20 000 copies 50 000 lignes plus bas : 2,6 s par
   indice, 9 ms par `addnext` en chaîne). À l'étape 5, ces sites deviennent des `insert_after`
@@ -502,7 +558,7 @@ réparé en silence ; un fichier aux préfixes non standard se lit.
 ### À décider
 
 - **Fusionner le prototype quand ?** `meta_data` y devient lxml : sur `master` avant la 1.0, ce
-  serait une rupture dans une 0.x. Rebasée le 2026-10-04 sur `master` (0.14.3, refus des
+  serait une rupture dans une 0.x. Rebasée le 2026-10-04 sur la v0.15.0 (refus des
   fichiers chiffrés, éditions de feuille linéaires), la branche balaye à zéro partout contre lui
   (250 fichiers, écriture sur 150) : le fichier chiffré lève la même erreur des deux côtés,
   avant que l'analyse stricte n'intervienne. Soit la branche attend l'étape 5, soit on la

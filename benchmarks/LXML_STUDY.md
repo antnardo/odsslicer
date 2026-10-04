@@ -1,9 +1,10 @@
 # Dropping BeautifulSoup for lxml alone: feasibility study
 
 Prepared on 2026-10-03 for the decision recorded in `ROADMAP.md` ("Vers 1.0 — se passer de
-BeautifulSoup, lxml seul"), on top of v0.14.3, then rebased on 2026-10-04 onto `master` (v0.14.3
-with encrypted packages refused and linear-time sheet edits; the counts and measurements below
-are those of v0.14.3). It is a study and a prototype, not the
+BeautifulSoup, lxml seul"), on top of v0.14.3, then rebased on 2026-10-04 onto v0.15.0 (encrypted packages refused,
+linear-time sheet edits, bs4 4.13 or later; the counts and measurements below are those of
+v0.14.3). Where to start the migration from is at the top of the lxml section of `ROADMAP.md`
+("Pour démarrer"). It is a study and a prototype, not the
 migration: one small module is ported (`properties.py`, with the `meta.xml` part it reads), the
 rest of the package is untouched. The plan that follows from it is in `ROADMAP.md`, in French
 like the rest of that file.
@@ -180,7 +181,7 @@ encrypted file is worse than an error: it opens as a document with **no sheet**,
 writes a 39-byte `content.xml` (the XML declaration) over the 941 encrypted bytes, or over the
 source file itself when no path is given. `parse()` is strict: such a file raises
 `XMLSyntaxError`. Better still, detect the encryption in the manifest and say so: done
-separately and merged on `master` (2026-10-04), which reads the manifest before any part and
+separately and released in 0.15.0, which reads the manifest before any part and
 raises `EncryptedDocumentError`. Strict parsing is left guarding what the manifest cannot tell:
 a truncated or malformed part, which recovery completes without a word (tested).
 
@@ -316,7 +317,7 @@ where the rewrite's gain shows. Two things this table shows besides:
 
 - **"generate + save" is superlinear**: ×12 from 1,000 to 10,000 rows, then ×50 to 100,000,
   and 175 to 242 s where DOCS.md says 42 s, on `master` as on this branch. It turned out to be a
-  cost of bs4, found in a separate session (branch `claude/elated-colden-aad4ed`, 246 s → 32 s):
+  cost of bs4, found in a separate session and fixed in 0.15.0 (246 s → 32 s):
   since 0.14.0, growing a sheet adds each row with `insert_after`, and bs4's `insert_after`
   finds the element's position with `parent.index(self)`, which walks the parent's children. One
   row after another, that is N²/2 comparisons. lxml's `addnext` relinks a node in constant time:
@@ -325,9 +326,11 @@ where the rewrite's gain shows. Two things this table shows besides:
   `decompose`: every removal and insertion of the inventory (27 + 21 sites) costs a pass over
   the siblings today, and nothing on lxml. Not lxml's `parent.insert(i, el)` and
   `parent.index(el)`, which walk too: a port moves next to a known element with
-  `addnext`/`addprevious`, never by index. The fixes made since in separate sessions (`grow_to`, then
+  `addnext`/`addprevious`, never by index. The fixes released since in 0.15.0 (`grow_to`, then
   `insert_rows`/`insert_columns` and the splitting of repeated rows, cells and column
-  definitions) find the index once and insert with `parent.insert(position + k, el)`: right on
+  definitions) find the index once and insert with `parent.insert(position + k, el)` -
+  `sheet.py`: `_position_after` and its three callers `_take_back_rows`, `insert_rows`,
+  `insert_columns`, and `_split_repetitions` through `replace_with(*copies)` -: right on
   bs4, quadratic again if translated word for word, since lxml's `insert(i)` walks to `i` on
   every call - 20,000 copies 50,000 rows down take 2.6 s by index, 9 ms as a chain of
   `addnext`. The port turns them into successive `insert_after`.
