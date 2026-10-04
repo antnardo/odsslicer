@@ -333,33 +333,32 @@ propriétés obscures, peu utilisées, et le paquet n'a pas d'utilisateurs à m�
 ### Pour démarrer (état au 2026-10-04)
 
 **Où en est-on.** La 0.15.0 est publiée : blancs conservés (0.14.2), `<text:s/>` lu et écrit
-(0.14.3), fichiers chiffrés refusés et éditions de feuille linéaires, bs4 ≥ 4.13 (0.15.0). L'étude
-est faite, sur la branche `claude/lxml-study`, **locale, non poussée**, rebasée sur la v0.15.0 :
-`src/odsslicer/xmltree.py` (la couche d'accès, 84 tests dans `tests/test_xmltree.py`), et
-`properties.py` porté avec `meta.xml` — l'étape 0 du plan ci-dessous.
+(0.14.3), fichiers chiffrés refusés et éditions de feuille linéaires, bs4 ≥ 4.13 (0.15.0). Depuis,
+sur `master` : la couche d'accès lxml, `src/odsslicer/xmltree.py` et ses 84 tests
+(`tests/test_xmltree.py`), que rien n'utilise encore ; le code formaté par ruff, vérifié par la CI.
+L'étude est sur la branche `claude/lxml-study`, poussée sur GitHub, rebasée sur ce `master` :
+`properties.py` porté avec `meta.xml` — l'étape 0 du plan ci-dessous —, l'étude
+(`benchmarks/LXML_STUDY.md`) et ses scripts.
 
 **Lire, dans l'ordre** : cette section ; « Ce que l'étude a établi », « Plan d'engagement » et
 « À décider » plus bas ; puis `benchmarks/LXML_STUDY.md` (en anglais), dont la section 2, les
 pièges, avant d'écrire la moindre ligne ; enfin `xmltree.py` et ses tests, qui sont la spécification
 exécutable de chaque piège.
 
-**À trancher avant la première ligne** — une seule décision bloque :
+**Où vit le travail — décidé le 2026-10-04.** Les étapes 2 à 4 ne cassent rien : elles se font
+sur `master` et sortent en 0.15.x, l'étape 2 écrivant ses fonctions bs4 sous les noms de
+`xmltree` et contre ses tests de parité. Les étapes 0, 1, 5 et 6 changent le type d'une
+échappatoire et attendent la 1.0 : elles vivent sur `claude/lxml-study`, la branche de la 1.0,
+rebasée sur `master` après chaque 0.15.x.
 
-1. **Où vit le travail.** Les étapes 2 à 4 ne cassent rien et sortent de `master` en 0.15.x ; les
-   étapes 0, 1, 5 et 6 changent le type d'une échappatoire et attendent la 1.0. Recommandation :
-   fusionner **dès le départ** `xmltree.py` et ses tests sur `master`, sans le portage de
-   `properties.py` (rien n'en dépend, rien ne casse), pour que l'étape 2 écrive ses fonctions
-   bs4 sous les mêmes noms et contre les mêmes tests de parité ; garder le reste de
-   `claude/lxml-study` comme branche de la 1.0, rebasée après chaque 0.15.x.
-
-Les autres attendent leur étape : `Cell.attrs`/`Sheet.attrs` et les clés de propriétés à l'étape
+Les décisions qui restent attendent leur étape : `Cell.attrs`/`Sheet.attrs` et les clés de propriétés à l'étape
 4 ; `of:` non déclaré au portage de `formulas.py` (étape 5) ; analyse stricte (recommandée, par
 l'étude comme par la session qui l'a relue) et plancher de lxml à la 1.0.
 
-**Avant aussi : le formatage.** `ruff format --check` échoue sur 22 fichiers, alors que la
-convention du dépôt est le code formaté par ruff. Reformater **avant** la migration, en un commit
-seul, puis ajouter la vérification à la CI : sinon chaque diff de la migration mêle formatage et
-logique, et la relecture devient impossible.
+**Le formatage est fait** (2026-10-04, `f33f352`, sans changer un seul arbre syntaxique) et la
+CI le vérifie : formater chaque commit avant de le pousser (`ruff format src tests benchmarks`,
+ruff 0.16.x épinglé), sinon le job `lint` échoue. `.git-blame-ignore-revs` fait sauter ce commit
+à `git blame`.
 
 **Par où commencer** : l'étape 2 sur `master`, module `xmlutils` d'abord (création d'éléments :
 57 sites, `_blank_template`, `_new_qualified_tag`, `EMPTY_CELL_BS`, `_TAG_FACTORY` → `new`). C'est
@@ -378,7 +377,9 @@ publiable, le balayage la vérifie, et c'est là que se règlent une fois pour t
   (`cell.py`), et `set_paragraph_text` doit mettre le texte suivant `<text:s/>` dans son `tail`.
 
 **Vérifier chaque étape** — dans un venv propre au worktree, jamais dans `~/Envs/main` :
-`pytest` (suite LibreOffice comprise), `mypy`, `ruff check src tests benchmarks`, puis
+`pytest` (suite LibreOffice comprise), `mypy` (avec l'extra `typecheck` : bs4 4.13 a ses
+propres types, mais sans `types-beautifulsoup4` mypy relève 53 erreurs — le garder jusqu'au départ
+de bs4), `ruff check` et `ruff format --check` sur `src tests benchmarks`, puis
 `benchmarks/sweep_real_files.py --baseline v0.15.0 --limit 250 --write-limit 150` (7 minutes
 pour 250 fichiers ; 500 dépassent 30 minutes : le lancer en arrière-plan avec un délai long).
 Toute différence de lecture se tranche contre LibreOffice (`soffice --headless --convert-to
