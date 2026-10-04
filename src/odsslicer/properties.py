@@ -158,9 +158,7 @@ class DocumentProperties:
         }
 
     def _find_custom(self, name: str) -> "Tag | None":
-        return cast(
-            "Tag | None", self._office_meta().find("meta:user-defined", attrs={"meta:name": name})
-        )
+        return cast("Tag | None", self._office_meta().find("meta:user-defined", attrs={"meta:name": name}))
 
     def __getitem__(self, name: str) -> "str | float | bool | dt.date":
         tag = self._find_custom(name)

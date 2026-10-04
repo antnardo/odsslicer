@@ -78,7 +78,7 @@ _LIBREOFFICE_FALLBACKS = [
 #   workbook, stale or not.
 # MacroExecutionMode = NEVER_EXECUTE is a hidden load's default already,
 # spelled out because the folder is trusted for its links, not its macros.
-_LIBREOFFICE_RECALC_SCRIPT = '''\
+_LIBREOFFICE_RECALC_SCRIPT = """\
 import os
 import traceback
 
@@ -151,7 +151,7 @@ def recalculate(*args):
 
 
 g_exportedScripts = (recalculate,)
-'''
+"""
 
 
 def _find_libreoffice() -> str:
@@ -203,9 +203,7 @@ def _path_without_foreign_pythons(path_value: str) -> str:
     return os.pathsep.join(keep)
 
 
-def _run(
-    cmd: list[str], env: dict[str, str], timeout: int
-) -> subprocess.CompletedProcess[str]:
+def _run(cmd: list[str], env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
     """`subprocess.run(cmd, ...)`, except that on POSIX a timeout or an
     interruption kills LibreOffice itself, not only the process started.
 
@@ -260,9 +258,7 @@ def _signature(path: Path) -> tuple[int, int]:
     return status.st_mtime_ns, status.st_size
 
 
-def recalculate(
-    path: "str | Path", timeout: int = 120, update_links: bool = False
-) -> None:
+def recalculate(path: "str | Path", timeout: int = 120, update_links: bool = False) -> None:
     """Have a local LibreOffice open the `.ods` at `path`, recalculate every
     formula (`calculateAll()` - including ones whose cached value is stale),
     refresh every pivot table (materializing its output), and replace the

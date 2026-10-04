@@ -79,9 +79,7 @@ def _parse_date_value(raw: str) -> dt.date | dt.datetime:
             hours=hour, minutes=minute, seconds=second, microseconds=micro
         )
         if m["offset_sign"]:
-            offset = dt.timedelta(
-                hours=int(m["offset_hours"]), minutes=int(m["offset_minutes"])
-            )
+            offset = dt.timedelta(hours=int(m["offset_hours"]), minutes=int(m["offset_minutes"]))
             value -= offset if m["offset_sign"] == "+" else -offset
     except OverflowError as error:
         raise ValueError(f"ODF date value out of range: {raw!r}") from error

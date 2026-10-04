@@ -153,9 +153,12 @@ class TestPrefixes:
     def test_new_element_takes_the_documents_prefix(self):
         row = etree.fromstring(f'<tab:table-row xmlns:tab="{TABLE}"/>')
         row.append(new("table:table-cell", {"table:style-name": "ce1"}))
-        assert etree.tostring(row) == (
-            f'<tab:table-row xmlns:tab="{TABLE}"><tab:table-cell tab:style-name="ce1"/></tab:table-row>'
-        ).encode()
+        assert (
+            etree.tostring(row)
+            == (
+                f'<tab:table-row xmlns:tab="{TABLE}"><tab:table-cell tab:style-name="ce1"/></tab:table-row>'
+            ).encode()
+        )
 
     def test_new_element_declares_the_specification_prefix_where_none_is_bound(self):
         root = etree.fromstring("<root/>")
@@ -450,4 +453,4 @@ class TestParse:
     )
     def test_serialize_writes_the_declaration_the_part_had(self, declaration):
         markup = declaration + b"<x a='1'>&#233;t&#233;</x>"
-        assert serialize(parse(markup), markup) == declaration + "<x a=\"1\">été</x>".encode()
+        assert serialize(parse(markup), markup) == declaration + '<x a="1">été</x>'.encode()

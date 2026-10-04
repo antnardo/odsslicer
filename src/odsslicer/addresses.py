@@ -17,4 +17,4 @@ def string_address(row: int, col: int) -> str:
     while n > 0:
         n, r = divmod(n - 1, 26)
         c = chr(65 + r) + c
-    return f"{c}{row+1}"
+    return f"{c}{row + 1}"

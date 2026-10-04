@@ -7,6 +7,7 @@ into focused modules (`addresses`, `datetimes`, `constants`, `xmlutils`,
 odsslicer.classes import Sheet` keeps working - but new code should import
 from `odsslicer` directly.
 """
+
 from .addresses import string_address, string_to_col
 from .cell import ArrayValues, Cell, Comment
 from .constants import (

@@ -127,9 +127,7 @@ def _shift_cell_address(addr: str, drow: int, dcol: int) -> str:
     if not row_abs:
         row += drow
     if row < 0 or col < 0:
-        raise ValueError(
-            f"shifting {addr!r} by (row={drow}, col={dcol}) would move it off the sheet"
-        )
+        raise ValueError(f"shifting {addr!r} by (row={drow}, col={dcol}) would move it off the sheet")
     new_letters = string_address(0, col)[:-1]
     shifted = f"{col_abs}{new_letters}{row_abs}{row + 1}"
     return f".{shifted}" if dotted else shifted
@@ -157,9 +155,7 @@ def _shift_odf_formula(formula: str, drow: int, dcol: int) -> str:
     `Cell.formula`) by `(drow, dcol)`. Used by `Cell.fill_formula` to
     replicate a formula across a range the way a spreadsheet's fill handle
     does."""
-    return _ODF_BRACKET_RE.sub(
-        lambda m: f"[{_shift_odf_reference(m.group(1), drow, dcol)}]", formula
-    )
+    return _ODF_BRACKET_RE.sub(lambda m: f"[{_shift_odf_reference(m.group(1), drow, dcol)}]", formula)
 
 
 def _unquote_odf_sheet_name(raw: str) -> str:
@@ -287,9 +283,7 @@ def _remap_reference(
     return ":".join(rewritten)
 
 
-def _remap_range_list(
-    ranges: str, target_sheet: str, remap: _Remap, edge: "str | None" = None
-) -> str:
+def _remap_range_list(ranges: str, target_sheet: str, remap: _Remap, edge: "str | None" = None) -> str:
     """A list of cell ranges as charts and drawings hold them - separated by
     spaces, each sheet-qualified: `Report.A5:Report.A11 Report.B4:Report.B4`
     - through `remap` (see `_remap_reference`), as LibreOffice has a chart's
@@ -456,9 +450,7 @@ def _expand_formula_template(pattern: str, row: int, col: int) -> "tuple[str, Ca
 
     if "{" in pattern:
         context = {"r": row + 1, "c": col + 1}
-        pattern = _TEMPLATE_TOKEN_RE.sub(
-            lambda m: str(_eval_template_expr(m.group(1), context)), pattern
-        )
+        pattern = _TEMPLATE_TOKEN_RE.sub(lambda m: str(_eval_template_expr(m.group(1), context)), pattern)
 
     def restore(formula: str) -> str:
         for i, content in enumerate(escaped):

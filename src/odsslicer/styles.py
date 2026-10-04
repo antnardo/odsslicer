@@ -34,8 +34,18 @@ _NUMBER_STYLE_TAGS = [
     "number:text-style",
 ]
 _DATE_TIME_COMPONENT_NAMES = (
-    "day", "month", "year", "day-of-week", "week-of-year", "quarter", "era",
-    "hours", "minutes", "seconds", "am-pm", "text",
+    "day",
+    "month",
+    "year",
+    "day-of-week",
+    "week-of-year",
+    "quarter",
+    "era",
+    "hours",
+    "minutes",
+    "seconds",
+    "am-pm",
+    "text",
 )
 _TIME_OF_DAY_COMPONENT_NAMES = frozenset({"hours", "minutes", "seconds", "am-pm"})
 
@@ -490,9 +500,7 @@ def _fraction_digits(microseconds: int, places: int) -> str:
     return f"{digits:0{places}d}"
 
 
-def _elapsed_fields(
-    value: dt.timedelta, kinds: set[str]
-) -> tuple[str, SimpleNamespace]:
+def _elapsed_fields(value: dt.timedelta, kinds: set[str]) -> tuple[str, SimpleNamespace]:
     """The sign of a duration, and its `.hour`/`.minute`/`.second` as an
     elapsed-time format shows them: the leading unit - the hours, else the
     minutes, else the seconds - holds the whole duration, however long."""
@@ -978,9 +986,7 @@ class RowStyle:
         self.name = tag.get("style:name") if tag is not None else None
         props = tag.find("style:table-row-properties") if tag is not None else None
         self._height = props.attrs.get("style:row-height") if props is not None else None
-        self._optimal_height = (
-            props is not None and props.attrs.get("style:use-optimal-row-height") == "true"
-        )
+        self._optimal_height = props is not None and props.attrs.get("style:use-optimal-row-height") == "true"
         self._visible = props is None or props.attrs.get("table:visibility", "visible") == "visible"
 
     def _require_owner(self) -> None:

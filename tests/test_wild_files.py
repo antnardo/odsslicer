@@ -155,10 +155,7 @@ def test_write_into_wild_file(tmp_path, name):
 # Excel merges S67_01's notes across A:H, but the grid stops at B: past it,
 # every column is empty (the notes' covered cells hold nothing) and load()
 # leaves out a trailing run of more than 10 empty columns
-_S67_01_NOTE = (
-    '1. "Other" is comprised of nationalities where the number of transfers'
-    " to the UK are below 5."
-)
+_S67_01_NOTE = '1. "Other" is comprised of nationalities where the number of transfers to the UK are below 5.'
 # edit -> (action, {address: (value, merge range) after a save and reload})
 _MERGE_PAST_THE_GRID_EDITS = {
     # the master: the merge stays, as when one types into it in LibreOffice

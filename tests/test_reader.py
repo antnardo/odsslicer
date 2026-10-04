@@ -70,9 +70,7 @@ def _interrupt(monkeypatch, step, error):
 
 @pytest.mark.parametrize("error", [OSError, KeyboardInterrupt])
 @pytest.mark.parametrize("step", ["writing", "syncing", "renaming"])
-def test_interrupted_save_leaves_the_old_file_and_no_temporary_file(
-    workbook, monkeypatch, step, error
-):
+def test_interrupted_save_leaves_the_old_file_and_no_temporary_file(workbook, monkeypatch, step, error):
     before = workbook.read_bytes()
     book = _edited(workbook)
     _interrupt(monkeypatch, step, error)
@@ -86,9 +84,7 @@ def test_interrupted_save_leaves_the_old_file_and_no_temporary_file(
     assert ODSReader(workbook).sheet("Sheet1")["A1"].value == "saved"
 
 
-def test_reader_during_a_save_gets_the_old_file_until_the_new_one_is_complete(
-    workbook, monkeypatch
-):
+def test_reader_during_a_save_gets_the_old_file_until_the_new_one_is_complete(workbook, monkeypatch):
     before = workbook.read_bytes()
     book = _edited(workbook)
     seen = []
@@ -116,9 +112,7 @@ def test_save_in_place_keeps_the_file_permissions(workbook, mode):
     assert _mode(workbook) == expected
 
 
-def test_save_to_another_path_leaves_the_source_and_gives_default_permissions(
-    workbook, tmp_path
-):
+def test_save_to_another_path_leaves_the_source_and_gives_default_permissions(workbook, tmp_path):
     before = workbook.read_bytes()
     folder = tmp_path / "out"
     folder.mkdir()
@@ -133,9 +127,7 @@ def test_save_to_another_path_leaves_the_source_and_gives_default_permissions(
     assert _names(tmp_path) == ["out", "workbook.ods"]
 
 
-@pytest.mark.skipif(
-    os.name == "nt", reason="symbolic links need a privilege on Windows"
-)
+@pytest.mark.skipif(os.name == "nt", reason="symbolic links need a privilege on Windows")
 def test_save_through_a_symlink_replaces_the_file_it_points_to(workbook, tmp_path):
     link = tmp_path / "link.ods"
     link.symlink_to(workbook)
@@ -147,9 +139,7 @@ def test_save_through_a_symlink_replaces_the_file_it_points_to(workbook, tmp_pat
     assert _names(tmp_path) == ["link.ods", "workbook.ods"]
 
 
-@pytest.mark.skipif(
-    hasattr(os, "geteuid") and os.geteuid() == 0, reason="root may write any file"
-)
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root may write any file")
 def test_save_over_a_read_only_file_raises_permission_error(workbook):
     before = workbook.read_bytes()
     workbook.chmod(0o444)

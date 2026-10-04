@@ -117,9 +117,7 @@ def libreoffice_export(tmp_path):
 
 # CSV export options: comma, double quote, UTF-8, from line 1, and token 9,
 # "save cell contents as shown" - what LibreOffice displays, not the value
-_CSV_AS_SHOWN = (
-    "csv:Text - txt - csv (StarCalc):44,34,76,1,,0,false,true,true,false,false"
-)
+_CSV_AS_SHOWN = "csv:Text - txt - csv (StarCalc):44,34,76,1,,0,false,true,true,false,false"
 
 
 def libreoffice_shows(ods_path, outdir):
@@ -141,9 +139,7 @@ _FRAGMENT_NAMESPACES = {
 
 def _fragment(xml):
     """The top-level elements of an ODF XML fragment, detached."""
-    declarations = " ".join(
-        f'xmlns:{prefix}="{uri}"' for prefix, uri in _FRAGMENT_NAMESPACES.items()
-    )
+    declarations = " ".join(f'xmlns:{prefix}="{uri}"' for prefix, uri in _FRAGMENT_NAMESPACES.items())
     # whitespace kept as written, as odsslicer parses a package part: by
     # default BeautifulSoup squeezes a text node of spaces only to one
     soup = BeautifulSoup(
@@ -176,9 +172,7 @@ def document_in(language, country):
     either one absent for `None` - as `ODSReader` reads it: `save()` copies
     `styles.xml`, where it lies, from the template."""
     reader = ODSReader.new()
-    default = reader.styles_data.find(
-        "style:default-style", attrs={"style:family": "table-cell"}
-    )
+    default = reader.styles_data.find("style:default-style", attrs={"style:family": "table-cell"})
     props = default.find("style:text-properties")
     for attr, value in (("fo:language", language), ("fo:country", country)):
         if value is None:
@@ -190,10 +184,7 @@ def document_in(language, country):
 
 def text_cell(text):
     """A string cell, as `table_xml` for `ods_with_sheet`."""
-    return (
-        '<table:table-cell office:value-type="string">'
-        f"<text:p>{text}</text:p></table:table-cell>"
-    )
+    return f'<table:table-cell office:value-type="string"><text:p>{text}</text:p></table:table-cell>'
 
 
 def formula_cell(formula):
@@ -319,15 +310,11 @@ def addresses_holding(table, test):
     for row_tag in table.find_all("table:table-row"):
         rows = int(row_tag.get("table:number-rows-repeated", "1"))
         col = 0
-        for cell in row_tag.find_all(
-            ["table:table-cell", "table:covered-table-cell"], recursive=False
-        ):
+        for cell in row_tag.find_all(["table:table-cell", "table:covered-table-cell"], recursive=False):
             cols = int(cell.get("table:number-columns-repeated", "1"))
             if test(cell):
                 found += [
-                    string_address(r, c)
-                    for r in range(row, row + rows)
-                    for c in range(col, col + cols)
+                    string_address(r, c) for r in range(row, row + rows) for c in range(col, col + cols)
                 ]
             col += cols
         row += rows
@@ -375,12 +362,7 @@ def table_row(*cells, repeat=1):
 
 def cells_with_content(sheet):
     """`{address: value}` for every cell of `sheet` holding something."""
-    return {
-        cell.address: cell.value
-        for cells in sheet.rows
-        for cell in cells
-        if not cell.is_empty
-    }
+    return {cell.address: cell.value for cells in sheet.rows for cell in cells if not cell.is_empty}
 
 
 # A, B and C 1, 2 and 3 cm wide, A a print title - "Columns to repeat" - as

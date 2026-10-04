@@ -13,6 +13,7 @@ with --read) so peak RSS reflects one tool only; read time is the median of
 three runs and excludes the library import. Results print as markdown tables
 to paste into DOCS.md.
 """
+
 import importlib.util
 import statistics
 import subprocess
@@ -88,7 +89,9 @@ def main(sizes):
                 for _ in range(3):
                     out = subprocess.run(
                         [sys.executable, __file__, "--read", tool, str(path)],
-                        capture_output=True, text=True, check=True,
+                        capture_output=True,
+                        text=True,
+                        check=True,
                     ).stdout.split()
                     runs.append((float(out[1]), float(out[2])))
                 results[tool, n] = (statistics.median(r[0] for r in runs), max(r[1] for r in runs))

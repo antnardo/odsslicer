@@ -25,15 +25,23 @@ _DMY = [("day", "long"), ("text", "/"), ("month", "long"), ("text", "/")]
         (
             "HH:MM:SS AM/PM",
             [
-                ("hours", "long"), ("text", ":"), ("minutes", "long"), ("text", ":"),
-                ("seconds", "long"), ("text", " "), ("am-pm", ""),
+                ("hours", "long"),
+                ("text", ":"),
+                ("minutes", "long"),
+                ("text", ":"),
+                ("seconds", "long"),
+                ("text", " "),
+                ("am-pm", ""),
             ],
             False,
         ),
         (
             "[HH]:MM:SS",
             [
-                ("hours", "long"), ("text", ":"), ("minutes", "long"), ("text", ":"),
+                ("hours", "long"),
+                ("text", ":"),
+                ("minutes", "long"),
+                ("text", ":"),
                 ("seconds", "long"),
             ],
             True,
@@ -42,8 +50,14 @@ _DMY = [("day", "long"), ("text", "/"), ("month", "long"), ("text", "/")]
         (
             "HH:MM DD.MM.YY",
             [
-                ("hours", "long"), ("text", ":"), ("minutes", "long"), ("text", " "),
-                ("day", "long"), ("text", "."), ("month", "long"), ("text", "."),
+                ("hours", "long"),
+                ("text", ":"),
+                ("minutes", "long"),
+                ("text", " "),
+                ("day", "long"),
+                ("text", "."),
+                ("month", "long"),
+                ("text", "."),
                 ("year", ""),
             ],
             False,
@@ -51,17 +65,34 @@ _DMY = [("day", "long"), ("text", "/"), ("month", "long"), ("text", "/")]
         (
             'YYYY"년" M"월" D"일" H"시" M"분" S"초"',
             [
-                ("year", "long"), ("text", "년 "), ("month", ""), ("text", "월 "),
-                ("day", ""), ("text", "일 "), ("hours", ""), ("text", "시 "),
-                ("minutes", ""), ("text", "분 "), ("seconds", ""), ("text", "초"),
+                ("year", "long"),
+                ("text", "년 "),
+                ("month", ""),
+                ("text", "월 "),
+                ("day", ""),
+                ("text", "일 "),
+                ("hours", ""),
+                ("text", "시 "),
+                ("minutes", ""),
+                ("text", "분 "),
+                ("seconds", ""),
+                ("text", "초"),
             ],
             False,
         ),
         # quoted and escaped text is literal, letters included
-        (r'D.MM.YYYY" г." \h', [
-            ("day", ""), ("text", "."), ("month", "long"), ("text", "."),
-            ("year", "long"), ("text", " г. h"),
-        ], False),
+        (
+            r'D.MM.YYYY" г." \h',
+            [
+                ("day", ""),
+                ("text", "."),
+                ("month", "long"),
+                ("text", "."),
+                ("year", "long"),
+                ("text", " г. h"),
+            ],
+            False,
+        ),
     ],
 )
 def test_format_code_components(code, components, elapsed):

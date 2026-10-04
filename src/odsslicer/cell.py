@@ -188,9 +188,7 @@ class ArrayValues:
             return
         values = list(new_value)
         if len(values) != len(self.array):
-            raise ValueError(
-                f"shape mismatch: {len(self.array)} cell(s) but {len(values)} value(s) given"
-            )
+            raise ValueError(f"shape mismatch: {len(self.array)} cell(s) but {len(values)} value(s) given")
         for item, v in zip(self.array, values, strict=True):
             ArrayValues(item).value = v
 
@@ -559,9 +557,7 @@ class Cell:
             raise ValueError(f"cell {self.address} has no formula to fill from")
         if isinstance(target, str):
             if self.sheet is None:
-                raise RuntimeError(
-                    f"cell {self.address} has no owning sheet to resolve {target!r} on"
-                )
+                raise RuntimeError(f"cell {self.address} has no owning sheet to resolve {target!r} on")
             target = self.sheet[target]
         if isinstance(target, Cell):  # a single-cell address resolves to a bare Cell
             target = ArrayValues(target)
@@ -600,9 +596,7 @@ class Cell:
         rows gets one new cell for all its rows (issue #5).
         """
         if self.sheet is None:
-            raise RuntimeError(
-                f"cell {self.address} has no owning sheet and cannot be written to"
-            )
+            raise RuntimeError(f"cell {self.address} has no owning sheet and cannot be written to")
         if self.cell is EMPTY_CELL_BS:
             self.sheet.grow_to(self.row, self.col)
             new_cell = self.sheet.rows[self.row][self.col]
@@ -611,8 +605,13 @@ class Cell:
         self.sheet.materialize_cell(self.row, self.col)
 
     _DATE_PATTERNS = (
-        "%d/%m/%Y", "%d/%m/%y", "%m/%d/%Y", "%m/%d/%y",
-        "%Y-%m-%d", "%d.%m.%Y", "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%d/%m/%y",
+        "%m/%d/%Y",
+        "%m/%d/%y",
+        "%Y-%m-%d",
+        "%d.%m.%Y",
+        "%d-%m-%Y",
     )
     _TIME_PATTERNS = ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p")
     # a date-time shows as a date pattern alone when its format has no time part
@@ -749,8 +748,8 @@ class Cell:
                 # needs: rounding to the template's own decimal count would lose
                 # precision (e.g. "3.4" as template -> only borrow the separator)
                 def render_general(
-                value: float, _sep: str = decimal_sep, _prefix: str = prefix, _suffix: str = suffix
-            ) -> str:
+                    value: float, _sep: str = decimal_sep, _prefix: str = prefix, _suffix: str = suffix
+                ) -> str:
                     return f"{_prefix}{str(value).replace('.', _sep)}{_suffix}"
 
                 render = render_general
@@ -887,7 +886,7 @@ class Cell:
         # one paragraph per line, the only way ODF represents a multi-line
         # cell (a literal "\n" inside a paragraph is just whitespace there)
         lines = text.split("\n")
-        for extra in paragraphs[len(lines):]:
+        for extra in paragraphs[len(lines) :]:
             extra.decompose()
         for i, line in enumerate(lines):
             p = paragraphs[i] if i < len(paragraphs) else self._new_text_paragraph()

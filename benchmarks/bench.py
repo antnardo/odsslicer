@@ -6,6 +6,7 @@ Generates synthetic workbooks (N rows x 5 columns: id, name, amount, ratio,
 formula) and times every representative operation. Results are printed as a
 markdown table so they can be pasted into DOCS.md.
 """
+
 import gc
 import resource
 import sys
@@ -64,15 +65,19 @@ def bench(n_rows):
     out["read 1 cell"], _ = clock(lambda: sheet["C500"].value if n_rows >= 500 else sheet["C2"].value)
 
     out["write 1 cell"], _ = clock(lambda: setattr(sheet["B2"], "value", "changed"))
+
     def write_range():
         sheet[1:1001, 2].value = [[float(i)] for i in range(1000)]
+
     out["write 1000 cells"], _ = clock(write_range)
 
     out["sort 1000 rows"], _ = clock(lambda: sheet.sort("A2:E1001", by=2, ascending=False))
     out["delete 1 row"], _ = clock(lambda: sheet.delete_row(5))
+
     def delete_10():
         for _ in range(10):
             sheet.delete_row(5)
+
     out["delete 10 rows (loop)"], _ = clock(delete_10)
     out["delete 10 rows (batch)"], _ = clock(lambda: sheet.delete_rows(range(5, 15)))
     out["copy 1000x2 block"], _ = clock(lambda: sheet.copy("B2:C1001", "G2"))
@@ -92,7 +97,7 @@ def main():
         cells = []
         for n in sizes:
             v = results[n][k]
-            cells.append(f"{v:,.2f}" if "MB" in k else f"{v*1000:,.0f} ms" if v < 100 else f"{v:,.1f} s")
+            cells.append(f"{v:,.2f}" if "MB" in k else f"{v * 1000:,.0f} ms" if v < 100 else f"{v:,.1f} s")
         print(f"| {k} | " + " | ".join(cells) + " |")
 
 

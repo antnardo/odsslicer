@@ -25,7 +25,7 @@ logger = logging.getLogger("odsslicer")
 # library - style lookup, `.properties` - to work unchanged.
 _BLANK_STYLES_XML = (
     b'<?xml version="1.0" encoding="UTF-8"?>\n'
-    b'<office:document-styles'
+    b"<office:document-styles"
     b' xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"'
     b' xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"'
     b' office:version="1.2">'
@@ -34,7 +34,7 @@ _BLANK_STYLES_XML = (
 )
 _BLANK_META_XML = (
     b'<?xml version="1.0" encoding="UTF-8"?>\n'
-    b'<office:document-meta'
+    b"<office:document-meta"
     b' xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"'
     b' xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0"'
     b' xmlns:dc="http://purl.org/dc/elements/1.1/"'
@@ -44,7 +44,7 @@ _BLANK_META_XML = (
 )
 _BLANK_SETTINGS_XML = (
     b'<?xml version="1.0" encoding="UTF-8"?>\n'
-    b'<office:document-settings'
+    b"<office:document-settings"
     b' xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"'
     b' xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0"'
     b' office:version="1.2">'
@@ -216,9 +216,7 @@ class ODSReader:
             return None
         return self._find_in_styles(_NUMBER_STYLE_TAGS, {"style:name": name})
 
-    def _find_in_styles(
-        self, names: "str | list[str]", attrs: "dict[str, str]"
-    ) -> "Tag | None":
+    def _find_in_styles(self, names: "str | list[str]", attrs: "dict[str, str]") -> "Tag | None":
         """The first element named `names` with `attrs` among the automatic
         styles of `content.xml`, else in `styles.xml`. The only styles
         `content.xml` holds are its automatic ones: searching the whole of it
@@ -232,9 +230,7 @@ class ODSReader:
         """The document's default language and country - `fo:language` and
         `fo:country` of its default cell style in `styles.xml`, where
         LibreOffice records them - `None` for either one it does not give."""
-        default = self.styles_data.find(
-            "style:default-style", attrs={"style:family": "table-cell"}
-        )
+        default = self.styles_data.find("style:default-style", attrs={"style:family": "table-cell"})
         props = cast(
             "Tag | None",
             default.find("style:text-properties") if default is not None else None,
@@ -403,9 +399,7 @@ class ODSReader:
             "meta.xml": self.meta_data.encode("utf-8"),
         }
         regenerated.update(
-            (name, part.encode("utf-8"))
-            for name, part in self._lazy_parts().items()
-            if name in self._touched
+            (name, part.encode("utf-8")) for name, part in self._lazy_parts().items() if name in self._touched
         )
         with ZipFile(self.file) as src:
             entries = [

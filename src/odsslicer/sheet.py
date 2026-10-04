@@ -67,10 +67,7 @@ def _holds_content(cell: Cell) -> bool:
     out on purpose: files carry it in the rows padding a sheet to its full
     height, down to the millionth, and a formatted row the grid leaves out
     stays in the file all the same (see `grow_to`)."""
-    return (
-        not cell.is_empty
-        or cell.cell.find("office:annotation", recursive=False) is not None
-    )
+    return not cell.is_empty or cell.cell.find("office:annotation", recursive=False) is not None
 
 
 # the namespaces of what a cell may hold anchored to it: shapes, charts and
@@ -88,11 +85,7 @@ def _carries_formatting(cell_tag: Tag) -> bool:
 
 def _drawings_in(cell_tag: Tag) -> "list[Tag]":
     """What is anchored in `cell_tag`: a chart, a shape, an image."""
-    return [
-        child
-        for child in cell_tag.find_all(True, recursive=False)
-        if child.prefix in _DRAWING_PREFIXES
-    ]
+    return [child for child in cell_tag.find_all(True, recursive=False) if child.prefix in _DRAWING_PREFIXES]
 
 
 def _rescue_drawings(cell_tag: Tag, heir: "Tag | None") -> None:
@@ -182,9 +175,7 @@ class Sheet:
             self.size = (len(self.rows), max(rows_len))
             n_cols = self.size[1]
             if sum(n_cols - len_row for len_row in rows_len) > 0:
-                logger.warning(
-                    "At least one row does not have the same length as the others? %s", rows_len
-                )
+                logger.warning("At least one row does not have the same length as the others? %s", rows_len)
         else:
             self.size = (0, 0)
         self.n_rows, self.n_cols = self.size
@@ -195,6 +186,7 @@ class Sheet:
         unreadable: list[Cell] = []  # read as their text instead, see Cell.__init__
         rows = table_bs.find_all("table:table-row")
         logger.log(self._log_level, "    Loading %s, %d unrepeated rows", self.name, len(rows))
+
         # Grid-filler guard, column direction: Excel and LibreOffice pad rows
         # up to the sheet's full width (16,384 columns) with trailing empty
         # repeated cells - unrolling those would create millions of Cell
@@ -244,9 +236,7 @@ class Sheet:
         i = 0
         for row in rows[:end]:
             n_rows = int(row.attrs.get("table:number-rows-repeated", "1"))
-            all_cells_bs = self._normalize_row_width(
-                row, row.find_all(TAG_CELL), real_width, i
-            )
+            all_cells_bs = self._normalize_row_width(row, row.find_all(TAG_CELL), real_width, i)
             for j in range(n_rows):
                 cells = []
                 j = 0
@@ -283,8 +273,7 @@ class Sheet:
         # the file, past the grid.
         after_filler = rows[end + 1 :]
         written_apart = any(
-            _repeat(row, "table:number-rows-repeated") <= MAX_REPEAT_ROWS
-            for row in after_filler
+            _repeat(row, "table:number-rows-repeated") <= MAX_REPEAT_ROWS for row in after_filler
         )
         if not written_apart and not any(_holds_content(cell) for cell in table[-1]):
             row_tag = cast(Tag, table[-1][0].cell.parent)
@@ -307,9 +296,7 @@ class Sheet:
         while width > 0 and not any(_holds_content(row[width - 1]) for row in table):
             width -= 1
         if n_cols - width > MAX_REPEAT_COLS:
-            logger.log(
-                self._log_level, "    Cols %d to %d empty: left out", width + 1, n_cols
-            )
+            logger.log(self._log_level, "    Cols %d to %d empty: left out", width + 1, n_cols)
             for run in self._runs_in(table):
                 self._split_cells_at(cast(Tag, table[run.start][0].cell.parent), width)
             # no column left: every row is empty, and so is the sheet
@@ -424,7 +411,9 @@ class Sheet:
             logger.log(
                 self._log_level,
                 "    Row [%04d]: trailing empty cells repeated %d clamped to the sheet's real width (%d)",
-                row_index + 1, n_cols, real_width,
+                row_index + 1,
+                n_cols,
+                real_width,
             )
             keep = cells_bs[:k]
             if missing > 0:
@@ -480,8 +469,7 @@ class Sheet:
                 continue
             return
         raise RuntimeError(
-            f"failed to materialize cell (row={row}, col={col}) as an independent "
-            "element (internal error)"
+            f"failed to materialize cell (row={row}, col={col}) as an independent element (internal error)"
         )
 
     def _unrepeat_row(self, row: int) -> None:
@@ -540,10 +528,7 @@ class Sheet:
                     continue
                 rows_span = int(master.attrs.get("table:number-rows-spanned", "1"))
                 cols_span = int(master.attrs.get("table:number-columns-spanned", "1"))
-                if (
-                    master.row <= row < master.row + rows_span
-                    and master.col <= col < master.col + cols_span
-                ):
+                if master.row <= row < master.row + rows_span and master.col <= col < master.col + cols_span:
                     return master
         return None
 
@@ -1490,12 +1475,8 @@ class Sheet:
         return RowStyle(tag, sheet=self, row=row)
 
     # what may hold `<table:table-column>` elements, and what comes after them
-    _COLUMN_GROUPS = frozenset(
-        {"table-columns", "table-header-columns", "table-column-group"}
-    )
-    _ROW_LEVEL = frozenset(
-        {"table-row", "table-rows", "table-header-rows", "table-row-group"}
-    )
+    _COLUMN_GROUPS = frozenset({"table-columns", "table-header-columns", "table-column-group"})
+    _ROW_LEVEL = frozenset({"table-row", "table-rows", "table-header-rows", "table-row-group"})
 
     def _column_default_cell_style(self, col: int) -> "str | None":
         """The default cell style of logical column `col` - the style a cell
@@ -1702,10 +1683,7 @@ class Sheet:
         return [[row[j]] for row in self.rows]
 
     def get_cols(self, slice: slice) -> list[list[Cell]]:
-        return [
-            [row[j] for j in range(*self._unslice(slice, col=True))]
-            for row in self.rows
-        ]
+        return [[row[j] for j in range(*self._unslice(slice, col=True))] for row in self.rows]
 
     def __getitem__(self, address: "str | int | tuple[Any, ...] | slice") -> Any:
         """ROW en premier, COL en second (plus naturel, comme numpy, et correspond aux données)"""
@@ -1724,14 +1702,10 @@ class Sheet:
             if type(rows_address) is int and type(cols_address) is slice:
                 return ArrayValues(self.get_row_slice(rows_address, cols_address))
             if type(rows_address) is slice and type(cols_address) is int:
-                return ArrayValues(
-                    self.get_cells(rows_address, slice(cols_address, cols_address + 1))
-                )
+                return ArrayValues(self.get_cells(rows_address, slice(cols_address, cols_address + 1)))
             if type(rows_address) is slice and type(cols_address) is slice:
                 return ArrayValues(self.get_cells(rows_address, cols_address))
-        raise ValueError(
-            f"Format demandé non conforme ou données non définie dans le tableur : {address}"
-        )
+        raise ValueError(f"Format demandé non conforme ou données non définie dans le tableur : {address}")
 
     def __iter__(self) -> Iterator[list[Cell]]:
         return iter(self.rows)

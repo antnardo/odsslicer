@@ -71,7 +71,9 @@ def spotlight_files() -> list[Path]:
     """Every .ods Spotlight knows about under the home directory."""
     out = subprocess.run(
         ["mdfind", "-onlyin", str(Path.home()), 'kMDItemFSName == "*.ods"'],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     ).stdout
     return [Path(line) for line in out.splitlines() if line]
 
@@ -238,9 +240,7 @@ def rewritten_parts(before: Path, after: Path) -> list[str]:
         return sorted(
             name
             for name in names - REGENERATED_PARTS
-            if name not in src.namelist()
-            or name not in dst.namelist()
-            or src.read(name) != dst.read(name)
+            if name not in src.namelist() or name not in dst.namelist() or src.read(name) != dst.read(name)
         )
 
 

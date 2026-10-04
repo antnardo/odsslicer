@@ -14,6 +14,7 @@ self-consistent with our own reader.
 Skipped automatically if no `soffice`/`libreoffice` binary is on PATH (not
 installed in CI by default) - install LibreOffice locally to run these.
 """
+
 import datetime as dt
 import re
 
@@ -88,9 +89,7 @@ def test_libreoffice_reads_back_a_forked_cell_style(writable_reader, tmp_path, l
 
     xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
     style_name = c.attrs["table:style-name"]
-    style_def = re.search(
-        rf'<style:style style:name="{style_name}"[^>]*>.*?</style:style>', xml, re.DOTALL
-    )
+    style_def = re.search(rf'<style:style style:name="{style_name}"[^>]*>.*?</style:style>', xml, re.DOTALL)
     assert style_def is not None, f"style {style_name!r} not found in LibreOffice's own re-export"
     assert 'fo:font-weight="bold"' in style_def.group(0)
     assert 'fo:color="#ff0000"' in style_def.group(0)  # LO lowercases hex colors on export
@@ -117,9 +116,7 @@ def test_libreoffice_reads_back_a_border_with_all_four_sides_explicit(
     ).group(0)
     # LibreOffice rounds 0.5pt to its own internal precision (0.51pt) on export
     top = re.search(r'fo:border-top="([^"]*)"', style_def).group(1)
-    assert Border(top) == Border("0.51pt solid #000000") or Border(top) == Border(
-        "0.5pt solid #000000"
-    )
+    assert Border(top) == Border("0.51pt solid #000000") or Border(top) == Border("0.5pt solid #000000")
     assert 'fo:border-bottom="none"' in style_def
     assert 'fo:border-left="none"' in style_def
     assert 'fo:border-right="none"' in style_def
@@ -347,9 +344,7 @@ def test_libreoffice_shows_values_written_around_empty_columns_where_written(tmp
 
 
 @requires_soffice
-def test_libreoffice_gives_print_title_columns_their_widths_after_an_insertion(
-    tmp_path, libreoffice_export
-):
+def test_libreoffice_gives_print_title_columns_their_widths_after_an_insertion(tmp_path, libreoffice_export):
     # issue #13: skipping the print title's grouped definition shifted every
     # width onto the column before
     path = ods_with_sheet(tmp_path / "titles.ods", PRINT_TITLE_XML, PRINT_TITLE_WIDTHS_XML)
@@ -399,7 +394,7 @@ _NAMED_AND_FRACTIONAL = [
     ),
     (
         '<number:date-style style:name="N3" number:language="pl" number:country="PL">'
-        '<number:day/><number:text> </number:text>'
+        "<number:day/><number:text> </number:text>"
         '<number:month number:style="long" number:textual="true"/></number:date-style>',
         dt.date(2026, 9, 27),
     ),
@@ -467,7 +462,7 @@ def test_libreoffice_shows_created_elapsed_and_percentage_formats_as_odsslicer_w
     table.save(path)
     written = [sheet["A1"].text, sheet["B1"].text]
     assert written == ["26:15", "25.6%"]
-    (hours_shown, percent_shown), = libreoffice_shows(path, tmp_path)
+    ((hours_shown, percent_shown),) = libreoffice_shows(path, tmp_path)
     assert hours_shown == "26:15"
     # the sign where odsslicer puts it; the decimal separator is the system's
     # for a format naming no language - "," on a French machine - which the
@@ -485,10 +480,7 @@ def test_libreoffice_shows_named_and_fractional_dates_as_odsslicer_writes_them(t
         for n, (number_style, _) in enumerate(_NAMED_AND_FRACTIONAL, start=1)
     )
     xml = '<table:table-column table:number-columns-repeated="5"/>' + table_row(
-        *(
-            f'<table:table-cell table:style-name="c{n}"/>'
-            for n in range(1, len(_NAMED_AND_FRACTIONAL) + 1)
-        )
+        *(f'<table:table-cell table:style-name="c{n}"/>' for n in range(1, len(_NAMED_AND_FRACTIONAL) + 1))
     )
     path = ods_with_sheet(tmp_path / "named.ods", xml, styles)
     table = ODSReader(path)
@@ -596,9 +588,7 @@ def test_libreoffice_computes_references_to_other_sheets_after_edits(tmp_path):
     for i in range(6):
         data[i, 0].value = i + 1
         pupils[i, 0].value = 10 * (i + 1)
-    for col, formula in enumerate(
-        ["of:=[$Data.A5]", "of:=SUM([$Data.A1:.A5])", "of:=[Élèves.A5]"]
-    ):
+    for col, formula in enumerate(["of:=[$Data.A5]", "of:=SUM([$Data.A1:.A5])", "of:=[Élèves.A5]"]):
         table.sheet("Sheet1")[0, col].formula = formula
     data.insert_rows(0)
     pupils.insert_rows(0)
@@ -661,9 +651,7 @@ def test_libreoffice_shows_numpy_values_and_a_nan_as_an_empty_cell(tmp_path):
 
 
 @requires_soffice
-def test_libreoffice_finds_what_lay_below_the_data_where_the_edits_moved_it(
-    tmp_path, libreoffice_export
-):
+def test_libreoffice_finds_what_lay_below_the_data_where_the_edits_moved_it(tmp_path, libreoffice_export):
     # issue #10: a note on A5 and a shape anchored at A6, in the last rows,
     # went as soon as the sheet grew or rows were inserted
     xml = (
@@ -853,9 +841,7 @@ def test_libreoffice_shows_written_runs_of_whitespace_as_written(tmp_path):
 
 
 @requires_soffice
-def test_libreoffice_reads_written_date_times_and_durations_as_meant(
-    tmp_path, libreoffice_export
-):
+def test_libreoffice_reads_written_date_times_and_durations_as_meant(tmp_path, libreoffice_export):
     # issue #4: the serial number LibreOffice computes from each written
     # value (days since 1899-12-30) proves it reads the value as meant
     r = ODSReader.new()
@@ -877,12 +863,8 @@ def test_libreoffice_reads_written_date_times_and_durations_as_meant(
     r.save(out)
 
     xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
-    computed = re.findall(
-        r'table:formula="of:=\[\.A\d\]\*1"[^>]*office:value="([^"]*)"', xml
-    )
-    assert [float(v) for v in computed] == pytest.approx(
-        [serial for _, serial in values]
-    )
+    computed = re.findall(r'table:formula="of:=\[\.A\d\]\*1"[^>]*office:value="([^"]*)"', xml)
+    assert [float(v) for v in computed] == pytest.approx([serial for _, serial in values])
 
 
 @requires_soffice
@@ -938,9 +920,7 @@ def test_odsslicer_reads_back_date_times_and_durations_as_libreoffice_saves_them
     r.save(out)
 
     reread = ODSReader(libreoffice_export(out, "ods")).sheet("Sheet1")
-    assert [reread[row, 0].value for row in range(4)] == [
-        value for _, value in values[:4]
-    ]
+    assert [reread[row, 0].value for row in range(4)] == [value for _, value in values[:4]]
     assert reread["A2"].raw_value == "PT128H45M00S"
     # LibreOffice saves a date-time falling on midnight as a bare date
     assert reread["A5"].value == dt.date(2023, 11, 30)
@@ -953,7 +933,7 @@ def test_libreoffice_reads_back_a_comment_without_corrupting_the_value(
     s = writable_reader.sheet("Sheet1")
     s["A1"].comment = "Une note\nSur deux lignes"
     src_dir = tmp_path / "src"  # the ods->ods conversion below outputs into
-    src_dir.mkdir()             # tmp_path, so the source must live elsewhere
+    src_dir.mkdir()  # tmp_path, so the source must live elsewhere
     out = src_dir / "out.ods"
     writable_reader.save(out)
 
@@ -1050,6 +1030,7 @@ def test_libreoffice_reads_back_a_pivot_table_definition(writable_reader, tmp_pa
 # ---------------------------------------------------------------------------
 # recalculate() / save(recalculate=True): delegate computing to LibreOffice
 # ---------------------------------------------------------------------------
+
 
 def _write_stale_formula_and_pivot(reader):
     s = reader.sheet("Sheet1")

@@ -55,57 +55,33 @@ _NAMES: "dict[str, tuple[str, str, str, str, str, str]]" = {
     "es": (
         "domingo|lunes|martes|miércoles|jueves|viernes|sábado",
         "dom|lun|mar|mié|jue|vie|sáb",
-        (
-            "enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre"
-            "|diciembre"
-        ),
+        ("enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre"),
         "ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic",
-        (
-            "enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre"
-            "|diciembre"
-        ),
+        ("enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre"),
         "ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic",
     ),
     "it": (
         "domenica|lunedì|martedì|mercoledì|giovedì|venerdì|sabato",
         "dom|lun|mar|mer|gio|ven|sab",
-        (
-            "gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre"
-            "|novembre|dicembre"
-        ),
+        ("gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre"),
         "gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic",
-        (
-            "gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre"
-            "|novembre|dicembre"
-        ),
+        ("gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre"),
         "gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic",
     ),
     "pt": (
         "domingo|segunda-feira|terça-feira|quarta-feira|quinta-feira|sexta-feira|sábado",
         "dom|seg|ter|qua|qui|sex|sáb",
-        (
-            "janeiro|fevereiro|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro"
-            "|dezembro"
-        ),
+        ("janeiro|fevereiro|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro"),
         "jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez",
-        (
-            "janeiro|fevereiro|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro"
-            "|dezembro"
-        ),
+        ("janeiro|fevereiro|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro"),
         "jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez",
     ),
     "nl": (
         "zondag|maandag|dinsdag|woensdag|donderdag|vrijdag|zaterdag",
         "zo|ma|di|wo|do|vr|za",
-        (
-            "januari|februari|maart|april|mei|juni|juli|augustus|september|oktober|november"
-            "|december"
-        ),
+        ("januari|februari|maart|april|mei|juni|juli|augustus|september|oktober|november|december"),
         "jan|feb|mrt|apr|mei|jun|jul|aug|sep|okt|nov|dec",
-        (
-            "januari|februari|maart|april|mei|juni|juli|augustus|september|oktober|november"
-            "|december"
-        ),
+        ("januari|februari|maart|april|mei|juni|juli|augustus|september|oktober|november|december"),
         "jan|feb|mrt|apr|mei|jun|jul|aug|sep|okt|nov|dec",
     ),
     "ca": (
@@ -119,29 +95,17 @@ _NAMES: "dict[str, tuple[str, str, str, str, str, str]]" = {
     "gl": (
         "domingo|luns|martes|mércores|xoves|venres|sábado",
         "dom|lun|mar|mér|xov|ven|sáb",
-        (
-            "xaneiro|febreiro|marzo|abril|maio|xuño|xullo|agosto|setembro|outubro|novembro"
-            "|decembro"
-        ),
+        ("xaneiro|febreiro|marzo|abril|maio|xuño|xullo|agosto|setembro|outubro|novembro|decembro"),
         "xan|feb|mar|abr|mai|xuñ|xul|ago|set|out|nov|dec",
-        (
-            "xaneiro|febreiro|marzo|abril|maio|xuño|xullo|agosto|setembro|outubro|novembro"
-            "|decembro"
-        ),
+        ("xaneiro|febreiro|marzo|abril|maio|xuño|xullo|agosto|setembro|outubro|novembro|decembro"),
         "xan|feb|mar|abr|mai|xuñ|xul|ago|set|out|nov|dec",
     ),
     "eu": (
         "igandea|astelehena|asteartea|asteazkena|osteguna|ostirala|larunbata",
         "ig.|al.|ar.|az.|og.|or.|lr.",
-        (
-            "urtarrila|otsaila|martxoa|apirila|maiatza|ekaina|uztaila|abuztua|iraila|urria"
-            "|azaroa|abendua"
-        ),
+        ("urtarrila|otsaila|martxoa|apirila|maiatza|ekaina|uztaila|abuztua|iraila|urria|azaroa|abendua"),
         "urt|ots|mar|api|mai|eka|uzt|abu|ira|urr|aza|abe",
-        (
-            "urtarrila|otsaila|martxoa|apirila|maiatza|ekaina|uztaila|abuztua|iraila|urria"
-            "|azaroa|abendua"
-        ),
+        ("urtarrila|otsaila|martxoa|apirila|maiatza|ekaina|uztaila|abuztua|iraila|urria|azaroa|abendua"),
         "urt|ots|mar|api|mai|eka|uzt|abu|ira|urr|aza|abe",
     ),
     "sv": (
@@ -201,10 +165,7 @@ _NAMES: "dict[str, tuple[str, str, str, str, str, str]]" = {
     "pl": (
         "niedziela|poniedziałek|wtorek|środa|czwartek|piątek|sobota",
         "niedz.|pon.|wt.|śr.|czw.|pt.|sob.",
-        (
-            "styczeń|luty|marzec|kwiecień|maj|czerwiec|lipiec|sierpień|wrzesień|październik"
-            "|listopad|grudzień"
-        ),
+        ("styczeń|luty|marzec|kwiecień|maj|czerwiec|lipiec|sierpień|wrzesień|październik|listopad|grudzień"),
         "I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII",
         (
             "stycznia|lutego|marca|kwietnia|maja|czerwca|lipca|sierpnia|września|października"
@@ -225,38 +186,23 @@ _NAMES: "dict[str, tuple[str, str, str, str, str, str]]" = {
         "Ne|Po|Ut|St|Št|Pi|So",
         "január|február|marec|apríl|máj|jún|júl|august|september|október|november|december",
         "I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII",
-        (
-            "januára|februára|marca|apríla|mája|júna|júla|augusta|septembra|októbra|novembra"
-            "|decembra"
-        ),
+        ("januára|februára|marca|apríla|mája|júna|júla|augusta|septembra|októbra|novembra|decembra"),
         "I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII",
     ),
     "hu": (
         "vasárnap|hétfő|kedd|szerda|csütörtök|péntek|szombat",
         "V|H|K|Sze|Cs|P|Szo",
-        (
-            "január|február|március|április|május|június|július|augusztus|szeptember|október"
-            "|november|december"
-        ),
+        ("január|február|március|április|május|június|július|augusztus|szeptember|október|november|december"),
         "I.|II.|III.|IV.|V.|VI.|VII.|VIII.|IX.|X.|XI.|XII.",
-        (
-            "január|február|március|április|május|június|július|augusztus|szeptember|október"
-            "|november|december"
-        ),
+        ("január|február|március|április|május|június|július|augusztus|szeptember|október|november|december"),
         "I.|II.|III.|IV.|V.|VI.|VII.|VIII.|IX.|X.|XI.|XII.",
     ),
     "ro": (
         "duminică|luni|marți|miercuri|joi|vineri|sâmbătă",
         "dum.|lun.|mar.|mie.|joi.|vin.|sâm.",
-        (
-            "ianuarie|februarie|martie|aprilie|mai|iunie|iulie|august|septembrie|octombrie"
-            "|noiembrie|decembrie"
-        ),
+        ("ianuarie|februarie|martie|aprilie|mai|iunie|iulie|august|septembrie|octombrie|noiembrie|decembrie"),
         "ian|febr|mar|apr|mai|iun|iul|aug|sept|oct|nov|dec",
-        (
-            "ianuarie|februarie|martie|aprilie|mai|iunie|iulie|august|septembrie|octombrie"
-            "|noiembrie|decembrie"
-        ),
+        ("ianuarie|februarie|martie|aprilie|mai|iunie|iulie|august|septembrie|octombrie|noiembrie|decembrie"),
         "ian|febr|mar|apr|mai|iun|iul|aug|sept|oct|nov|dec",
     ),
     "bg": (
@@ -284,15 +230,9 @@ _NAMES: "dict[str, tuple[str, str, str, str, str, str]]" = {
     "hr": (
         "nedjelja|ponedjeljak|utorak|srijeda|četvrtak|petak|subota",
         "ned|pon|uto|sri|čet|pet|sub",
-        (
-            "siječanj|veljača|ožujak|travanj|svibanj|lipanj|srpanj|kolovoz|rujan|listopad"
-            "|studeni|prosinac"
-        ),
+        ("siječanj|veljača|ožujak|travanj|svibanj|lipanj|srpanj|kolovoz|rujan|listopad|studeni|prosinac"),
         "sij|velj|ožu|tra|svi|lip|srp|kol|ruj|lis|stu|pro",
-        (
-            "siječnja|veljače|ožujka|travnja|svibnja|lipnja|srpnja|kolovoza|rujna|listopada"
-            "|studenog|prosinca"
-        ),
+        ("siječnja|veljače|ožujka|travnja|svibnja|lipnja|srpnja|kolovoza|rujna|listopada|studenog|prosinca"),
         "sij|velj|ožu|tra|svi|lip|srp|kol|ruj|lis|stu|pro",
     ),
     "sl": (
@@ -314,15 +254,9 @@ _NAMES: "dict[str, tuple[str, str, str, str, str, str]]" = {
     "et": (
         "pühapäev|esmaspäev|teisipäev|kolmapäev|neljapäev|reede|laupäev",
         "P|E|T|K|N|R|L",
-        (
-            "jaanuar|veebruar|märts|aprill|mai|juuni|juuli|august|september|oktoober|november"
-            "|detsember"
-        ),
+        ("jaanuar|veebruar|märts|aprill|mai|juuni|juuli|august|september|oktoober|november|detsember"),
         "jaan|veebr|märts|apr|mai|juuni|juuli|aug|sept|okt|nov|dets",
-        (
-            "jaanuar|veebruar|märts|aprill|mai|juuni|juuli|august|september|oktoober|november"
-            "|detsember"
-        ),
+        ("jaanuar|veebruar|märts|aprill|mai|juuni|juuli|august|september|oktoober|november|detsember"),
         "jaan|veebr|märts|apr|mai|juuni|juuli|aug|sept|okt|nov|dets",
     ),
     "lv": (
@@ -340,20 +274,11 @@ _NAMES: "dict[str, tuple[str, str, str, str, str, str]]" = {
         "jan|feb|mar|apr|mai|jūn|jūl|aug|sep|okt|nov|dec",
     ),
     "lt": (
-        (
-            "sekmadienis|pirmadienis|antradienis|trečiadienis|ketvirtadienis|penktadienis"
-            "|šeštadienis"
-        ),
+        ("sekmadienis|pirmadienis|antradienis|trečiadienis|ketvirtadienis|penktadienis|šeštadienis"),
         "Sk|Pr|An|Tr|Kt|Pn|Št",
-        (
-            "sausis|vasaris|kovas|balandis|gegužė|birželis|liepa|rugpjūtis|rugsėjis|spalis"
-            "|lapkritis|gruodis"
-        ),
+        ("sausis|vasaris|kovas|balandis|gegužė|birželis|liepa|rugpjūtis|rugsėjis|spalis|lapkritis|gruodis"),
         "Sau|Vas|Kov|Bal|Geg|Bir|Lie|Rgp|Rgs|Spl|Lap|Grd",
-        (
-            "sausio|vasario|kovo|balandžio|gegužės|birželio|liepos|rugpjūčio|rugsėjo|spalio"
-            "|lapkričio|gruodžio"
-        ),
+        ("sausio|vasario|kovo|balandžio|gegužės|birželio|liepos|rugpjūčio|rugsėjo|spalio|lapkričio|gruodžio"),
         "Sau|Vas|Kov|Bal|Geg|Bir|Lie|Rgp|Rgs|Spl|Lap|Grd",
     ),
     "ru": (
@@ -367,15 +292,9 @@ _NAMES: "dict[str, tuple[str, str, str, str, str, str]]" = {
     "uk": (
         "неділя|понеділок|вівторок|середа|четвер|п'ятниця|субота",
         "Нд|Пн|Вт|Ср|Чт|Пт|Сб",
-        (
-            "Січень|Лютий|Березень|Квітень|Травень|Червень|Липень|Серпень|Вересень|Жовтень"
-            "|Листопад|Грудень"
-        ),
+        ("Січень|Лютий|Березень|Квітень|Травень|Червень|Липень|Серпень|Вересень|Жовтень|Листопад|Грудень"),
         "січ|лют|бер|квт|трв|чер|лип|сер|вер|жов|лис|гру",
-        (
-            "січня|лютого|березня|квітня|травня|червня|липня|серпня|вересня|жовтня|листопада"
-            "|грудня"
-        ),
+        ("січня|лютого|березня|квітня|травня|червня|липня|серпня|вересня|жовтня|листопада|грудня"),
         "січ|лют|бер|квт|трв|чер|лип|сер|вер|жов|лис|гру",
     ),
     "be": (
@@ -435,15 +354,9 @@ _NAMES: "dict[str, tuple[str, str, str, str, str, str]]" = {
     "id": (
         "Minggu|Senin|Selasa|Rabu|Kamis|Jumat|Sabtu",
         "Min|Sen|Sel|Rab|Kam|Jum|Sab",
-        (
-            "Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November"
-            "|Desember"
-        ),
+        ("Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember"),
         "Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agu|Sep|Okt|Nov|Des",
-        (
-            "Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November"
-            "|Desember"
-        ),
+        ("Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember"),
         "Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agu|Sep|Okt|Nov|Des",
     ),
     "ms": (
@@ -457,15 +370,9 @@ _NAMES: "dict[str, tuple[str, str, str, str, str, str]]" = {
     "th": (
         "อาทิตย์|จันทร์|อังคาร|พุธ|พฤหัสบดี|ศุกร์|เสาร์",
         "อา.|จ.|อ.|พ.|พฤ.|ศ.|ส.",
-        (
-            "มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม"
-            "|พฤศจิกายน|ธันวาคม"
-        ),
+        ("มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม"),
         "ม.ค.|ก.พ.|มี.ค.|เม.ย.|พ.ค.|มิ.ย.|ก.ค.|ส.ค.|ก.ย.|ต.ค.|พ.ย.|ธ.ค.",
-        (
-            "มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม"
-            "|พฤศจิกายน|ธันวาคม"
-        ),
+        ("มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม"),
         "ม.ค.|ก.พ.|มี.ค.|เม.ย.|พ.ค.|มิ.ย.|ก.ค.|ส.ค.|ก.ย.|ต.ค.|พ.ย.|ธ.ค.",
     ),
     "hi": (
@@ -489,12 +396,30 @@ _LOCALE_NAMES: "dict[str, tuple[str, str, str, str, str, str]]" = {
 }
 _POINT_LOCALES = frozenset(
     {
-        "de-CH", "en-AU", "en-CA", "en-GB", "en-IE", "en-IN", "en-NZ", "en-US", "en-ZA",
-        "es-MX", "es-PE", "fr-CH", "he-IL", "hi-IN", "it-CH", "ja-JP", "ko-KR", "ms-MY",
-        "th-TH", "zh-CN", "zh-HK", "zh-TW",
+        "de-CH",
+        "en-AU",
+        "en-CA",
+        "en-GB",
+        "en-IE",
+        "en-IN",
+        "en-NZ",
+        "en-US",
+        "en-ZA",
+        "es-MX",
+        "es-PE",
+        "fr-CH",
+        "he-IL",
+        "hi-IN",
+        "it-CH",
+        "ja-JP",
+        "ko-KR",
+        "ms-MY",
+        "th-TH",
+        "zh-CN",
+        "zh-HK",
+        "zh-TW",
     }
 )
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -527,6 +452,11 @@ def _date_names(language: "str | None", country: "str | None") -> "_DateNames | 
         tuple(names.split("|")) for names in entry
     )
     return _DateNames(
-        days, short_days, months, short_months, with_day, short_with_day,
+        days,
+        short_days,
+        months,
+        short_months,
+        with_day,
+        short_with_day,
         "." if locale in _POINT_LOCALES else ",",
     )

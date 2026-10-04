@@ -11,6 +11,7 @@ Basée à l'origine sur les scripts manuels historiques du module interne,
 
 Et une section dédiée à l'écriture (Cell.value = ... / ODSReader.save()).
 """
+
 import datetime as dt
 import math
 import warnings
@@ -53,6 +54,7 @@ from odsslicer.sheet import _repeat
 # ---------------------------------------------------------------------------
 # Sheet.address : conversion "A1" / "A1:B3" / "A:B" / "1:2" -> index/slice
 # ---------------------------------------------------------------------------
+
 
 def test_address_simple_cell():
     assert Sheet.address("A1") == (0, 0)
@@ -108,6 +110,7 @@ def test_address_invalid_raises(bad):
 # Sheet.string_address / string_to_col : conversion index <-> lettres
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "col, expected",
     [
@@ -149,6 +152,7 @@ def test_string_to_col_matches_docstring_examples():
 # ---------------------------------------------------------------------------
 # ODSReader / Sheet : accès aux cellules sur TEST.ods, feuille Sheet1
 # ---------------------------------------------------------------------------
+
 
 def test_reader_lists_sheet_names(reader):
     assert set(reader.sheets_names) >= {
@@ -243,6 +247,7 @@ def test_cell_address_matches_position(sheet1):
 # ArrayValues : dimensions, to_list / to_numpy / to_vector, égalité
 # ---------------------------------------------------------------------------
 
+
 def test_array_values_dimension_and_size(sheet1):
     row = sheet1["A1:B1"]
     assert row.dimension == 1
@@ -276,6 +281,7 @@ def test_array_values_equality_compares_values_not_identity(sheet1):
 # Lignes/colonnes répétées (compression ODS "number-rows/columns-repeated")
 # ---------------------------------------------------------------------------
 
+
 def test_repeated_rows_and_cols_shape(sheet_repeat):
     assert sheet_repeat.to_numpy().shape == sheet_repeat.size == (9, 6)
 
@@ -298,6 +304,7 @@ def test_get_col_out_of_bounds_returns_empty_not_indexerror(sheet_repeat):
 # Feuille vide : toutes les cellules doivent renvoyer None avec la bonne forme
 # ---------------------------------------------------------------------------
 
+
 def test_empty_sheet_shapes(sheet_empty):
     assert sheet_empty["A1"].value is None
     assert sheet_empty["ZZ1"].value is None
@@ -318,6 +325,7 @@ def test_empty_sheet_ranges_have_correct_shape(sheet_empty):
 # Cellules fusionnées / masquées (SheetFusion)
 # ---------------------------------------------------------------------------
 
+
 def test_merged_and_hidden_cells(sheet_fusion):
     assert sheet_fusion.size == (9, 4)
     assert sheet_fusion["A4"].value == 5  # hidden in cols
@@ -329,6 +337,7 @@ def test_merged_and_hidden_cells(sheet_fusion):
 # ---------------------------------------------------------------------------
 # empty_row / empty_col : cas générique et cas avec un `slice` explicite
 # ---------------------------------------------------------------------------
+
 
 def test_empty_row_default(sheet1):
     row = sheet1.empty_row(0)
@@ -357,6 +366,7 @@ def test_empty_col_with_slice(sheet1):
 # ---------------------------------------------------------------------------
 # Avertissement "lignes de longueurs différentes" (Sheet.__init__)
 # ---------------------------------------------------------------------------
+
 
 class _FakeTag(dict):
     """Minimal stand-in for the BeautifulSoup tag Sheet.__init__ expects."""
@@ -391,6 +401,7 @@ def test_uniform_rows_do_not_trigger_warning(monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 # Écriture : Cell.value = ... et ODSReader.save()
 # ---------------------------------------------------------------------------
+
 
 def test_write_string_float_date_time(writable_reader):
     s = writable_reader.sheet("Sheet1")
@@ -463,9 +474,9 @@ def test_reading_a_boolean_cell_does_not_use_office_value():
         'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
         'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">'
         '<table:table-cell office:value-type="boolean" office:boolean-value="true">'
-        '<text:p>VRAI</text:p></table:table-cell>'
+        "<text:p>VRAI</text:p></table:table-cell>"
         '<table:table-cell office:value-type="boolean" office:boolean-value="false">'
-        '<text:p>FAUX</text:p></table:table-cell>'
+        "<text:p>FAUX</text:p></table:table-cell>"
         "</root>"
     )
     from bs4 import BeautifulSoup
@@ -762,9 +773,7 @@ def test_a_missing_value_leaves_the_cell_empty(writable_reader, missing):
         pytest.param(np.datetime64("20000-01-01"), id="datetime64 past year 9999"),
     ],
 )
-def test_a_value_no_cell_can_hold_raises_valueerror_and_writes_nothing(
-    writable_reader, value
-):
+def test_a_value_no_cell_can_hold_raises_valueerror_and_writes_nothing(writable_reader, value):
     s = writable_reader.sheet("Sheet1")
     before, size = s["A1"].value, s.size
     with pytest.raises(ValueError):
@@ -872,7 +881,7 @@ def test_growing_the_only_sheet_of_a_document_with_nothing_to_copy_from():
         'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
         'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">'
         '<table:table table:name="Sheet1">'
-        '<table:table-column/><table:table-row><table:table-cell/></table:table-row>'
+        "<table:table-column/><table:table-row><table:table-cell/></table:table-row>"
         "</table:table></root>"
     )
     table = BeautifulSoup(xml, "xml").find("table:table")
@@ -1044,6 +1053,7 @@ def test_save_round_trip_after_unrepeat_and_unmerge(writable_reader, tmp_path):
 # The damage only shows once saved: read back from the file.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     ("address", "values", "written"),
     [
@@ -1069,9 +1079,7 @@ def test_writing_into_a_run_of_repeated_rows_changes_only_the_written_cells(
     assert cells_with_content(s) == {"A1": "a", "B1": "b", "A7": "end", **written}
 
 
-def test_writing_past_the_width_of_a_libreoffice_run_of_repeated_rows(
-    writable_reader, tmp_path
-):
+def test_writing_past_the_width_of_a_libreoffice_run_of_repeated_rows(writable_reader, tmp_path):
     # Sheet2Repeat, saved by LibreOffice: rows 3 to 8 are one element whose
     # cells are one repeated element too, and F9 comes after them
     s = writable_reader.sheet("Sheet2Repeat")
@@ -1100,9 +1108,7 @@ def test_growing_a_run_of_repeated_rows_widens_its_element_once(repeated_run_ods
     ("col", "expected"),
     [(0, {"A1": "b"}), (1, {"A1": "a", "A7": "end"})],
 )
-def test_deleting_a_column_through_a_run_of_repeated_cells(
-    repeated_run_ods, col, expected
-):
+def test_deleting_a_column_through_a_run_of_repeated_cells(repeated_run_ods, col, expected):
     # regression: ValueError, the run's repeated cell being split once per
     # row of the run - the second time once it had left the tree
     r = ODSReader(repeated_run_ods)
@@ -1111,9 +1117,7 @@ def test_deleting_a_column_through_a_run_of_repeated_cells(
     assert cells_with_content(ODSReader(repeated_run_ods).sheet("Sheet1")) == expected
 
 
-def test_deleting_a_column_of_a_libreoffice_sheet_with_repeated_rows(
-    writable_reader, tmp_path
-):
+def test_deleting_a_column_of_a_libreoffice_sheet_with_repeated_rows(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet2Repeat")
     s.delete_column(2)
     out = tmp_path / "out.ods"
@@ -1170,9 +1174,7 @@ def test_empty_columns_between_data_stay_in_the_grid(tmp_path):
         ("AB1", {"A1": "a", "Z1": "z", "AB1": "x"}),
     ],
 )
-def test_writing_around_empty_columns_between_data_lands_where_written(
-    tmp_path, address, expected
-):
+def test_writing_around_empty_columns_between_data_lands_where_written(tmp_path, address, expected):
     # regression: B1 raised IndexError, and Z1 landed in AX1
     path = ods_with_sheet(tmp_path / "gap.ods", _GAP_COLUMNS_XML)
     r = ODSReader(path)
@@ -1229,11 +1231,7 @@ def test_the_rows_around_the_filler_of_a_full_height_sheet(tmp_path, after_fille
 
 
 def test_empty_rows_padding_a_sheet_to_its_full_height_are_still_left_out(tmp_path):
-    xml = (
-        "<table:table-column/>"
-        + table_row(text_cell("a"))
-        + table_row(empty_cells(), repeat=1_048_575)
-    )
+    xml = "<table:table-column/>" + table_row(text_cell("a")) + table_row(empty_cells(), repeat=1_048_575)
     path = ods_with_sheet(tmp_path / "padded.ods", xml)
     r = ODSReader(path)
     assert r.sheet("Sheet1").size == (1, 1)
@@ -1259,12 +1257,8 @@ _YELLOW_XML = (
     ("address", "formatted"),
     [("D1", True), ("E2", True), ("R1", True), ("S1", False), ("T2", False)],
 )
-def test_writing_past_the_data_lands_where_written_keeping_the_formatting_there(
-    tmp_path, address, formatted
-):
-    path = ods_with_sheet(
-        tmp_path / "formatted.ods", _FORMATTED_PAST_DATA_XML, _YELLOW_XML
-    )
+def test_writing_past_the_data_lands_where_written_keeping_the_formatting_there(tmp_path, address, formatted):
+    path = ods_with_sheet(tmp_path / "formatted.ods", _FORMATTED_PAST_DATA_XML, _YELLOW_XML)
     r = ODSReader(path)
     s = r.sheet("Sheet1")
     assert s.size == (2, 3)
@@ -1283,8 +1277,7 @@ def _logical_cells_styled(path, style_name):
     `style_name`, counting each repetition of a repeated element."""
     table = ODSReader(path).tables[0]
     return sum(
-        _repeat(r, "table:number-rows-repeated")
-        * _repeat(cell, "table:number-columns-repeated")
+        _repeat(r, "table:number-rows-repeated") * _repeat(cell, "table:number-columns-repeated")
         for r in table.find_all("table:table-row")
         for cell in r.find_all(TAG_CELL, recursive=False)
         if cell.get("table:style-name") == style_name
@@ -1378,9 +1371,11 @@ _WHOLE_ROW_YELLOW = (
 def _whole_row_yellow_sheet(tmp_path, name="wholerow.ods"):
     """A sheet whose first row is yellow as a whole, as LibreOffice writes it:
     its three cells, then one repeated to the sheet's last column."""
-    xml = '<table:table-column table:number-columns-repeated="3"/>' + table_row(
-        text_cell("a"), text_cell("b"), text_cell("c"), empty_cells(16381, style="yellow")
-    ) + table_row(text_cell("d"), empty_cells(2))
+    xml = (
+        '<table:table-column table:number-columns-repeated="3"/>'
+        + table_row(text_cell("a"), text_cell("b"), text_cell("c"), empty_cells(16381, style="yellow"))
+        + table_row(text_cell("d"), empty_cells(2))
+    )
     return ods_with_sheet(tmp_path / name, xml, _WHOLE_ROW_YELLOW)
 
 
@@ -1499,9 +1494,7 @@ def test_a_note_right_of_the_data_is_in_the_grid(tmp_path, gap):
     assert [len(row) for row in r.sheet("Sheet1").rows] == [gap + 2, gap + 2]
     assert r.sheet("Sheet1")[0, gap + 1].comment.text == "far right"
     r.save()
-    assert addresses_holding(saved_table(path), _is_note) == [
-        Sheet.string_address(0, gap + 1)
-    ]
+    assert addresses_holding(saved_table(path), _is_note) == [Sheet.string_address(0, gap + 1)]
 
 
 def test_a_note_far_below_the_data_is_in_the_grid(tmp_path):
@@ -1659,14 +1652,10 @@ _FAR_BELOW_XML = (
         pytest.param(lambda s: s.insert_rows(1, 2), (3, 1), "A1502", id="insert_rows(1, 2)"),
         # taking back only the rows needed from the run of empty rows
         pytest.param(lambda s: setattr(s["A10"], "value", "b"), (10, 1), "A1500", id="write A10"),
-        pytest.param(
-            lambda s: setattr(s["A1500"], "value", "b"), (1500, 1), "A1500", id="write A1500"
-        ),
+        pytest.param(lambda s: setattr(s["A1500"], "value", "b"), (1500, 1), "A1500", id="write A1500"),
     ],
 )
-def test_a_shape_far_below_the_data_stays_where_libreoffice_has_it(
-    tmp_path, edit, size, shape_at
-):
+def test_a_shape_far_below_the_data_stays_where_libreoffice_has_it(tmp_path, edit, size, shape_at):
     # regression: deleted; and the empty rows above it must not give back the
     # rows inserted, which would move it up: the sheet is far from full
     path = ods_with_sheet(tmp_path / "far.ods", _FAR_BELOW_XML)
@@ -1748,9 +1737,7 @@ def test_insertions_keep_a_full_size_sheet_full_size(tmp_path):
 
 def test_inserting_columns_keeps_the_formatted_cells_past_the_data(tmp_path):
     # far from the sheet's maximum width, the rows give nothing back
-    path = ods_with_sheet(
-        tmp_path / "formatted.ods", _FORMATTED_PAST_DATA_XML, _YELLOW_XML
-    )
+    path = ods_with_sheet(tmp_path / "formatted.ods", _FORMATTED_PAST_DATA_XML, _YELLOW_XML)
     r = ODSReader(path)
     r.sheet("Sheet1").insert_columns(0, 2)
     r.save()
@@ -1859,53 +1846,98 @@ def _ranges(plot, categories, values, label, end):
 _CHART_EDITS = {
     "insert_rows(4)": (
         lambda s: s.insert_rows(4),  # inside the days: they stretch
-        _ranges("Sheet1.A1:Sheet1.B8", "Sheet1.A2:Sheet1.A8", "Sheet1.B2:Sheet1.B8",
-                "Sheet1.B1:Sheet1.B1", "Sheet1.F11"),
+        _ranges(
+            "Sheet1.A1:Sheet1.B8",
+            "Sheet1.A2:Sheet1.A8",
+            "Sheet1.B2:Sheet1.B8",
+            "Sheet1.B1:Sheet1.B1",
+            "Sheet1.F11",
+        ),
     ),
     "insert_rows(0)": (
         lambda s: s.insert_rows(0),  # above everything: all moves down
-        _ranges("Sheet1.A2:Sheet1.B8", "Sheet1.A3:Sheet1.A8", "Sheet1.B3:Sheet1.B8",
-                "Sheet1.B2:Sheet1.B2", "Sheet1.F11"),
+        _ranges(
+            "Sheet1.A2:Sheet1.B8",
+            "Sheet1.A3:Sheet1.A8",
+            "Sheet1.B3:Sheet1.B8",
+            "Sheet1.B2:Sheet1.B2",
+            "Sheet1.F11",
+        ),
     ),
     "delete_rows([3])": (
         lambda s: s.delete_rows([3]),
-        _ranges("Sheet1.A1:Sheet1.B6", "Sheet1.A2:Sheet1.A6", "Sheet1.B2:Sheet1.B6",
-                "Sheet1.B1:Sheet1.B1", "Sheet1.F9"),
+        _ranges(
+            "Sheet1.A1:Sheet1.B6",
+            "Sheet1.A2:Sheet1.A6",
+            "Sheet1.B2:Sheet1.B6",
+            "Sheet1.B1:Sheet1.B1",
+            "Sheet1.F9",
+        ),
     ),
     # every day deleted: a chart has no #REF!, its ranges keep their address
     "delete_rows(days)": (
         lambda s: s.delete_rows(range(1, 7)),
-        _ranges("Sheet1.A1:Sheet1.B1", "Sheet1.A2:Sheet1.A7", "Sheet1.B2:Sheet1.B7",
-                "Sheet1.B1:Sheet1.B1", "Sheet1.F4"),
+        _ranges(
+            "Sheet1.A1:Sheet1.B1",
+            "Sheet1.A2:Sheet1.A7",
+            "Sheet1.B2:Sheet1.B7",
+            "Sheet1.B1:Sheet1.B1",
+            "Sheet1.F4",
+        ),
     ),
     "insert_columns(1)": (
         lambda s: s.insert_columns(1),
-        _ranges("Sheet1.A1:Sheet1.C7", "Sheet1.A2:Sheet1.A7", "Sheet1.C2:Sheet1.C7",
-                "Sheet1.C1:Sheet1.C1", "Sheet1.G10"),
+        _ranges(
+            "Sheet1.A1:Sheet1.C7",
+            "Sheet1.A2:Sheet1.A7",
+            "Sheet1.C2:Sheet1.C7",
+            "Sheet1.C1:Sheet1.C1",
+            "Sheet1.G10",
+        ),
     ),
     "delete_column(1)": (
         lambda s: s.delete_column(1),  # the visits, deleted whole
-        _ranges("Sheet1.A1:Sheet1.A7", "Sheet1.A2:Sheet1.A7", "Sheet1.B2:Sheet1.B7",
-                "Sheet1.B1:Sheet1.B1", "Sheet1.E10"),
+        _ranges(
+            "Sheet1.A1:Sheet1.A7",
+            "Sheet1.A2:Sheet1.A7",
+            "Sheet1.B2:Sheet1.B7",
+            "Sheet1.B1:Sheet1.B1",
+            "Sheet1.E10",
+        ),
     ),
     # the chart's end cell deleted: it keeps its address, the cell taking its
     # place, as LibreOffice keeps it when the row or the column goes
     "delete_rows([9])": (
         lambda s: s.delete_rows([9]),
-        _ranges("Sheet1.A1:Sheet1.B7", "Sheet1.A2:Sheet1.A7", "Sheet1.B2:Sheet1.B7",
-                "Sheet1.B1:Sheet1.B1", "Sheet1.F10"),
+        _ranges(
+            "Sheet1.A1:Sheet1.B7",
+            "Sheet1.A2:Sheet1.A7",
+            "Sheet1.B2:Sheet1.B7",
+            "Sheet1.B1:Sheet1.B1",
+            "Sheet1.F10",
+        ),
     ),
     "delete_column(5)": (
         lambda s: s.delete_column(5),
-        _ranges("Sheet1.A1:Sheet1.B7", "Sheet1.A2:Sheet1.A7", "Sheet1.B2:Sheet1.B7",
-                "Sheet1.B1:Sheet1.B1", "Sheet1.F10"),
+        _ranges(
+            "Sheet1.A1:Sheet1.B7",
+            "Sheet1.A2:Sheet1.A7",
+            "Sheet1.B2:Sheet1.B7",
+            "Sheet1.B1:Sheet1.B1",
+            "Sheet1.F10",
+        ),
     ),
     # two edits in a row: the chart is read once, and the second starts
     # where the first left it
     "insert_rows(4), insert_columns(1)": (
         lambda s: (s.insert_rows(4), s.insert_columns(1)),
-        _ranges("Sheet1.A1:Sheet1.C8", "Sheet1.A2:Sheet1.A8", "Sheet1.C2:Sheet1.C8",
-                "Sheet1.C1:Sheet1.C1", "Sheet1.G11"),
+        _ranges(
+            "Sheet1.A1:Sheet1.C8",
+            "Sheet1.A2:Sheet1.A8",
+            "Sheet1.C2:Sheet1.C8",
+            "Sheet1.C1:Sheet1.C1",
+            "Sheet1.G11",
+        ),
     ),
 }
 
@@ -1929,8 +1961,11 @@ def test_a_chart_follows_its_sheet_renamed(tmp_path):
     r.rename_sheet("Sheet1", "Report")
     r.save()
     assert chart_ranges(path) == _ranges(
-        "Report.A1:Report.B7", "Report.A2:Report.A7", "Report.B2:Report.B7",
-        "Report.B1:Report.B1", "Report.F10",
+        "Report.A1:Report.B7",
+        "Report.A2:Report.A7",
+        "Report.B2:Report.B7",
+        "Report.B1:Report.B1",
+        "Report.F10",
     )
 
 
@@ -2034,6 +2069,7 @@ def test_save_defaults_to_overwriting_source_file(writable_reader, tmp_path):
 # Écriture : formatage du texte affiché appris d'un exemple existant
 # ---------------------------------------------------------------------------
 
+
 def test_percentage_display_text_learned_from_own_prior_state(writable_reader):
     s = writable_reader.sheet("Sheet1")
     assert s["A6"].text == "200,00 %"
@@ -2110,6 +2146,7 @@ def test_number_inference_falls_through_to_the_real_format_when_it_cannot_reprod
 # Écriture : texte affiché - repli sur une vraie lecture du format ODF
 # (plutôt qu'une heuristique par apprentissage) quand aucun exemple n'existe
 # ---------------------------------------------------------------------------
+
 
 def _blank_document():
     # a document freshly created with ODSReader.new() has exactly one
@@ -2239,9 +2276,7 @@ def _saved_with_raw_values(tmp_path, cells):
         ("time", "PT09H30M00S", "09:30:00", dt.time(9, 30)),
     ],
 )
-def test_a_sheet_holding_a_date_time_or_a_long_duration_loads(
-    tmp_path, value_type, raw, text, expected
-):
+def test_a_sheet_holding_a_date_time_or_a_long_duration_loads(tmp_path, value_type, raw, text, expected):
     # regression (issue #4): one such cell made loading the whole sheet raise
     # ValueError, so not even A1 could be read
     path = _saved_with_raw_values(tmp_path, [(value_type, raw, text)])
@@ -2270,10 +2305,7 @@ def test_an_unreadable_value_reads_as_its_text_with_one_warning_for_the_sheet(tm
         s = ODSReader(path).sheet("Sheet1")
     (message,) = [str(w.message) for w in caught if "not readable" in str(w.message)]
     assert "sheet 'Sheet1'" in message
-    assert (
-        "A2 (date value '30/11/2023'), A3 (time value 'P1Y'),"
-        " A4 (float value 'n/a') and 1 more" in message
-    )
+    assert "A2 (date value '30/11/2023'), A3 (time value 'P1Y'), A4 (float value 'n/a') and 1 more" in message
     assert s["A1"].value == "label"
     assert [s[row, 0].value for row in range(1, 6)] == [
         "30/11/2023",
@@ -2426,9 +2458,7 @@ def test_a_time_value_reads_as_its_new_format_says(tmp_path, change, address, ex
 
 def test_an_aware_datetime_is_written_in_utc(writable_reader):
     s = writable_reader.sheet("Sheet1")
-    s["A8"].value = dt.datetime(
-        2023, 11, 30, 13, tzinfo=dt.timezone(dt.timedelta(hours=5))
-    )
+    s["A8"].value = dt.datetime(2023, 11, 30, 13, tzinfo=dt.timezone(dt.timedelta(hours=5)))
     assert s["A8"].raw_value == "2023-11-30T08:00:00"
     assert s["A8"].value == dt.datetime(2023, 11, 30, 8)
 
@@ -2436,9 +2466,7 @@ def test_an_aware_datetime_is_written_in_utc(writable_reader):
 def test_date_time_display_reads_the_real_format_with_no_example_anywhere():
     r = _blank_document()
     s = r.sheet("Sheet1")
-    s["A1"].style.number_format = NumberFormat.create(
-        r, "date", components=[*_DMY, ("text", " "), *_HMS]
-    )
+    s["A1"].style.number_format = NumberFormat.create(r, "date", components=[*_DMY, ("text", " "), *_HMS])
     s["A1"].value = dt.datetime(2023, 11, 30, 13, 5, 9)
     assert s["A1"].text == "30/11/2023 13:05:09"
 
@@ -2447,9 +2475,7 @@ def test_a_date_in_a_date_time_format_displays_as_its_midnight():
     # used to raise AttributeError: a date has no .hour to render
     r = _blank_document()
     s = r.sheet("Sheet1")
-    s["A1"].style.number_format = NumberFormat.create(
-        r, "date", components=[*_DMY, ("text", " "), *_HMS]
-    )
+    s["A1"].style.number_format = NumberFormat.create(r, "date", components=[*_DMY, ("text", " "), *_HMS])
     s["A1"].value = dt.date(2023, 11, 30)
     assert s["A1"].text == "30/11/2023 00:00:00"
 
@@ -2465,9 +2491,7 @@ def test_a_date_in_a_date_time_format_displays_as_its_midnight():
         (True, dt.timedelta(hours=-1, minutes=-30), "-01:30:00"),
     ],
 )
-def test_duration_display_follows_the_real_format_like_libreoffice(
-    elapsed, value, text
-):
+def test_duration_display_follows_the_real_format_like_libreoffice(elapsed, value, text):
     r = _blank_document()
     s = r.sheet("Sheet1")
     fmt = NumberFormat.create(r, "time", components=_HMS)
@@ -2481,9 +2505,7 @@ def test_duration_display_follows_the_real_format_like_libreoffice(
 def test_an_elapsed_minutes_format_counts_the_hours_in_the_minutes():
     r = _blank_document()
     s = r.sheet("Sheet1")
-    fmt = NumberFormat.create(
-        r, "time", components=[("minutes", "long"), ("text", ":"), ("seconds", "long")]
-    )
+    fmt = NumberFormat.create(r, "time", components=[("minutes", "long"), ("text", ":"), ("seconds", "long")])
     fmt._tag.attrs["number:truncate-on-overflow"] = "false"
     s["A1"].style.number_format = fmt
     # within a day, so it reads back as a time of day
@@ -2522,9 +2544,7 @@ def _date_formatted(path, *addresses):
 
 
 def test_date_time_display_is_learnt_from_another_date_time_cell(tmp_path):
-    path = _saved_with_raw_values(
-        tmp_path, [("date", "2023-11-30T13:00:00", "30/11/2023 13:00")]
-    )
+    path = _saved_with_raw_values(tmp_path, [("date", "2023-11-30T13:00:00", "30/11/2023 13:00")])
     s = _date_formatted(path, "A3", "A4")
     s["A3"].value = dt.datetime(2024, 1, 5, 8, 30)
     s["A4"].value = dt.date(2024, 1, 6)  # a bare date, as LibreOffice saves a midnight
@@ -2700,9 +2720,7 @@ _FORMATTED_COLUMNS_XML = (
 
 @pytest.fixture()
 def formatted_columns(tmp_path):
-    path = ods_with_sheet(
-        tmp_path / "columns.ods", _FORMATTED_COLUMNS_XML, _COLUMN_STYLES_XML
-    )
+    path = ods_with_sheet(tmp_path / "columns.ods", _FORMATTED_COLUMNS_XML, _COLUMN_STYLES_XML)
     return ODSReader(path)
 
 
@@ -2847,7 +2865,7 @@ def test_a_date_learns_its_text_only_from_a_cell_of_its_own_format(tmp_path, lay
 
 _SHORT_DATE_STYLE = (
     '<number:date-style style:name="Nshort"><number:month number:style="long"/>'
-    "<number:text>/</number:text><number:day number:style=\"long\"/>"
+    '<number:text>/</number:text><number:day number:style="long"/>'
     "<number:text>/</number:text><number:year/></number:date-style>"
     '<style:style style:name="short" style:family="table-cell" style:data-style-name="Nshort"/>'
 )
@@ -2861,8 +2879,9 @@ def _written_in(tmp_path, number_style, value):
     family = "time" if isinstance(value, (dt.time, dt.timedelta)) else "date"
     styles = (
         _SHORT_DATE_STYLE
-        + number_style.replace("<style", f'<number:{family}-style style:name="N1"', 1)
-        .replace("</style>", f"</number:{family}-style>")
+        + number_style.replace("<style", f'<number:{family}-style style:name="N1"', 1).replace(
+            "</style>", f"</number:{family}-style>"
+        )
         + '<style:style style:name="own" style:family="table-cell" style:data-style-name="N1"/>'
     )
     example = (
@@ -2870,9 +2889,7 @@ def _written_in(tmp_path, number_style, value):
         ' office:date-value="2026-09-13"><text:p>09/13/26</text:p></table:table-cell>'
     )
     xml = (
-        "<table:table-column/>"
-        + table_row(example)
-        + table_row('<table:table-cell table:style-name="own"/>')
+        "<table:table-column/>" + table_row(example) + table_row('<table:table-cell table:style-name="own"/>')
     )
     r = ODSReader(ods_with_sheet(tmp_path / "formats.ods", xml, styles))
     r.sheet("Sheet1")["A2"].value = value
@@ -2924,8 +2941,7 @@ _YEAR = '<number:year number:style="long"/>'
         ),
         # a language without names: ISO 8601, never A1's layout
         pytest.param(
-            f'<style number:language="tlh">{_DAY_LONG}<number:text> </number:text>'
-            "<number:day/></style>",
+            f'<style number:language="tlh">{_DAY_LONG}<number:text> </number:text><number:day/></style>',
             "2026-09-27",
             id="unknown language",
         ),
@@ -3004,9 +3020,7 @@ _HMS_STYLE = (
         ),
     ],
 )
-def test_fractions_of_a_second_show_as_libreoffice_shows_them(
-    tmp_path, number_style, value, expected
-):
+def test_fractions_of_a_second_show_as_libreoffice_shows_them(tmp_path, number_style, value, expected):
     # regression: the fraction was dropped, 01:24 for 01:24.75
     assert _written_in(tmp_path, number_style, value) == expected
 
@@ -3031,6 +3045,7 @@ def test_a_duration_under_a_day_shows_as_a_duration(value, text):
 # ---------------------------------------------------------------------------
 # Écriture : nouvelles feuilles (ODSReader.add_sheet)
 # ---------------------------------------------------------------------------
+
 
 def test_add_sheet_creates_an_empty_sheet(writable_reader):
     before = list(writable_reader.sheets_names)
@@ -3122,6 +3137,7 @@ def test_save_round_trip_growing_from_empty(writable_reader, tmp_path):
 # Écriture : formules (Cell.formula)
 # ---------------------------------------------------------------------------
 
+
 def test_write_formula_normalizes_the_of_prefix(writable_reader):
     s = writable_reader.sheet("Sheet1")
     s["C1"].formula = "=[.A2]+[.A3]"
@@ -3200,6 +3216,7 @@ def test_write_formula_translates_sheet_qualified_references(writable_reader):
 # ---------------------------------------------------------------------------
 # Écriture : formules paramétrées par cellule ({r}/{c}) via Cell.formula
 # ---------------------------------------------------------------------------
+
 
 def test_formula_template_expands_row_and_column(writable_reader):
     s = writable_reader.sheet("Sheet1")
@@ -3293,6 +3310,7 @@ def test_formula_template_doubled_braces_around_plain_text_stay_literal(writable
 # ---------------------------------------------------------------------------
 # Écriture sur des sélections multi-cellules (ArrayValues.value / .formula)
 # ---------------------------------------------------------------------------
+
 
 def test_slice_value_broadcasts_a_scalar(writable_reader):
     s = writable_reader.sheet("Sheet1")
@@ -3424,6 +3442,7 @@ def test_save_round_trip_after_writing_a_formula(writable_reader, tmp_path):
 # Écriture : lecture amicale d'une formule (Cell.formula_friendly)
 # ---------------------------------------------------------------------------
 
+
 def test_formula_friendly_translates_odf_syntax_back_to_a1(writable_reader):
     s = writable_reader.sheet("Sheet1")
     s["C1"].formula = "A2+A3"
@@ -3474,7 +3493,7 @@ def test_formula_friendly_on_a_real_complex_formula():
         '<root xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
         'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
         'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">'
-        '<table:table-cell table:formula=\'of:=IF(OFFSET([$Notes.$C$3];[.I$1];'
+        "<table:table-cell table:formula='of:=IF(OFFSET([$Notes.$C$3];[.I$1];"
         '[.$A3]+[.$A$1])=0;"";OFFSET([$Notes.$C$3];[.I$1];[.$A3]+[.$A$1]))\'>'
         "<text:p/></table:table-cell></root>"
     )
@@ -3498,6 +3517,7 @@ def test_formula_friendly_round_trips_through_a_write(writable_reader):
 # ---------------------------------------------------------------------------
 # Écriture : recopie d'une formule (Cell.fill_formula)
 # ---------------------------------------------------------------------------
+
 
 def test_fill_formula_down_a_column_shifts_relative_rows(writable_reader):
     s = writable_reader.sheet("Sheet1")
@@ -3562,6 +3582,7 @@ def test_save_round_trip_after_fill_formula(writable_reader, tmp_path):
 # ---------------------------------------------------------------------------
 # Nouveaux fichiers (ODSReader.new())
 # ---------------------------------------------------------------------------
+
 
 def test_new_creates_a_single_empty_sheet():
     doc = ODSReader.new()
@@ -3636,6 +3657,7 @@ def test_new_document_regular_reader_still_defaults_save_to_its_own_file(writabl
 # Styles (lecture) : Cell.style, CellStyle, NumberFormat
 # ---------------------------------------------------------------------------
 
+
 def test_cell_with_no_style_name_has_a_blank_writable_style(reader):
     # no `table:style-name` at all doesn't mean `.style` is None anymore -
     # writing to it (see the styles-write tests below) needs a real object
@@ -3675,7 +3697,11 @@ def test_style_resolves_date_format_components(reader):
     nf = s["A8"].style.number_format
     assert nf.family == "date"
     assert nf.components == [
-        ("day", "long"), ("text", "/"), ("month", "long"), ("text", "/"), ("year", "short"),
+        ("day", "long"),
+        ("text", "/"),
+        ("month", "long"),
+        ("text", "/"),
+        ("year", "short"),
     ]
 
 
@@ -3921,6 +3947,7 @@ def test_cell_style_diagonal_border_parses_like_a_regular_border():
 # Styles (lecture) : formats de nombre conditionnels (NumberFormat.resolve)
 # ---------------------------------------------------------------------------
 
+
 def test_number_format_resolves_conditional_currency_by_value(reader):
     # regression-shaped, real data: N108 (A7's currency format) is negative-
     # only (red text) with a style:map switching to N108P0 (no color) for
@@ -3951,6 +3978,7 @@ def test_number_format_condition_and_manual_resolve(reader):
 # ---------------------------------------------------------------------------
 # Styles (lecture) : ligne/colonne/feuille (RowStyle, ColumnStyle, TableStyle)
 # ---------------------------------------------------------------------------
+
 
 def test_row_style_resolves_height(reader):
     s = reader.sheet("Sheet1")
@@ -4010,6 +4038,7 @@ def test_row_style_no_reader_is_none():
 # merge_span / merge_master / merge_range (SheetFusion)
 # ---------------------------------------------------------------------------
 
+
 def test_unmerged_cell_reports_no_merge(sheet_fusion):
     c = sheet_fusion["D1"]
     assert c.is_merged is False
@@ -4051,6 +4080,7 @@ def test_rectangular_merge_span(sheet_fusion):
 # ---------------------------------------------------------------------------
 # Cellules fusionnées (écriture) : Sheet.merge / Sheet.unmerge
 # ---------------------------------------------------------------------------
+
 
 def test_merge_creates_a_master_and_covered_cells(writable_reader):
     s = writable_reader.sheet("Sheet1")
@@ -4135,6 +4165,7 @@ def test_save_round_trip_after_merge(writable_reader, tmp_path):
 # ---------------------------------------------------------------------------
 # Styles (écriture) : CellStyle
 # ---------------------------------------------------------------------------
+
 
 def test_setting_bold_forks_a_private_style(writable_reader):
     s = writable_reader.sheet("Sheet1")
@@ -4319,6 +4350,7 @@ def test_save_round_trip_after_style_writes(writable_reader, tmp_path):
 # Styles (écriture) : RowStyle / ColumnStyle / TableStyle
 # ---------------------------------------------------------------------------
 
+
 def test_row_style_write_forks_and_reuses(writable_reader):
     s = writable_reader.sheet("Sheet1")
     row0_before_name = s.row_style(0).name
@@ -4415,6 +4447,7 @@ def test_save_round_trip_after_row_column_table_style_writes(writable_reader, tm
 # Cell.style setter : copier/dupliquer un style d'une cellule vers une autre
 # ---------------------------------------------------------------------------
 
+
 def test_assigning_another_cells_style_points_at_the_same_style(writable_reader):
     s = writable_reader.sheet("Sheet1")
     s["A1"].style.bold = True
@@ -4498,9 +4531,10 @@ def test_forking_off_an_automatic_style_writes_its_properties_into_the_fork(writ
     assert cell_props["fo:border-left"] == "2pt solid #000000"
     assert cell_props["fo:background-color"] == "#ffff00"
     # and the source cell keeps its own, untouched by the fork
-    assert _own_style_tag(writable_reader, a).find("style:table-cell-properties").get(
-        "fo:background-color"
-    ) is None
+    assert (
+        _own_style_tag(writable_reader, a).find("style:table-cell-properties").get("fo:background-color")
+        is None
+    )
 
 
 def test_forking_off_a_named_style_keeps_it_as_the_parent(writable_reader):
@@ -4549,6 +4583,7 @@ def test_assigning_an_invalid_style_value_raises(writable_reader):
 # ---------------------------------------------------------------------------
 # NumberFormat.create / .add_condition (écriture)
 # ---------------------------------------------------------------------------
+
 
 def test_create_a_number_format(writable_reader):
     r = writable_reader
@@ -4708,6 +4743,7 @@ def test_save_round_trip_after_creating_and_assigning_a_number_format(writable_r
 # Sheet.delete_row / delete_column / ODSReader.delete_sheet (écriture)
 # ---------------------------------------------------------------------------
 
+
 def test_delete_row_shifts_everything_up(writable_reader):
     s = writable_reader.sheet("Sheet1")
     before = [s[i, 0].value for i in range(s.n_rows)]
@@ -4837,6 +4873,7 @@ def test_save_round_trip_after_delete_row_and_column(writable_reader, tmp_path):
 # ---------------------------------------------------------------------------
 # delete_row/delete_column : ajustement des références de formule
 # ---------------------------------------------------------------------------
+
 
 def test_delete_row_shifts_a_formula_reference_below_it(writable_reader):
     s = writable_reader.sheet("Sheet1")
@@ -5147,6 +5184,7 @@ def test_an_edit_leaves_the_braces_of_a_formula_as_they_are(tmp_path, edit, cell
 # ---------------------------------------------------------------------------
 # Sheet.insert_rows / insert_columns (écriture)
 # ---------------------------------------------------------------------------
+
 
 def _defined_extent(sheet):
     """(rows, columns) declared by the sheet's XML, repeats included - what
@@ -5459,6 +5497,7 @@ def test_save_round_trip_after_insertions(writable_reader, tmp_path):
     assert reread[3, 1].value == 3.4
     assert reread["B7"].formula_friendly == "=SUM(B4:B5)"
 
+
 def test_delete_sheet(writable_reader):
     r = writable_reader
     r.add_sheet("Extra")
@@ -5495,6 +5534,7 @@ def test_save_round_trip_after_delete_sheet(writable_reader, tmp_path):
 # ---------------------------------------------------------------------------
 # Sheet.copy (copier-coller de cellules/plages, écriture)
 # ---------------------------------------------------------------------------
+
 
 def test_copy_a_single_cell(writable_reader):
     s = writable_reader.sheet("Sheet1")
@@ -5568,6 +5608,7 @@ def test_save_round_trip_after_copy(writable_reader, tmp_path):
 # ---------------------------------------------------------------------------
 # ODSReader.properties (DocumentProperties, meta.xml)
 # ---------------------------------------------------------------------------
+
 
 def test_document_properties_reads_existing_metadata(reader):
     p = reader.properties
@@ -5682,6 +5723,7 @@ def test_save_round_trip_after_setting_document_properties(writable_reader, tmp_
 # Cell.comment (Comment, office:annotation)
 # ---------------------------------------------------------------------------
 
+
 def test_cell_with_no_comment_is_none(reader):
     s = reader.sheet("Sheet1")
     assert s["A1"].comment is None
@@ -5790,6 +5832,7 @@ def test_save_round_trip_after_comment(writable_reader, tmp_path):
 # Sheet.sort
 # ---------------------------------------------------------------------------
 
+
 def _fill_sort_table(s):
     s["A1"].value = "Charlie"
     s["B1"].value = 3.0
@@ -5873,6 +5916,7 @@ def test_save_round_trip_after_sort(writable_reader, tmp_path):
 # ---------------------------------------------------------------------------
 # ODSReader.rename_sheet / .move_sheet
 # ---------------------------------------------------------------------------
+
 
 def test_rename_sheet_updates_names(writable_reader):
     r = writable_reader
@@ -5999,6 +6043,7 @@ def test_save_round_trip_after_move_sheet(writable_reader, tmp_path):
 # Cell.hyperlink
 # ---------------------------------------------------------------------------
 
+
 def test_cell_with_no_hyperlink_is_none(reader):
     s = reader.sheet("Sheet1")
     assert s["A1"].hyperlink is None
@@ -6070,6 +6115,7 @@ def test_save_round_trip_after_hyperlink(writable_reader, tmp_path):
 # ---------------------------------------------------------------------------
 # Sheet.create_pivot_table (définition ODF uniquement, pas de calcul)
 # ---------------------------------------------------------------------------
+
 
 def _fill_pivot_source(s):
     rows = [
@@ -6185,6 +6231,7 @@ def test_save_round_trip_after_create_pivot_table(writable_reader, tmp_path):
 # ---------------------------------------------------------------------------
 # recalculate(): error paths that don't need LibreOffice installed
 # ---------------------------------------------------------------------------
+
 
 def test_recalculate_missing_file_raises(tmp_path):
     from odsslicer import recalculate

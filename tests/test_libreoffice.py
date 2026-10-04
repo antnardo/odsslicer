@@ -194,9 +194,7 @@ def test_interrupted_recalculation_stops_libreoffice_and_leaves_no_file_behind(
 
 
 @posix_only
-def test_timeout_stops_libreoffice_at_once(
-    workbook, fake_libreoffice, tmp_path_factory
-):
+def test_timeout_stops_libreoffice_at_once(workbook, fake_libreoffice, tmp_path_factory):
     # still busy at the timeout, then saving where LibreOffice saves: into
     # the file it is given, or into the workbook itself before issue #9
     pid = tmp_path_factory.mktemp("pid") / "pid"
@@ -237,9 +235,7 @@ def test_failed_run_removes_the_lock_files_libreoffice_left(workbook, fake_libre
 
 
 @posix_only
-def test_failed_run_keeps_the_lock_file_of_another_libreoffice(
-    workbook, fake_libreoffice
-):
+def test_failed_run_keeps_the_lock_file_of_another_libreoffice(workbook, fake_libreoffice):
     fake_libreoffice("exit 1\n")
     lock = workbook.with_name(".~lock.workbook.ods#")
     theirs = ",Someone,elsewhere,26.09.2026 23:45,file:///home/someone/.config/libreoffice/4;"
@@ -251,9 +247,7 @@ def test_failed_run_keeps_the_lock_file_of_another_libreoffice(
 
 
 @posix_only
-def test_libreoffice_stopping_while_saving_leaves_the_workbook_as_it_was(
-    workbook, fake_libreoffice
-):
+def test_libreoffice_stopping_while_saving_leaves_the_workbook_as_it_was(workbook, fake_libreoffice):
     # the first bytes of a zip, and no report: soffice exits with status 0
     # even when the script fails midway
     fake_libreoffice(
@@ -287,9 +281,7 @@ def test_libreoffice_saving_nothing_raises_and_leaves_the_workbook_as_it_was(
 
 
 @posix_only
-@pytest.mark.skipif(
-    hasattr(os, "geteuid") and os.geteuid() == 0, reason="root may write any file"
-)
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root may write any file")
 def test_read_only_workbook_raises_permission_error_before_libreoffice_starts(
     workbook, fake_libreoffice, tmp_path_factory
 ):
