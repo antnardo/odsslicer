@@ -7,6 +7,20 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Changed
+
+- **Loading a sheet formatted far past its data no longer builds the cells it leaves out.**
+  LibreOffice writes empty cells as far as the last formatted column, and the trailing columns
+  empty in every row were left out of the grid only once a `Cell` had been built for each of
+  their positions: a sheet holding 58 columns of data but formatted to its 1,021st, like the
+  `Notes` sheet of a gradebook, built 150,000 cells to keep 8,500. Which columns are left out is
+  now decided on the row elements, before any cell is built; the grid and the file are the same
+  as before. Opening and loading the three sheets of such a workbook drops from 1.67 s to 0.12 s.
+- **A cell's paragraphs and note are found without a BeautifulSoup search.** `find_all` builds a
+  filter object on every call, and on the paths that run once per cell that construction cost
+  more than the walk: a plain loop over the cell's children replaces it. A long, narrow sheet
+  loads about 8 % faster (10,000 rows × 5 columns: 1.75 s to 1.60 s).
+
 ## [0.15.0] — 2026-10-04
 
 ### Fixed

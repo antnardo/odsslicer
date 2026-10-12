@@ -38,7 +38,7 @@ from .formulas import (
     _unquote_odf_sheet_name,
 )
 from .styles import ColumnStyle, RowStyle, TableStyle
-from .xmlutils import _blank_template, _ensure_style_child, _is_forked_style_name
+from .xmlutils import _blank_template, _children_named, _ensure_style_child, _is_forked_style_name
 
 if TYPE_CHECKING:
     from .reader import ODSReader
@@ -67,7 +67,7 @@ def _holds_content(cell: Cell) -> bool:
     out on purpose: files carry it in the rows padding a sheet to its full
     height, down to the millionth, and a formatted row the grid leaves out
     stays in the file all the same (see `grow_to`)."""
-    return not cell.is_empty or cell.cell.find("office:annotation", recursive=False) is not None
+    return not cell.is_empty or bool(_children_named(cell.cell, "office:annotation"))
 
 
 # the namespaces of what a cell may hold anchored to it: shapes, charts and
@@ -233,20 +233,47 @@ class Sheet:
 
         widths = (content_width(row.find_all(TAG_CELL))[0] for row in rows[:end])
         real_width = max(widths, default=0)
+        normalized = []
         i = 0
         for row in rows[:end]:
+            normalized.append(self._normalize_row_width(row, row.find_all(TAG_CELL), real_width, i))
+            i += _repeat(row, "table:number-rows-repeated")
+
+        # Trailing columns empty in every row are left out of the grid when
+        # there are more than MAX_REPEAT_COLS of them (see the clean-up
+        # below). Decided here, on the elements, before a `Cell` is built for
+        # each position: LibreOffice writes empty cells as far as the last
+        # formatted column, and a sheet formatted to its 1,021st column but
+        # holding 58 had 150,000 cells built to keep 8,500. Whether an element
+        # holds content does not depend on where it stands, so one look per
+        # element answers for every column it repeats over.
+        built_width = real_width
+        content_end = 0
+        for cells_bs in normalized:
+            col = 0
+            for cell in cells_bs:
+                col += _repeat(cell, "table:number-columns-repeated")
+                if _holds_content(Cell(cell)):
+                    content_end = max(content_end, col)
+        # an all-empty sheet keeps the general path below, which takes it apart
+        if content_end > 0 and real_width - content_end > MAX_REPEAT_COLS:
+            built_width = content_end
+
+        i = 0
+        for row, all_cells_bs in zip(rows[:end], normalized, strict=True):
             n_rows = int(row.attrs.get("table:number-rows-repeated", "1"))
-            all_cells_bs = self._normalize_row_width(row, row.find_all(TAG_CELL), real_width, i)
-            for j in range(n_rows):
+            for _ in range(n_rows):
                 cells = []
                 j = 0
                 for cell in all_cells_bs:
                     n_cols = int(cell.attrs.get("table:number-columns-repeated", "1"))
-                    for _ in range(n_cols):
+                    for _ in range(min(n_cols, built_width - j)):
                         cells.append(Cell(cell, row=i, col=j, sheet=self))
                         if cells[-1]._unreadable is not None:
                             unreadable.append(cells[-1])
                         j += 1
+                    if j >= built_width:
+                        break
                 table.append(cells)
                 i += 1
         if end < len(rows):
@@ -291,8 +318,8 @@ class Sheet:
         # stay in the file, formatting and all: each row element is split at
         # the grid's edge, so that none straddles it, and `grow_to` takes
         # them back as the sheet grows.
-        n_cols = len(table[0])
-        width = n_cols
+        n_cols = real_width
+        width = len(table[0])
         while width > 0 and not any(_holds_content(row[width - 1]) for row in table):
             width -= 1
         if n_cols - width > MAX_REPEAT_COLS:

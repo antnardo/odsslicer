@@ -156,6 +156,26 @@ _TAG_FACTORY = BeautifulSoup("", "xml")
 _WHITESPACE_RUN = re.compile(r"( +|\t)")
 
 
+def _children_named(tag: Tag, name: str) -> list[Tag]:
+    """The children of `tag` named `name` ("text:p"), in order: what
+    `tag.find_all(name, recursive=False)` returns, without what it costs.
+
+    bs4 builds a filter object for every `find`/`find_all` call before
+    walking anything, and on the paths that run once per cell - reading a
+    cell's paragraphs, looking for its note - that construction outweighed
+    the walk: profiling a test suite that reads wide sheets put the filter
+    at the top, with two searches per cell. A cell has a handful of
+    children, so a plain loop is all it takes. The name matches as bs4
+    matches it: prefix and local name, or the whole name on an element whose
+    prefix the parser could not resolve."""
+    prefix, _, local = name.partition(":")
+    return [
+        child
+        for child in tag.contents
+        if isinstance(child, Tag) and (child.name == name or (child.name == local and child.prefix == prefix))
+    ]
+
+
 def _space_count(tag: Tag) -> int:
     try:
         return max(int(cast(str, tag.attrs.get("text:c", "1"))), 1)

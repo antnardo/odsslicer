@@ -586,6 +586,74 @@ def test_writing_a_multi_line_value_writes_one_paragraph_per_line(writable_reade
     assert ODSReader(out).sheet("Sheet1")["A1"].value == "ligne 1\nligne 2\nligne 3"
 
 
+class TestLoadingWideSheets:
+    """A sheet formatted far past its data, as LibreOffice writes one."""
+
+    WIDE_XML = table_row(
+        text_cell("a"),
+        number_cell(1),
+        '<table:table-cell table:style-name="Default" table:number-columns-repeated="1000"/>',
+        repeat=50,
+    ) + table_row(
+        '<table:table-cell table:number-columns-repeated="2"/>',
+        note_cell("far right"),
+        '<table:table-cell table:style-name="Default" table:number-columns-repeated="999"/>',
+    )
+
+    def test_no_cell_is_built_for_the_columns_left_out(self, tmp_path, monkeypatch):
+        path = ods_with_sheet(tmp_path / "wide.ods", self.WIDE_XML)
+        built = []
+        original = Cell.__init__
+
+        def recording(cell, tag, row=0, col=0, sheet=None):
+            if sheet is not None:
+                built.append(col)
+            original(cell, tag, row, col, sheet)
+
+        monkeypatch.setattr(Cell, "__init__", recording)
+        sheet = ODSReader(path).sheet("Sheet1")
+        assert sheet.size == (51, 3)
+        assert max(built) == 2
+        assert len(built) == 51 * 3
+
+    def test_the_columns_left_out_stay_in_the_file(self, tmp_path):
+        path = ods_with_sheet(tmp_path / "wide.ods", self.WIDE_XML)
+        r = ODSReader(path)
+        sheet = r.sheet("Sheet1")
+        assert (sheet["A1"].value, sheet["B1"].value, sheet["C51"].comment.text) == ("a", 1, "far right")
+        out = tmp_path / "out.ods"
+        r.save(out)
+        widths = {
+            sum(_repeat(c, "table:number-columns-repeated") for c in row.find_all(TAG_CELL))
+            for row in saved_table(out).find_all("table:table-row")
+        }
+        assert widths == {1002}
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        "<text:p>a</text:p><text:p>b</text:p>",
+        "<office:annotation><text:p>note</text:p></office:annotation><text:p>value</text:p>",
+        "",
+        "<text:span>x</text:span>",
+    ],
+)
+def test_children_named_finds_what_find_all_finds_among_children(xml):
+    from bs4 import BeautifulSoup
+
+    from odsslicer.xmlutils import _children_named
+
+    cell = BeautifulSoup(
+        '<table:table-cell xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
+        'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+        f'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0">{xml}</table:table-cell>',
+        "xml",
+    ).find("table:table-cell")
+    for name in ("text:p", "office:annotation"):
+        assert _children_named(cell, name) == cell.find_all(name, recursive=False)
+
+
 class TestEncodedWhitespace:
     """Spaces, tabs and line breaks ODF writes as elements (issue #27)."""
 

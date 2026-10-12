@@ -39,6 +39,7 @@ from .styles import CellStyle, _render_date_time_from_format, _render_number_fro
 from .xmlutils import (
     _ODF_NAMESPACES,
     _blank_template,
+    _children_named,
     _ensure_style_child,
     _new_qualified_tag,
     _paragraph_text,
@@ -356,7 +357,7 @@ class Cell:
         # recursive=False: a cell's own value paragraphs are always direct
         # children - an unscoped find_all() would also match those nested
         # inside an office:annotation (a cell comment, see Cell.comment).
-        paragraphs = self.cell.find_all("text:p", recursive=False)
+        paragraphs = _children_named(self.cell, "text:p")
         # `_paragraph_text`, not `p.string` - None both for a genuinely empty
         # <text:p/> (a formula whose cached result is "") and for one with
         # several children (spans...) - nor `get_text()`, which drops the
