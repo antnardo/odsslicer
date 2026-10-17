@@ -13,6 +13,7 @@ password-protected package is refused when it is opened, before a save could
 write what its encrypted parts parse to - nothing - over them.
 """
 
+import datetime as dt
 import os
 import pathlib
 import random
@@ -25,7 +26,7 @@ import zipfile
 import pytest
 from lxml import etree
 
-from conftest import FIXTURES_DIR, rebind_prefix
+from conftest import FIXTURES_DIR, ods_with_sheet, rebind_prefix, table_row
 from odsslicer import EncryptedDocumentError, MalformedDocumentError, ODSReader
 from odsslicer.xmltree import new, parse, qn, serialize, text
 from odsslicer.xmlutils import _encrypted_parts
@@ -702,3 +703,42 @@ def test_the_package_never_imports_beautifulsoup(workbook, tmp_path):
         [sys.executable, "-c", script], capture_output=True, text=True, check=True, env=env, cwd=tmp_path
     )
     assert done.stdout.strip() == "[]"
+
+
+def test_what_odsslicer_creates_declares_no_namespace_the_document_binds(workbook, tmp_path):
+    # a new element declares its namespace for itself, and lxml drops the
+    # declaration once it is inserted where the document binds it: the saved
+    # content.xml declares what the original did, no more - bs4 repeated a
+    # declaration on an element whose name the document had no other of
+    before = _members(workbook)["content.xml"].count(b"xmlns:")
+    book = ODSReader(workbook)
+    sheet = book.sheet("Sheet1")
+    sheet["F20"].value = dt.date(2026, 10, 17)  # past the data: rows, cells, a date style
+    sheet["A1"].comment = "a note"
+    sheet["A1"].comment.author = "me"
+    sheet["A2"].hyperlink = "https://example.com"
+    sheet["A3"].style.bold = True
+    sheet.row_style(1).height = "1cm"
+    sheet.insert_rows(1, 2)
+    book.add_sheet("Added")["B2"].value = "x"
+    book.sheet("SheetEmpty")["A1:C3"].value = [["k", "v", "n"], ["a", 1, 2], ["b", 3, 4]]
+    book.sheet("SheetEmpty").create_pivot_table("A1:C3", "E1", rows=["k"], values={"v": "sum"})
+    after = _saved(book, tmp_path)
+
+    assert after["content.xml"].count(b"xmlns:") == before
+
+
+def test_a_line_break_written_as_a_reference_in_an_attribute_survives_a_save(tmp_path):
+    # LibreOffice writes a line break inside an attribute as `&#x0a;` - the
+    # text of a string a formula computed, in `office:string-value`: bs4
+    # wrote it back as a raw line break, which every XML parser reads as a
+    # space, so each save turned it into one. lxml writes the reference
+    xml = table_row(
+        '<table:table-cell table:formula="of:=&quot;a&#x0a;b&quot;" office:value-type="string"'
+        ' office:string-value="a&#x0a;b"><text:p>a</text:p><text:p>b</text:p></table:table-cell>'
+    )
+    path = ods_with_sheet(tmp_path / "break.ods", xml)
+    ODSReader(path).save()
+    cell = ODSReader(path).sheet("Sheet1")["A1"]
+    assert cell.formula == 'of:="a\nb"'
+    assert cell.cell.get(qn("office:string-value")) == "a\nb"

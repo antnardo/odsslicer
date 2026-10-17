@@ -872,3 +872,13 @@ class TestChildren:
         cell = side.kids(side.root(NOTED))[0]
         assert isinstance(side.layer.children(cell, "text:p"), list)
         assert side.layer.children(cell, "text:s") == []
+
+
+def test_parse_takes_an_attribute_past_libxml2s_default_limit():
+    # well-formed, and as LibreOffice writes one: tdf136551.ods holds a
+    # consolidation range of 4 million characters, 10.9 MB as written
+    value = "Sheet1.A1:Sheet1.B2 " * 600_000
+    markup = f'<table:consolidation {DECLARATIONS} table:target-cell-address="{value}"/>'.encode()
+    with pytest.raises(etree.XMLSyntaxError):
+        etree.fromstring(markup, etree.XMLParser(resolve_entities=False))  # what a strict parser does unasked
+    assert parse(markup).getroot().get(qn("table:target-cell-address")) == value

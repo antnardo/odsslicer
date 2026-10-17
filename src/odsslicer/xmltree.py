@@ -157,8 +157,15 @@ def parse(markup: bytes) -> "etree._ElementTree":
     files the only parts recovery ever had to deal with were those of two
     encrypted files - which then opened as documents with no sheet, and
     saved as an empty `content.xml`. No network access and no entity
-    expansion: a spreadsheet has no use for either."""
-    parser = etree.XMLParser(resolve_entities=False, no_network=True, remove_blank_text=False)
+    expansion: a spreadsheet has no use for either.
+
+    No size limit either (`huge_tree`): libxml2 refuses, as malformed, an
+    attribute or a text node past 10 MB, which a well-formed spreadsheet
+    can hold - LibreOffice's own `tdf136551.ods` has a consolidation range
+    of 4 million characters. bs4's recovery read it whole; a strict parser
+    has to be told. What it costs is memory, which the size of the part
+    already bounds: with no entity expanded, nothing grows past it."""
+    parser = etree.XMLParser(resolve_entities=False, no_network=True, remove_blank_text=False, huge_tree=True)
     return etree.ElementTree(etree.fromstring(markup, parser))
 
 

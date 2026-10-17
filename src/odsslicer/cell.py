@@ -79,7 +79,6 @@ _COLUMNS_SPANNED = qn("table:number-columns-spanned")
 _ROWS_SPANNED = qn("table:number-rows-spanned")
 _DATA_STYLE_NAME = qn("style:data-style-name")
 _TEXT_P = qn("text:p")
-_TABLE_CELL = qn("table:table-cell")
 _CELL_TAGS = tuple(qn(name) for name in TAG_CELL)
 
 
