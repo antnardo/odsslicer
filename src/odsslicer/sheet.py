@@ -38,7 +38,9 @@ from .formulas import (
     _unquote_odf_sheet_name,
 )
 from .styles import ColumnStyle, RowStyle, TableStyle
-from .xmlutils import _blank_template, _children_named, _ensure_style_child, _is_forked_style_name
+from .xmlbs import children, clone, insert_after, insert_before, local_name, namespace_of, new, remove, rename
+from .xmltree import NAMESPACES
+from .xmlutils import _ensure_style_child, _is_forked_style_name
 
 if TYPE_CHECKING:
     from .reader import ODSReader
@@ -67,12 +69,12 @@ def _holds_content(cell: Cell) -> bool:
     out on purpose: files carry it in the rows padding a sheet to its full
     height, down to the millionth, and a formatted row the grid leaves out
     stays in the file all the same (see `grow_to`)."""
-    return not cell.is_empty or bool(_children_named(cell.cell, "office:annotation"))
+    return not cell.is_empty or bool(children(cell.cell, "office:annotation"))
 
 
 # the namespaces of what a cell may hold anchored to it: shapes, charts and
 # images (draw:frame), 3D scenes
-_DRAWING_PREFIXES = frozenset({"draw", "dr3d"})
+_DRAWING_NAMESPACES = frozenset({NAMESPACES["draw"], NAMESPACES["dr3d"]})
 
 
 def _carries_formatting(cell_tag: Tag) -> bool:
@@ -85,7 +87,11 @@ def _carries_formatting(cell_tag: Tag) -> bool:
 
 def _drawings_in(cell_tag: Tag) -> "list[Tag]":
     """What is anchored in `cell_tag`: a chart, a shape, an image."""
-    return [child for child in cell_tag.find_all(True, recursive=False) if child.prefix in _DRAWING_PREFIXES]
+    return [
+        child
+        for child in cell_tag.find_all(True, recursive=False)
+        if namespace_of(child) in _DRAWING_NAMESPACES
+    ]
 
 
 def _rescue_drawings(cell_tag: Tag, heir: "Tag | None") -> None:
@@ -96,7 +102,7 @@ def _rescue_drawings(cell_tag: Tag, heir: "Tag | None") -> None:
     if heir is None:
         return
     for drawing in _drawings_in(cell_tag):
-        heir.append(drawing.extract())
+        heir.append(remove(drawing))
 
 
 def _position_after(tag: Tag) -> int:
@@ -109,7 +115,13 @@ def _position_after(tag: Tag) -> int:
     grows the sheet one row per cell, so 100,000 rows written that way cost
     5 billion comparisons, minutes instead of seconds (0.14.0 to 0.14.3).
     What follows a sheet's last row is a few elements at most - conditional
-    formats, named ranges - so counting them is next to free."""
+    formats, named ranges - so counting them is next to free.
+
+    An index is right on bs4 only: lxml's `insert(i)` walks its children to
+    `i`, and its `addnext` costs nothing. This function and the insertions
+    by index built on it (`_take_back_rows`, `insert_rows`, `insert_columns`)
+    stay as they are until the switch, which turns them into successive
+    `insert_after` calls; converting them now would make them quadratic."""
     parent = cast(Tag, tag.parent)
     return len(parent.contents) - sum(1 for _ in tag.next_siblings)
 
@@ -126,7 +138,11 @@ def _split_repetitions(tag: Tag, attr: str, n: int) -> list[Tag]:
     23 s to write one cell in a run of 20,000 repeated rows below 50,000
     others, 1.6 s to set the width of a column defined by one
     `<table:table-column>` repeated 16,384 times, as LibreOffice pads a
-    sheet."""
+    sheet.
+
+    Left on bs4's own methods until the switch: on lxml, the copies are
+    `clone`s placed with successive `insert_after` calls, which cost
+    nothing there (see `_position_after`)."""
     copies = [copy.deepcopy(tag) for _ in range(n)]
     for copy_tag in copies:
         copy_tag.attrs.pop(attr, None)
@@ -367,10 +383,10 @@ class Sheet:
         n = _repeat(row_tag, attr)
         if not 0 < keep < n:
             return
-        rest = copy.deepcopy(row_tag)
+        rest = clone(row_tag)
         _set_repeat(row_tag, attr, keep)
         _set_repeat(rest, attr, n - keep)
-        row_tag.insert_after(rest)
+        insert_after(row_tag, rest)
 
     @staticmethod
     def _split_cells_at(row_tag: Tag, position: int) -> None:
@@ -383,10 +399,10 @@ class Sheet:
         for cell_tag in row_tag.find_all(TAG_CELL, recursive=False):
             n = _repeat(cell_tag, attr)
             if start < position < start + n:
-                rest = copy.deepcopy(cell_tag)
+                rest = clone(cell_tag)
                 _set_repeat(cell_tag, attr, position - start)
                 _set_repeat(rest, attr, start + n - position)
-                cell_tag.insert_after(rest)
+                insert_after(cell_tag, rest)
             if start + n >= position:
                 return
             start += n
@@ -449,15 +465,15 @@ class Sheet:
                 remainder = n_cols - missing
                 if remainder > 0 and _carries_formatting(cell):
                     # the part past the grid keeps saying what it says
-                    tail = copy.deepcopy(cell)
-                    _set_repeat(tail, "table:number-columns-repeated", remainder)
-                    cell.insert_after(tail)
+                    rest = clone(cell)
+                    _set_repeat(rest, "table:number-columns-repeated", remainder)
+                    insert_after(cell, rest)
                 dropped = cells_bs[k + 1 :]
             else:
                 dropped = cells_bs[k:]
             for extra in dropped:
                 if not _carries_formatting(extra):
-                    extra.decompose()
+                    remove(extra)
             return keep
         if width < real_width:
             pad = self._empty_cell_template()
@@ -491,7 +507,7 @@ class Sheet:
             if cell.attrs.get("table:number-columns-repeated", "1") != "1":
                 self._unrepeat_col(row, col)
                 continue
-            if tag.name == "covered-table-cell":
+            if local_name(tag) == "covered-table-cell":
                 self._unmerge(row, col)
                 continue
             return
@@ -551,7 +567,7 @@ class Sheet:
         """Find the top-left cell of the merged range covering (row, col)."""
         for r in range(row, -1, -1):
             for master in self.rows[r]:
-                if master.cell.name == "covered-table-cell" or not self._is_merge_master(master):
+                if local_name(master.cell) == "covered-table-cell" or not self._is_merge_master(master):
                     continue
                 rows_span = int(master.attrs.get("table:number-rows-spanned", "1"))
                 cols_span = int(master.attrs.get("table:number-columns-spanned", "1"))
@@ -569,7 +585,7 @@ class Sheet:
         and reveal that value, exactly like un-merging in LibreOffice does.
         """
         cell = self.rows[row][col]
-        if cell.cell.name == "covered-table-cell":
+        if local_name(cell.cell) == "covered-table-cell":
             master = self._find_merge_master(row, col)
             if master is None:
                 raise RuntimeError(
@@ -594,8 +610,8 @@ class Sheet:
                 if r == mr and c == mc:
                     continue
                 covered = self.rows[r][c]
-                if covered.cell.name == "covered-table-cell":
-                    covered.cell.name = "table-cell"
+                if local_name(covered.cell) == "covered-table-cell":
+                    rename(covered.cell, "table:table-cell")
                 covered.__init__(covered.cell, row=r, col=c, sheet=self)  # type: ignore[misc]
 
     def _resolve_range(self, address: "str | int | tuple[Any, ...] | slice") -> tuple[int, int, int, int]:
@@ -670,7 +686,7 @@ class Sheet:
                 if r == row0 and c == col0:
                     continue
                 covered = self.rows[r][c]
-                covered.cell.name = "covered-table-cell"
+                rename(covered.cell, "table:covered-table-cell")
                 covered.__init__(covered.cell, row=r, col=c, sheet=self)  # type: ignore[misc]
         master.__init__(master.cell, row=row0, col=col0, sheet=self)  # type: ignore[misc]
 
@@ -872,7 +888,7 @@ class Sheet:
         spreadsheet = self.reader.data.find("office:spreadsheet")
         tables = spreadsheet.find("table:data-pilot-tables")
         if tables is None:
-            tables = _blank_template(self.reader.data, "table:data-pilot-tables")
+            tables = new("table:data-pilot-tables", near=self.reader.data)
             spreadsheet.append(tables)
 
         existing = tables.find_all("table:data-pilot-table", recursive=False)
@@ -880,14 +896,14 @@ class Sheet:
         if any(t.get("table:name") == pivot_name for t in existing):
             raise ValueError(f"a pivot table named {pivot_name!r} already exists")
 
-        pivot = _blank_template(self.reader.data, "table:data-pilot-table")
+        pivot = new("table:data-pilot-table", near=self.reader.data)
         pivot.attrs["table:name"] = pivot_name
         target_row0, _, target_col0, _ = self._resolve_range(target)
         pivot.attrs["table:target-range-address"] = (
             f"{_quote_odf_sheet_name(self.name)}.{Sheet.string_address(target_row0, target_col0)}"
         )
 
-        source_range_tag = _blank_template(self.reader.data, "table:source-cell-range")
+        source_range_tag = new("table:source-cell-range", near=self.reader.data)
         source_range_tag.attrs["table:cell-range-address"] = (
             f"{_quote_odf_sheet_name(source_sheet_name)}."
             f"{Sheet.string_address(row0, col0)}:{Sheet.string_address(row1, col1)}"
@@ -904,7 +920,7 @@ class Sheet:
         tables.append(pivot)
 
     def _append_pivot_field(self, pivot: Tag, field: str, orientation: str, function: str) -> None:
-        field_tag = _blank_template(self.reader.data, "table:data-pilot-field")
+        field_tag = new("table:data-pilot-field", near=self.reader.data)
         field_tag.attrs["table:source-field-name"] = field
         field_tag.attrs["table:orientation"] = orientation
         field_tag.attrs["table:function"] = function
@@ -912,11 +928,11 @@ class Sheet:
 
     def _empty_cell_template(self) -> Tag:
         """A detached, blank `<table:table-cell/>` tag."""
-        return _blank_template(self.table, "table:table-cell")
+        return new("table:table-cell", near=self.table)
 
     def _empty_row_template(self, n_cols: int) -> Tag:
         """A detached `<table:table-row>` tag with `n_cols` blank cells."""
-        row = _blank_template(self.table, "table:table-row")
+        row = new("table:table-row", near=self.table)
         for _ in range(n_cols):
             row.append(self._empty_cell_template())
         return row
@@ -982,7 +998,8 @@ class Sheet:
                 self.n_rows += 1
             previous = row_tag
         template = self._empty_row_template(self.n_cols)
-        # inserted by index, found once (see `_position_after`)
+        # inserted by index, found once (see `_position_after`): left as is
+        # until the switch to lxml, where it becomes `insert_after`
         parent = self.table if previous is None else cast(Tag, previous.parent)
         position = len(parent.contents) if previous is None else _position_after(previous)
         while self.n_rows < n_rows:
@@ -1008,9 +1025,9 @@ class Sheet:
             for child in parent.children:
                 if not isinstance(child, Tag):
                     continue
-                if child.name == "table-row":
+                if local_name(child) == "table-row":
                     found.append(child)
-                elif child.name in self._ROW_LEVEL:  # a group of rows
+                elif local_name(child) in self._ROW_LEVEL:  # a group of rows
                     collect(child)
 
         if self.n_rows == 0:
@@ -1021,9 +1038,9 @@ class Sheet:
             for sibling in node.next_siblings:
                 if not isinstance(sibling, Tag):
                     continue
-                if sibling.name == "table-row":
+                if local_name(sibling) == "table-row":
                     found.append(sibling)
-                elif sibling.name in self._ROW_LEVEL:
+                elif local_name(sibling) in self._ROW_LEVEL:
                     collect(sibling)
             node = node.parent
         return found
@@ -1068,7 +1085,7 @@ class Sheet:
                 if position == col:
                     new_tag = self._empty_cell_template()
                     _set_repeat(new_tag, "table:number-columns-repeated", count)
-                    cell_tag.insert_before(new_tag)
+                    insert_before(cell_tag, new_tag)
                     self._give_back_cells(row_tag, count)
                     break
                 position += _repeat(cell_tag, "table:number-columns-repeated")
@@ -1092,9 +1109,9 @@ class Sheet:
                         heir = cells[k + 1] if k + 1 < len(cells) else None
                         if heir is None:
                             heir = self._empty_cell_template()
-                            cell_tag.insert_after(heir)
+                            insert_after(cell_tag, heir)
                         _rescue_drawings(cell_tag, heir)
-                    cell_tag.decompose()
+                    remove(cell_tag)
                     break
                 position += _repeat(cell_tag, "table:number-columns-repeated")
 
@@ -1171,7 +1188,7 @@ class Sheet:
                     if _drawings_in(cell.cell):
                         self._unrepeat_col(heir_row, c)
                         _rescue_drawings(cell.cell, self.rows[heir_row][c].cell)
-            self.rows[row][0].cell.parent.decompose()
+            remove(cast(Tag, self.rows[row][0].cell.parent))
             del self.rows[row]
         for r in range(targets[0], len(self.rows)):
             for cell in self.rows[r]:
@@ -1206,10 +1223,10 @@ class Sheet:
         if self._find_column_tag(col) is not None:
             definition = self._unrepeat_column_tag(col)
             group = cast(Tag, definition.parent)
-            definition.decompose()
+            remove(definition)
             # a group of definitions - the print titles' - holds one at least
             if group is not self.table and group.find("table:table-column") is None:
-                group.decompose()
+                remove(group)
         for run in self._runs_in(self.rows):
             # same as for a row: the chart anchored in the column moves to the
             # cell taking its place, rather than going with it (issue #24)
@@ -1217,7 +1234,7 @@ class Sheet:
             if 0 <= heir_col < self.n_cols:
                 self._unrepeat_col(run.start, heir_col)
                 _rescue_drawings(self.rows[run.start][col].cell, self.rows[run.start][heir_col].cell)
-            self.rows[run.start][col].cell.decompose()  # once for the whole run
+            remove(self.rows[run.start][col].cell)  # once for the whole run
             for r in run:
                 del self.rows[r][col]
                 for c in range(col, len(self.rows[r])):
@@ -1289,7 +1306,8 @@ class Sheet:
         # inserted by index, found once: bs4's insert_before and insert_after
         # look it up with parent.index(), a scan from the first child, so
         # placing each row with them cost count times the insertion point's
-        # position - 8 s for 20,000 rows inserted below 20,000
+        # position - 8 s for 20,000 rows inserted below 20,000. Right on bs4
+        # only: with the switch to lxml, these become `insert_after` calls
         if before is not None:
             parent = cast(Tag, before.parent)
             position = parent.index(before)
@@ -1385,7 +1403,7 @@ class Sheet:
             )
             for cells_row in self.rows
             for cell in cells_row
-            if cell.cell.name != "covered-table-cell" and self._is_merge_master(cell)
+            if local_name(cell.cell) != "covered-table-cell" and self._is_merge_master(cell)
         ]
 
     def _grow_merge(self, row: int, col: int, span_rows: int, span_cols: int) -> None:
@@ -1402,9 +1420,9 @@ class Sheet:
         for r in range(row, row + span_rows):
             for c in range(col, col + span_cols):
                 covered = self.rows[r][c]
-                if (r, c) == (row, col) or covered.cell.name == "covered-table-cell":
+                if (r, c) == (row, col) or local_name(covered.cell) == "covered-table-cell":
                     continue
-                covered.cell.name = "covered-table-cell"
+                rename(covered.cell, "table:covered-table-cell")
                 covered.__init__(covered.cell, row=r, col=c, sheet=self)  # type: ignore[misc]
 
     def _insert_column_definitions(self, col: int, count: int) -> None:
@@ -1430,16 +1448,16 @@ class Sheet:
             n = int(tag.attrs.get("table:number-columns-repeated", "1"))
             if seen <= col < seen + n:
                 if col > seen:  # split the repeated definition at `col`
-                    tail = copy.deepcopy(tag)
+                    rest = clone(tag)
                     _set_repeat(tag, "table:number-columns-repeated", col - seen)
-                    _set_repeat(tail, "table:number-columns-repeated", seen + n - col)
-                    tag.insert_after(tail)
-                    tag = tail
+                    _set_repeat(rest, "table:number-columns-repeated", seen + n - col)
+                    insert_after(tag, rest)
+                    tag = rest
                 # `tag` now starts at `col`: it is the definition of the
                 # column being pushed right, and the one to repeat
-                new_tag = copy.deepcopy(tag)
+                new_tag = clone(tag)
                 _set_repeat(new_tag, "table:number-columns-repeated", count)
-                tag.insert_before(new_tag)
+                insert_before(tag, new_tag)
                 break
             seen += n
         else:
@@ -1524,11 +1542,12 @@ class Sheet:
         for child in parent.children:
             if not isinstance(child, Tag):
                 continue
-            if child.name in cls._ROW_LEVEL:
+            name = local_name(child)
+            if name in cls._ROW_LEVEL:
                 return
-            if child.name == "table-column":
+            if name == "table-column":
                 yield child
-            elif child.name in cls._COLUMN_GROUPS:
+            elif name in cls._COLUMN_GROUPS:
                 yield from cls._column_definitions(child)
 
     def _find_column_tag(self, col: int) -> "Tag | None":
