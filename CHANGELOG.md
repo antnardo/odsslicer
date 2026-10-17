@@ -33,6 +33,12 @@ underneath and those few names; DOCS.md, section 15, gives the 1.0 equivalent of
 
 ### Changed
 
+- **Flags are keyword-only**, and so is every parameter after one: `ODSReader(path, *, verbose)`,
+  `ODSReader.new(sheet_name, *, verbose)`, `save(path, *, recalculate, timeout, update_links)`,
+  `export_content_xml(*, pretty)`, `Sheet.sort(source, by, *, ascending)`,
+  `NumberFormat.create(reader, family, decimal_places, *, grouping, ...)`,
+  `recalculate(path, timeout, *, update_links)` and `Sheet(table, *, verbose, reader)`. A `True`
+  passed by position now raises `TypeError`; ruff's `FBT` rules keep it that way.
 - **The escape hatches to the XML are lxml trees and elements**: `reader.data`,
   `reader.styles_data`, `reader.meta_data` and `reader.settings_data` are
   `lxml.etree._ElementTree`s, `reader.tables` a list of elements, `sheet.table` and `cell.cell`

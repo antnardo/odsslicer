@@ -250,7 +250,7 @@ def _give_back(tags: "list[etree._Element]", attr: str, count: int) -> None:
 
 class Sheet:
     def __init__(
-        self, table: etree._Element, verbose: bool = False, reader: "ODSReader | None" = None
+        self, table: etree._Element, *, verbose: bool = False, reader: "ODSReader | None" = None
     ) -> None:
         self.verbose = verbose
         # chatty progress messages go to the "odsslicer" logger: DEBUG
@@ -875,7 +875,7 @@ class Sheet:
                 else:
                     target.value = value
 
-    def sort(self, source: "str | int | tuple[Any, ...] | slice", by: int, ascending: bool = True) -> None:
+    def sort(self, source: "str | int | tuple[Any, ...] | slice", by: int, *, ascending: bool = True) -> None:
         """Sort the rows of `source` (a range address, e.g. `"A2:C10"`) in
         place by the values in column `by` (an absolute column index,
         which must fall within `source`'s own columns) - a stable sort

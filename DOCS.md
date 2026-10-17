@@ -626,7 +626,7 @@ value/style it individually carries — the merge itself is not replicated.
 
 ### Sorting a range
 
-`Sheet.sort(source, by, ascending=True)` sorts the rows of `source` in place, by the values in
+`Sheet.sort(source, by, *, ascending=True)` sorts the rows of `source` in place, by the values in
 column `by` (an absolute column index within `source`):
 
 ```python
@@ -1528,6 +1528,12 @@ steps 4 and 6, and the audit before 1.0):
   saying what is wrong, where `Sheet.address` raised it without a message, raised `TypeError` on
   `"A1:B"`, and read `"A:B1"` as `"A:B"` and `"A0"` as the cell in
   column A of the last row.
+- **Flags are passed by name.** Every boolean parameter of the public API is keyword-only, and
+  so is every parameter after one: `ODSReader(path, verbose=True)`, `ODSReader.new(verbose=True)`,
+  `save(path, recalculate=True, timeout=60, update_links=True)`, `export_content_xml(pretty=False)`,
+  `sort(source, by, ascending=False)`, `NumberFormat.create(reader, family, decimal_places,
+  grouping=True, ...)`, `recalculate(path, timeout, update_links=True)`. A `True` passed by
+  position said nothing at the call of what it switched on; it now raises `TypeError`.
 - **`Cell.attrs` and `Sheet.attrs` are removed.** They were the element's own attribute
   dictionary, with the file's prefixed keys, and writing to them bypassed everything the library
   keeps consistent. Their one common use has a property of its own: `cell.attrs.get("table:style-name")`
@@ -1581,6 +1587,23 @@ steps 4 and 6, and the audit before 1.0):
 
 What code written for 0.x has to change, break by break - nothing, if it uses only the high-level
 API. Each pair below is the 0.x line, then its 1.0 equivalent.
+
+**Flags by position** raise `TypeError`: name them.
+
+```python
+ODSReader(path, True)                                   # 0.x
+ODSReader(path, verbose=True)                           # 1.0
+table.save("out.ods", True)                             # 0.x
+table.save("out.ods", recalculate=True)                 # 1.0, and timeout= and update_links= by name too
+table.export_content_xml(False)                         # 0.x
+table.export_content_xml(pretty=False)                  # 1.0
+sheet.sort("A2:C10", 1, False)                          # 0.x
+sheet.sort("A2:C10", 1, ascending=False)                # 1.0
+NumberFormat.create(table, "number", 2, True)           # 0.x
+NumberFormat.create(table, "number", 2, grouping=True)  # 1.0, and every parameter after it by name
+recalculate("out.ods", 120, True)                       # 0.x
+recalculate("out.ods", 120, update_links=True)          # 1.0
+```
 
 **`Cell.attrs` and `Sheet.attrs`.** What they were read for has a property:
 

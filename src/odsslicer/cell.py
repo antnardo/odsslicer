@@ -522,7 +522,7 @@ class Cell:
             same_format = self._has_date_time_format(new_value)
             text = (
                 self._render_display_from_number_format(new_value)
-                or self._infer_date_display(new_value, same_format)
+                or self._infer_date_display(new_value, same_format=same_format)
                 or str(new_value)  # the ISO format, a space before a time part
             )
         elif isinstance(new_value, (dt.time, dt.timedelta)):
@@ -541,7 +541,7 @@ class Cell:
             same_format = self._has_date_time_format(new_value)
             text = (  # as for a date
                 self._render_display_from_number_format(new_value)
-                or self._infer_time_display(new_value, same_format)
+                or self._infer_time_display(new_value, same_format=same_format)
                 or (
                     _duration_text(new_value)
                     if isinstance(new_value, dt.timedelta)
@@ -765,7 +765,7 @@ class Cell:
         return _data_style_name(cast("ODSReader", reader), name)
 
     def _format_template_candidates(
-        self, fmt: "str | None", raw_attr: str, same_format: bool = False
+        self, fmt: "str | None", raw_attr: str, *, same_format: bool = False
     ) -> Iterator[tuple[str, str]]:
         """Other cells with the same ODF format (this cell's own pre-write state
         first, then the rest of the document) to learn a display pattern from,
@@ -856,12 +856,12 @@ class Cell:
                 return render(new_value)
         return None
 
-    def _infer_date_display(self, new_value: dt.date, same_format: bool = False) -> "str | None":
+    def _infer_date_display(self, new_value: dt.date, *, same_format: bool = False) -> "str | None":
         # dates and date-times alike go through as date-times: a date-time
         # pattern then also covers a date - LibreOffice saves a date-time
         # falling on midnight as a bare date - and a date pattern a date-time
         for template_raw, template_text in self._format_template_candidates(
-            "date", "office:date-value", same_format
+            "date", "office:date-value", same_format=same_format
         ):
             try:
                 template_value = _as_datetime(_parse_date_value(template_raw))
@@ -873,7 +873,7 @@ class Cell:
         return None
 
     def _infer_time_display(
-        self, new_value: "dt.time | dt.timedelta", same_format: bool = False
+        self, new_value: "dt.time | dt.timedelta", *, same_format: bool = False
     ) -> "str | None":
         # a duration past a day shows wrapped in a clock format (08:45:00) but
         # not in an elapsed-time one (128:45:00), and an example within a day
@@ -881,7 +881,7 @@ class Cell:
         if isinstance(new_value, dt.timedelta):
             return None
         for template_raw, template_text in self._format_template_candidates(
-            "time", "office:time-value", same_format
+            "time", "office:time-value", same_format=same_format
         ):
             try:
                 template_value = _parse_time_value(template_raw)
@@ -894,7 +894,7 @@ class Cell:
                     return new_value.strftime(pattern)
         return None
 
-    def _infer_boolean_display(self, new_value: bool) -> "str | None":
+    def _infer_boolean_display(self, new_value: bool) -> "str | None":  # noqa: FBT001 - the value, not a flag
         target_raw = "true" if new_value else "false"
         candidates = self._format_template_candidates("boolean", "office:boolean-value")
         for template_raw, template_text in candidates:

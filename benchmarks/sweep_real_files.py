@@ -153,7 +153,7 @@ def digest(parts: list[str]) -> str:
 
 
 def xml_rows(
-    path: Path, sheet_index: int, needed_rows: int, needed_cols: int, lxml: bool = False
+    path: Path, sheet_index: int, needed_rows: int, needed_cols: int, *, lxml: bool = False
 ) -> list[list[str]]:
     """Signatures of the cells `content.xml` puts at each position of one
     sheet, repeats unrolled, stopping at `needed_rows` - walked with lxml
@@ -218,7 +218,7 @@ def _xml_rows_lxml(path: Path, sheet_index: int, needed_rows: int, needed_cols: 
     return rows
 
 
-def probe(src: Path, path: Path, do_grid: bool, write_dir: Path | None) -> dict:
+def probe(src: Path, path: Path, *, do_grid: bool, write_dir: Path | None) -> dict:
     """Read one file with the version at `src` and report what it saw.
 
     Returns digests and counts only - never a value (see the module
@@ -361,7 +361,7 @@ class Findings:
     unreadable: int = 0
 
 
-def run_probe(src: Path, path: Path, do_grid: bool, write_dir: Path | None) -> dict:
+def run_probe(src: Path, path: Path, *, do_grid: bool, write_dir: Path | None) -> dict:
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     argv = [sys.executable, __file__, "--probe", str(src), str(path)]
     if do_grid:
@@ -374,7 +374,7 @@ def run_probe(src: Path, path: Path, do_grid: bool, write_dir: Path | None) -> d
     return json.loads(done.stdout)
 
 
-def compare(current: dict, baseline: dict | None, findings: Findings, do_write: bool) -> None:
+def compare(current: dict, baseline: dict | None, findings: Findings, *, do_write: bool) -> None:
     path = current["file"]
     findings.swept += 1
     if current["error"]:
@@ -429,7 +429,7 @@ def main() -> int:
     if args.probe:
         src, path = Path(args.probe[0]), Path(args.probe[1])
         write_dir = Path(args.write_dir) if args.write_dir else None
-        print(json.dumps(probe(src, path, args.grid, write_dir)))
+        print(json.dumps(probe(src, path, do_grid=args.grid, write_dir=write_dir)))
         return 0
 
     max_bytes = int(args.max_size * 1e6)
@@ -449,9 +449,9 @@ def main() -> int:
         with tempfile.TemporaryDirectory() as tmp:
             for n, path in enumerate(files, 1):
                 write_dir = Path(tmp) if n <= args.write_limit else None
-                current = run_probe(REPO / "src", path, args.grid or True, write_dir)
-                base = run_probe(baseline_src, path, False, None) if baseline_src else None
-                compare(current, base, findings, write_dir is not None)
+                current = run_probe(REPO / "src", path, do_grid=args.grid or True, write_dir=write_dir)
+                base = run_probe(baseline_src, path, do_grid=False, write_dir=None) if baseline_src else None
+                compare(current, base, findings, do_write=write_dir is not None)
                 reports.append({"current": current, "baseline": base})
                 print(f"\r{n}/{len(files)} files", end="", file=sys.stderr, flush=True)
         print(file=sys.stderr)

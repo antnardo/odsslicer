@@ -145,7 +145,7 @@ def _parse_part(file: Path, name: str, markup: bytes) -> "etree._ElementTree":
 class ODSReader:
     _from_template: bool = False  # set by new(): no source file to default save() to
 
-    def __init__(self, file: Path | str, verbose: bool = False) -> None:
+    def __init__(self, file: Path | str, *, verbose: bool = False) -> None:
         self.file: Path = Path(file)
         self.verbose = verbose
         # chatty progress messages go to the "odsslicer" logger: DEBUG
@@ -477,7 +477,7 @@ class ODSReader:
     _TEMPLATE_PATH = Path(__file__).parent / "_template.ods"
 
     @classmethod
-    def new(cls, sheet_name: str = "Sheet1", verbose: bool = False) -> "ODSReader":
+    def new(cls, sheet_name: str = "Sheet1", *, verbose: bool = False) -> "ODSReader":
         """Create a brand new, empty spreadsheet - not backed by any file on
         disk yet - with a single sheet named `sheet_name`.
 
@@ -499,6 +499,7 @@ class ODSReader:
     def save(
         self,
         path: Path | str | None = None,
+        *,
         recalculate: bool = False,
         timeout: int = 120,
         update_links: bool = False,
@@ -712,7 +713,7 @@ class ODSReader:
                 for element in _carrying(chart, attr):
                     element.set(attr, _rename_range_list(cast(str, element.get(attr)), old_name, new_name))
 
-    def export_content_xml(self, pretty: bool = True) -> None:
+    def export_content_xml(self, *, pretty: bool = True) -> None:
         """Write `content.xml` next to the document, as `<name>.xml`: the
         in-memory tree indented by lxml with `pretty=True` - where an element
         holds text, lxml leaves its content as it is - else the part's bytes

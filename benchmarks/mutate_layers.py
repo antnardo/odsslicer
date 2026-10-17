@@ -36,7 +36,7 @@ READ_FROM_ELEMENT = ["tests/test_odsslicer.py", "-k", "holds_content or paragrap
 COPIES = ["tests/test_odsslicer.py", "-k", "read_afresh or repeated_over_columns"]
 
 
-def _by_index(reference: str, element: str, after: bool) -> str:
+def _by_index(reference: str, element: str, *, after: bool) -> str:
     """A placement next to `reference` written by index, as 0.15.0 wrote
     it: what lxml's `insert()` walks the parent's children to."""
     offset = " + 1" if after else ""

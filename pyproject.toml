@@ -73,6 +73,11 @@ src = ["src", "tests"]
 line-length = 110
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "N", "C4", "PTH", "RET"]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "N", "C4", "PTH", "RET", "FBT"]
 ignore = ["RUF001", "RUF002", "RUF003"]  # unicode look-alikes: the prose uses typographic dashes
+
+[tool.ruff.lint.per-file-ignores]
+# a boolean passed by position to another library's API the tests call:
+# BeautifulSoup's find_all(True) for any tag, numpy's np.bool_(True)
+"tests/**" = ["FBT003"]
 

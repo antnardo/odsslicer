@@ -258,7 +258,7 @@ def _signature(path: Path) -> tuple[int, int]:
     return status.st_mtime_ns, status.st_size
 
 
-def recalculate(path: "str | Path", timeout: int = 120, update_links: bool = False) -> None:
+def recalculate(path: "str | Path", timeout: int = 120, *, update_links: bool = False) -> None:
     """Have a local LibreOffice open the `.ods` at `path`, recalculate every
     formula (`calculateAll()` - including ones whose cached value is stale),
     refresh every pivot table (materializing its output), and replace the

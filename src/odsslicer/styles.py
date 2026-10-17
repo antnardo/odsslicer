@@ -206,6 +206,7 @@ class NumberFormat:
         reader: "ODSReader",
         family: str,
         decimal_places: "int | None" = None,
+        *,
         grouping: bool = False,
         min_integer_digits: int = 1,
         currency_symbol: "str | None" = None,
