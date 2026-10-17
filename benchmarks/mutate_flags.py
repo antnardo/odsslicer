@@ -8,9 +8,9 @@ charts' own parts.
 its tree (`_touched_part`, `_touched_tag`): a write that forgets to is lost
 on save without a word, and nothing else would show it. Written for step 1
 of the lxml migration (ROADMAP.md), which moved `settings.xml` and the
-charts to lxml while `styles.xml` stays on bs4: `_touched_tag` then has to
-find the part of an element of either library. Run it again when a part
-changes library (step 5) or a new writer appears.
+charts to lxml while `styles.xml` stayed on bs4, and `_touched_tag` had to
+find the part of an element of either library; since step 5 every part is
+on lxml. Run it again when a new writer appears.
 
     python benchmarks/mutate_flags.py              # every mutation
     python benchmarks/mutate_flags.py pre-check    # those whose label says so
@@ -61,31 +61,30 @@ MUTATIONS = [
     ),
     # what the flags rely on
     (
-        "_touched_tag: an lxml part matched by its root",
+        "_touched_tag: a part matched by its tree's root",
         "reader.py",
-        "            root = part.getroot() if isinstance(part, etree._ElementTree) else part\n",
-        "            root = part\n",
+        "            if part.getroot() is top:\n",
+        "            if part is top:\n",
     ),
     (
-        "_touched_tag: getroottree() for an lxml element",
+        "_touched_tag: getroottree() for an element",
         "reader.py",
-        "            element = tag\n"
-        "            while (parent := element.getparent()) is not None:\n"
-        "                element = parent\n"
-        "            top = element\n",
-        "            top = tag.getroottree().getroot()\n",
+        "        top = tag\n"
+        "        while (parent := top.getparent()) is not None:\n"
+        "            top = parent\n",
+        "        top = tag.getroottree().getroot()\n",
     ),
     (
-        "_touched_tag: a bs4 tag climbs to its document",
-        "reader.py",
-        "                top = top.parent  # up to the document itself, the BeautifulSoup object\n",
-        "                break\n",
-    ),
-    (
-        "save: a touched part on lxml is serialised",
+        "save: a touched part other than styles.xml is serialised",
         "reader.py",
         "            if name in self._touched\n",
         "            if name in self._touched and name == 'styles.xml'\n",
+    ),
+    (
+        "save: a touched styles.xml is serialised",
+        "reader.py",
+        "            if name in self._touched\n",
+        "            if name in self._touched and name != 'styles.xml'\n",
     ),
     (
         "_charts: an embedded object that is no chart is left alone",
@@ -95,7 +94,7 @@ MUTATIONS = [
     ),
     # strict parsing, and the edits that refuse a malformed chart up front
     (
-        "strict: a part on lxml parsed with recovery",
+        "strict: a part parsed with recovery",
         "reader.py",
         "        return parse(markup)\n    except",
         "        return etree.ElementTree(etree.fromstring(markup, etree.XMLParser(recover=True)))\n"

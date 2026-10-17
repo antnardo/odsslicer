@@ -31,12 +31,18 @@ two ways:
 
     python benchmarks/lxml_profile_open.py 1000 10000 100000 --workdir /tmp/bench
 
+Since 1.0 the checkout is the port itself: the profile (1.) needs a version
+before 1.0, and is skipped on this one; the timings (2. and 3., `--only
+time`) put the projection next to the real thing, the port, and the bs4
+parse and walk next to lxml's, bs4 parsing as odsslicer did before 1.0.
+
 The synthetic workbooks are the ones `bench.py` writes, built once and kept
 in `--workdir` (100,000 rows take minutes to generate).
 """
 
 import argparse
 import gc
+import io
 import resource
 import subprocess
 import sys
@@ -52,9 +58,17 @@ from lxml import etree
 
 from odsslicer import ODSReader
 from odsslicer.constants import FORMATS
-from odsslicer.xmlutils import _parse_xml
 
 ODSSLICER = f"{Path(__file__).resolve().parents[1] / 'src' / 'odsslicer'}"
+
+
+def _parse_xml(markup: bytes) -> object:
+    """`markup` parsed as odsslicer parsed a part with bs4 before 1.0: every
+    text node kept, the document element named as whitespace-preserving."""
+    from bs4 import BeautifulSoup
+
+    root = etree.QName(next(etree.iterparse(io.BytesIO(markup), events=("start",)))[1])
+    return BeautifulSoup(markup, "xml", preserve_whitespace_tags={root.localname})
 
 
 def workbook(workdir: Path, n_rows: int) -> Path:
@@ -327,12 +341,12 @@ def projected_open_and_load(path: Path) -> list[list[_ProjectedCell]]:
 
 
 def child(mode: str, path: Path) -> None:
-    """Opening and loading `path`, really (`bs4`) or as projected on lxml
-    (`lxml`), in this fresh process: print its time and the process's peak
-    RSS, in MB."""
+    """Opening and loading `path`, really (`real`: with bs4 before 1.0, with
+    lxml since) or as projected on lxml (`lxml`), in this fresh process:
+    print its time and the process's peak RSS, in MB."""
     before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     t0 = time.perf_counter()
-    if mode == "bs4":
+    if mode == "real":
         ODSReader(path).sheet("Sheet1")
     else:
         projected_open_and_load(path)
@@ -357,7 +371,8 @@ sys.path.insert(0, {src!r})
 content = zipfile.ZipFile({path!r}).read("content.xml")
 before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 if {lib!r} == "bs4":
-    from odsslicer.xmlutils import _parse_xml
+    sys.path.insert(0, {benchmarks!r})
+    from lxml_profile_open import _parse_xml
     tree = _parse_xml(content)
 else:
     from lxml import etree
@@ -370,7 +385,9 @@ print((after - before) / (1e6 if sys.platform == "darwin" else 1e3))
 def peak_mb(path: Path, lib: str) -> float:
     """What parsing `content.xml` adds to the peak RSS of a fresh process,
     in MB - the bytes of the part already read."""
-    code = PEAK.format(src=str(Path(ODSSLICER).parent), path=str(path), lib=lib)
+    code = PEAK.format(
+        src=str(Path(ODSSLICER).parent), benchmarks=str(Path(__file__).parent), path=str(path), lib=lib
+    )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     return float(done.stdout)
 
@@ -390,11 +407,11 @@ def timed(path: Path) -> dict[str, float]:
     out["open, unprofiled"], reader = clock(lambda: ODSReader(path))
     out["load, unprofiled"], _ = clock(lambda: reader.sheet("Sheet1"))  # type: ignore[attr-defined]
     reader = None
-    real = [in_fresh_process("bs4", path) for _ in range(3)]
+    real = [in_fresh_process("real", path) for _ in range(3)]
     projected = [in_fresh_process("lxml", path) for _ in range(3)]
-    out["open + load, bs4, fresh"] = min(seconds for seconds, _ in real)
+    out["open + load, real, fresh"] = min(seconds for seconds, _ in real)
     out["open + load, lxml projected"] = min(seconds for seconds, _ in projected)
-    out["peak RSS, bs4 (MB)"] = min(peak for _, peak in real)
+    out["peak RSS, real (MB)"] = min(peak for _, peak in real)
     out["peak RSS, lxml projected (MB)"] = min(peak for _, peak in projected)
     return out
 
@@ -418,7 +435,9 @@ def main() -> int:
     for n in args.sizes:
         path = workbook(workdir, n)
         print(f"\n## {n:,} rows")
-        if args.only != "time":
+        if args.only != "time" and isinstance(ODSReader(path).data, etree._ElementTree):
+            print("\nprofile skipped: since 1.0 odsslicer holds no bs4 tree to profile")
+        elif args.only != "time":
             for phase, split in profiled(path).items():
                 total = sum(split.values())
                 print(f"\n{phase}: {total:.2f} s")

@@ -1,13 +1,17 @@
-"""Break each guard of the two XML layers, `xmltree` (lxml) and `xmlbs`
-(bs4), one at a time, and check that the parity tests notice - the proof
-that `tests/test_xmlbs.py` and `tests/test_xmltree.py` test what the layers
-are for, and not merely that they run.
+"""Break each guard of the XML layer, `xmltree`, and of the code built on
+it, one at a time, and check that a test notices - the proof that
+`tests/test_xmltree.py` tests what the layer is for, and not merely that it
+runs.
 
 A guard is a line that is there because the obvious translation is wrong:
-the tail handed over in `remove`, the declaration `new` writes when the
-document has no element of that name. Each mutation below undoes one; the
-run reports any that leaves both test files passing - a guard nothing
+the tail handed over in `remove`, the namespaces `new` declares, an element
+compared with `is None` where `or` would skip one with no children, a row
+placed next to a known one rather than by index. Each mutation below undoes
+one; the run reports any that leaves its tests passing - a guard nothing
 tests, or a line that guards nothing.
+
+Until 1.0 it broke the guards of `xmlbs` too, the bs4 layer, against the
+same parity tests: the mutations that went with it are in ROADMAP.md, step 5.
 
     python benchmarks/mutate_layers.py          # every mutation
     python benchmarks/mutate_layers.py remove   # those whose label says so
@@ -23,9 +27,20 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 LAYERS = REPO / "src" / "odsslicer"
-TESTS = ["tests/test_xmlbs.py", "tests/test_xmltree.py"]
+TESTS = ["tests/test_xmltree.py"]
+# the code built on the layer has its tests elsewhere: the mutations of
+# those guards name the tests that hold them
+POSITIONAL = ["tests/test_odsslicer.py", "-k", "never_places"]
 
-# (label, file, text as written, text with the guard undone)
+
+def _by_index(reference: str, element: str, after: bool) -> str:
+    """A placement next to `reference` written by index, as 0.15.0 wrote
+    it: what lxml's `insert()` walks the parent's children to."""
+    offset = " + 1" if after else ""
+    return f"{reference}.getparent().insert({reference}.getparent().index({reference}){offset}, {element})"
+
+
+# (label, file, text as written, text with the guard undone[, tests to run])
 MUTATIONS = [
     # lxml: the tail
     ("xmltree.remove drops the text after", "xmltree.py", "    _say_before(element, element.tail)\n", ""),
@@ -84,7 +99,7 @@ MUTATIONS = [
     (
         "xmltree.new declares no prefix",
         "xmltree.py",
-        "etree.Element(qn(name), nsmap={_PREFIXES[uri]: uri})",
+        "etree.Element(qn(name), nsmap=nsmap)",
         "etree.Element(qn(name))",
     ),
     (
@@ -106,122 +121,96 @@ MUTATIONS = [
         "return None",
     ),
     ("xmltree.rename renames nothing", "xmltree.py", "    element.tag = qn(name)\n", "    pass\n"),
-    # bs4: creating
+    # lxml: what came with the switch
     (
-        "xmlbs.new never declares",
-        "xmlbs.py",
-        "if near is not None and _named_like(near, name) is None else {}",
-        "if False else {}",
-    ),
-    (
-        "xmlbs.new always declares",
-        "xmlbs.py",
-        "if near is not None and _named_like(near, name) is None else {}",
-        "if True else {}",
-    ),
-    (
-        "xmlbs.new without an XML builder",
-        "xmlbs.py",
-        "return _FACTORY.new_tag(local, namespace=uri, nsprefix=prefix, attrs={**declared, **(attrs or {})})",
-        "return Tag(None, None, local, uri, prefix, attrs={**declared, **(attrs or {})})",
-    ),
-    # bs4: text, moving, search, names
-    (
-        "xmlbs.text reads one string only",
-        "xmlbs.py",
-        "    return element.get_text()\n",
-        '    return element.string or ""\n',
-    ),
-    ("xmlbs.set_text appends", "xmlbs.py", "    element.string = value\n", "    element.append(value)\n"),
-    (
-        "xmlbs.remove destroys and returns nothing",
-        "xmlbs.py",
-        "return cast(Tag, element.extract())",
-        "return element.decompose()",
-    ),
-    ("xmlbs.discard only takes out", "xmlbs.py", "    element.decompose()\n", "    element.extract()\n"),
-    (
-        "xmltree.discard keeps the element",
+        "xmltree.child searches the descendants",
         "xmltree.py",
-        'lxml not."""\n    remove(element)\n',
-        'lxml not."""\n    pass\n',
-    ),
-    ("xmlbs.clone copies nothing", "xmlbs.py", "    return copy.deepcopy(element)\n", "    return element\n"),
-    (
-        "xmlbs.insert_after inserts before",
-        "xmlbs.py",
-        "    reference.insert_after(element)\n",
-        "    reference.insert_before(element)\n",
+        "return next(element.iterchildren(qn(name)), None)",
+        "return next(element.iterdescendants(qn(name)), None)",
     ),
     (
-        "xmlbs.insert_before inserts after",
-        "xmlbs.py",
-        "    reference.insert_before(element)\n",
-        "    reference.insert_after(element)\n",
-    ),
-    ("xmlbs.unwrap drops the content", "xmlbs.py", "    element.unwrap()\n", "    element.decompose()\n"),
-    (
-        "xmlbs.wrap_contents moves the elements only",
-        "xmlbs.py",
-        "    for child in list(element.children):\n",
-        "    for child in element.find_all(True, recursive=False):\n",
+        "xmltree.elements keeps the comments",
+        "xmltree.py",
+        "return list(element.iterchildren(etree.Element))",
+        "return list(element)",
     ),
     (
-        "xmlbs.children ignores the prefix",
-        "xmlbs.py",
-        "(child.name == local and child.prefix == prefix)",
-        "child.name == local",
+        "xmltree.attributes keys an unnamed namespace by URI",
+        "xmltree.py",
+        '            if prefix is not None:\n                key = f"{prefix}:{local}"\n',
+        "",
     ),
     (
-        "xmlbs.children searches the descendants",
-        "xmlbs.py",
-        "        for child in element.contents\n",
-        "        for child in element.descendants\n",
+        "xmltree.unset removes nothing",
+        "xmltree.py",
+        "        del element.attrib[name]\n",
+        "        pass\n",
     ),
     (
-        "xmlbs.local_name gives the prefixed name",
-        "xmlbs.py",
-        "    return cast(str, element.name)\n",
-        "    return name_of(element)\n",
+        "xmltree.new declares no namespace for its attributes",
+        "xmltree.py",
+        "    for qualified in (name, *(attrs or ())):\n",
+        "    for qualified in (name,):\n",
+    ),
+    # the code on the layer: an element with no children is false in lxml
+    (
+        "NumberFormat: `or` between two children",
+        "styles.py",
+        '        number_tag = child(tag, "number:number")\n        if number_tag is None:\n'
+        '            number_tag = child(tag, "number:boolean")\n',
+        '        number_tag = child(tag, "number:number") or child(tag, "number:boolean")\n',
+        ["tests/test_odsslicer.py", "-k", "style_resolves or number_format"],
     ),
     (
-        "xmlbs.name_of drops the prefix",
-        "xmlbs.py",
-        'return f"{element.prefix}:{element.name}" if element.prefix else',
-        "return",
+        "_find_in_styles: `or` between the two parts",
+        "reader.py",
+        "return found if found is not None else first(self.styles_data.getroot().iter(*tags))",
+        "return found or first(self.styles_data.getroot().iter(*tags))",
+        ["tests/test_odsslicer.py", "tests/test_reader.py"],
     ),
     (
-        "xmlbs.namespace_of gives the prefix",
-        "xmlbs.py",
-        'return cast("str | None", element.namespace)',
-        'return cast("str | None", element.prefix)',
+        "_drawings: a drawing deleted with its cells still follows",
+        "reader.py",
+        "        if not all(_root_of(tag) is root for tag in (*ended, *objects)):\n",
+        "        if False:\n",
+        ["tests/test_odsslicer.py", "-k", "chart"],
+    ),
+    # sheet.py: next to a known element, never by index
+    (
+        "a row grown past the data placed by index",
+        "sheet.py",
+        "                insert_after(previous, new_row_tag)\n",
+        "                " + _by_index("previous", "new_row_tag", after=True) + "\n",
+        POSITIONAL,
     ),
     (
-        "xmlbs.rename renames nothing",
-        "xmlbs.py",
-        "    element.name, element.prefix, element.namespace = local, prefix, NAMESPACES[prefix]\n",
-        "    pass\n",
+        "a chain of copies placed by index",
+        "sheet.py",
+        "        insert_after(reference, element)\n        reference = element\n",
+        "        " + _by_index("reference", "element", after=True) + "\n        reference = element\n",
+        POSITIONAL,
     ),
     (
-        "xmlbs.paragraph_text drops the encoded spaces",
-        "xmlbs.py",
-        'parts.append(" " * _space_count(node))',
-        "pass",
+        "inserted rows placed by index",
+        "sheet.py",
+        "                insert_before(before, row_tag)\n",
+        "                " + _by_index("before", "row_tag", after=False) + "\n",
+        POSITIONAL,
     ),
     (
-        "xmlbs.paragraph_text ignores text:c",
-        "xmlbs.py",
-        'parts.append(" " * _space_count(node))',
-        'parts.append(" ")',
+        "inserted cells placed by index",
+        "sheet.py",
+        "                    insert_before(anchor, new_tag)\n",
+        "                    " + _by_index("anchor", "new_tag", after=False) + "\n",
+        POSITIONAL,
     ),
-    ("xmlbs.set_paragraph_text keeps the old content", "xmlbs.py", "    paragraph.clear()\n", ""),
 ]
 
 
 def main() -> None:
     wanted = sys.argv[1:]
     survivors, stale = [], []
-    for label, name, before, after in MUTATIONS:
+    for label, name, before, after, *tests in MUTATIONS:
         if wanted and not any(word in label for word in wanted):
             continue
         path = LAYERS / name
@@ -233,7 +222,16 @@ def main() -> None:
         try:
             path.write_text(original.replace(before, after))
             run = subprocess.run(
-                [sys.executable, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *TESTS],
+                [
+                    sys.executable,
+                    "-m",
+                    "pytest",
+                    "-q",
+                    "-x",
+                    "-p",
+                    "no:cacheprovider",
+                    *(tests[0] if tests else TESTS),
+                ],
                 cwd=REPO,
                 capture_output=True,
                 text=True,

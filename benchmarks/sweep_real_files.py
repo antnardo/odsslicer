@@ -115,11 +115,31 @@ def sample(files: list[Path], limit: int, max_bytes: int, seed: int) -> list[Pat
 # --------------------------------------------------------------------------
 
 
+OFFICE = "urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+TABLE = "urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+TEXT = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+
+
 def cell_signature(tag: object) -> str:
     """What a cell is, as the file states it - name, declared type, stored
     value, displayed text. Computed identically from the library's own tag
     and from the independent XML walk, so comparing the two tests placement
-    alone, not value parsing."""
+    alone, not value parsing.
+
+    The library's tag is an lxml element since 1.0, a bs4 one before: the
+    walk is made with the same library, so that a version compares with
+    itself (see `xml_rows`)."""
+    from lxml import etree
+
+    if isinstance(tag, etree._Element):
+        attrs = {}
+        for key, value in tag.attrib.items():
+            name = etree.QName(key)
+            if name.namespace == OFFICE or name.localname.endswith("-value"):
+                prefix = "office" if name.namespace == OFFICE else tag.prefix
+                attrs[f"{prefix}:{name.localname}"] = value
+        texts = ["".join(p.itertext()) for p in tag.iterchildren(f"{{{TEXT}}}p")]
+        return f"{etree.QName(tag).localname}|{sorted(attrs.items())}|{texts}"
     from bs4 import Tag
 
     assert isinstance(tag, Tag)
@@ -132,15 +152,20 @@ def digest(parts: list[str]) -> str:
     return hashlib.sha256("\x1e".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
-def xml_rows(path: Path, sheet_index: int, needed_rows: int, needed_cols: int) -> list[list[str]]:
+def xml_rows(
+    path: Path, sheet_index: int, needed_rows: int, needed_cols: int, lxml: bool = False
+) -> list[list[str]]:
     """Signatures of the cells `content.xml` puts at each position of one
-    sheet, repeats unrolled, stopping at `needed_rows`.
+    sheet, repeats unrolled, stopping at `needed_rows` - walked with lxml
+    for a version on lxml (1.0 on), with bs4 for one before.
 
     Deliberately not using anything from odsslicer: this is the oracle the
     grid is checked against.
     """
     import zipfile
 
+    if lxml:
+        return _xml_rows_lxml(path, sheet_index, needed_rows, needed_cols)
     from bs4 import BeautifulSoup
 
     # Whitespace kept as written, as LibreOffice shows it: by default
@@ -157,6 +182,32 @@ def xml_rows(path: Path, sheet_index: int, needed_rows: int, needed_cols: int) -
         signatures: list[str] = []
         for cell in row.find_all(["table:table-cell", "table:covered-table-cell"]):
             crep = int(cell.attrs.get("table:number-columns-repeated", "1"))
+            signatures.extend([cell_signature(cell)] * min(crep, needed_cols + 1))
+        for _ in range(min(repeat, max(needed_rows - len(rows), 0) + 1)):
+            rows.append(signatures)
+            if len(rows) > needed_rows:
+                return rows
+    return rows
+
+
+def _xml_rows_lxml(path: Path, sheet_index: int, needed_rows: int, needed_cols: int) -> list[list[str]]:
+    """`xml_rows`, walked with lxml: the same search, by namespace."""
+    import zipfile
+
+    from lxml import etree
+
+    with zipfile.ZipFile(path) as zf:
+        root = etree.fromstring(zf.read("content.xml"), etree.XMLParser(resolve_entities=False))
+    tables = list(root.iter(f"{{{TABLE}}}table"))
+    if sheet_index >= len(tables):
+        return []
+    rows: list[list[str]] = []
+    cell_tags = (f"{{{TABLE}}}table-cell", f"{{{TABLE}}}covered-table-cell")
+    for row in tables[sheet_index].iterdescendants(f"{{{TABLE}}}table-row"):
+        repeat = int(row.get(f"{{{TABLE}}}number-rows-repeated", "1"))
+        signatures: list[str] = []
+        for cell in row.iterdescendants(*cell_tags):
+            crep = int(cell.get(f"{{{TABLE}}}number-columns-repeated", "1"))
             signatures.extend([cell_signature(cell)] * min(crep, needed_cols + 1))
         for _ in range(min(repeat, max(needed_rows - len(rows), 0) + 1)):
             rows.append(signatures)
@@ -203,7 +254,10 @@ def probe(src: Path, path: Path, do_grid: bool, write_dir: Path | None) -> dict:
 
 def grid_mismatches(sheet: object, path: Path, index: int) -> list[str]:
     """Addresses where the grid holds a cell the file puts elsewhere."""
-    expected = xml_rows(path, index, sheet.n_rows, sheet.n_cols)  # type: ignore[attr-defined]
+    from lxml import etree
+
+    on_lxml = isinstance(sheet.table, etree._Element)  # type: ignore[attr-defined]
+    expected = xml_rows(path, index, sheet.n_rows, sheet.n_cols, lxml=on_lxml)  # type: ignore[attr-defined]
     bad: list[str] = []
     for r, row in enumerate(sheet.rows):  # type: ignore[attr-defined]
         if r >= len(expected):
