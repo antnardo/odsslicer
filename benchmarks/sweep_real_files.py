@@ -197,7 +197,9 @@ def _xml_rows_lxml(path: Path, sheet_index: int, needed_rows: int, needed_cols: 
     from lxml import etree
 
     with zipfile.ZipFile(path) as zf:
-        root = etree.fromstring(zf.read("content.xml"), etree.XMLParser(resolve_entities=False))
+        root = etree.fromstring(
+            zf.read("content.xml"), etree.XMLParser(resolve_entities=False, huge_tree=True)
+        )
     tables = list(root.iter(f"{{{TABLE}}}table"))
     if sheet_index >= len(tables):
         return []

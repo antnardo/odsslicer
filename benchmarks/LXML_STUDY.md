@@ -12,6 +12,13 @@ into an lxml tree and so stays on the branch `claude/lxml-study` until 1.0. "Thi
 means that one. The plan that follows from it is in `ROADMAP.md`, in French
 like the rest of that file.
 
+> **Since step 5 of the plan (2026-10-17, on the 1.0 branch) the migration is done:**
+> `content.xml` and `styles.xml` are on lxml with the rest, `xmlbs` and BeautifulSoup are gone
+> from the package, and what follows describes the code as it was before. Of the scripts below,
+> `lxml_inventory.py` now finds nothing to count, and `lxml_profile_open.py` puts the projection
+> next to the port itself (`--only time`); its profile of bs4's share needs a version before
+> 1.0. What the switch measured is in `ROADMAP.md`, step 5.
+
 Everything here can be measured again:
 
 | script | answers |

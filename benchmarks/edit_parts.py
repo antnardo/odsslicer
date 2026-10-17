@@ -32,6 +32,10 @@ names and file paths only. Keep it that way.
     python benchmarks/edit_parts.py --baseline-src ../baseline/src --charts-only DIR
 
 Each file is edited in a subprocess per version, as in `sweep_real_files.py`.
+`--timeout` gives each up to that many seconds: a sheet holding a cell a
+million rows down costs a million rows of memory to load (DOCS.md, Known
+limitations), LibreOffice's own `too-many-cols-rows.ods` is one, and took
+both versions past half an hour. A file timed out is counted, not compared.
 """
 
 import argparse
@@ -78,7 +82,9 @@ def _c14n(data: bytes) -> "str | None":
     from lxml import etree
 
     try:
-        root = etree.fromstring(data, etree.XMLParser(resolve_entities=False, no_network=True))
+        root = etree.fromstring(
+            data, etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=True)
+        )
     except etree.XMLSyntaxError:
         return None
     return hashlib.sha256(etree.tostring(root, method="c14n")).hexdigest()[:16]
@@ -119,10 +125,13 @@ def probe(src: Path, path: Path, out_dir: Path) -> dict:
     return result
 
 
-def run_probe(src: Path, path: Path, out_dir: Path) -> dict:
+def run_probe(src: Path, path: Path, out_dir: Path, timeout: "float | None" = None) -> dict:
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     argv = [sys.executable, __file__, "--probe", str(src), str(path), str(out_dir)]
-    done = subprocess.run(argv, capture_output=True, text=True, env=env, check=False)
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, env=env, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"file": str(path), "timed out": True, "edits": {}}
     if done.returncode != 0:
         return {"file": str(path), "crashed": done.stderr.strip()[-200:], "edits": {}}
     return json.loads(done.stdout)
@@ -154,6 +163,7 @@ def main() -> int:
     parser.add_argument("--probe", nargs=3, metavar=("SRC", "FILE", "OUT_DIR"), help=argparse.SUPPRESS)
     parser.add_argument("--baseline-src", help="the src/ directory of the version to compare with")
     parser.add_argument("--charts-only", action="store_true", help="only files holding an embedded object")
+    parser.add_argument("--timeout", type=float, help="seconds a version may take over one file")
     parser.add_argument("paths", nargs="*", type=Path)
     args = parser.parse_args()
     if args.probe:
@@ -172,9 +182,13 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         out_dir = Path(tmp)
         for path in files:
-            current = run_probe(REPO / "src", path, out_dir)
-            baseline = run_probe(Path(args.baseline_src), path, out_dir)
+            current = run_probe(REPO / "src", path, out_dir, args.timeout)
+            baseline = run_probe(Path(args.baseline_src), path, out_dir, args.timeout)
             counts["files"] += 1
+            if "timed out" in current or "timed out" in baseline:
+                counts["timed out, not compared"] += 1
+                print(f"  timed out: {path}", file=sys.stderr, flush=True)
+                continue
             if "crashed" in current or "crashed" in baseline:
                 findings.append(
                     f"{path}: probe crashed ({'current' if 'crashed' in current else 'baseline'})"

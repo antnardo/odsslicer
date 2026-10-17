@@ -152,6 +152,12 @@ MUTATIONS = [
         "    for qualified in (name, *(attrs or ())):\n",
         "    for qualified in (name,):\n",
     ),
+    (
+        "xmltree.parse refuses a part past libxml2's size limit",
+        "xmltree.py",
+        "remove_blank_text=False, huge_tree=True",
+        "remove_blank_text=False",
+    ),
     # the code on the layer: an element with no children is false in lxml
     (
         "NumberFormat: `or` between two children",
