@@ -11,6 +11,11 @@ still change between minor versions.
 
 These come with the move to lxml (DOCS.md, section 15) and wait for 1.0.
 
+- **An element is known by its namespace and local name, not its local name alone.** An element
+  of another namespace sharing its local name with a row, a group of rows or columns, a column or
+  a covered cell was taken for one: a `<x:table-row>` a file holds among its rows read as a row of
+  the sheet. LibreOffice skips such an element, and odsslicer now does too.
+
 - **`odsslicer.classes.EMPTY_CELL_BS` is renamed `EMPTY_CELL`**: the empty cell stood in for a
   position past the sheet is an lxml element now, and the BeautifulSoup in its name went with it.
 

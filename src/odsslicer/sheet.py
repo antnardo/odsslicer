@@ -46,7 +46,6 @@ from .xmltree import (
     elements,
     insert_after,
     insert_before,
-    local_name,
     namespace_of,
     new,
     qn,
@@ -86,10 +85,25 @@ def _repeat(tag: etree._Element, attr: str) -> int:
     return int(tag.get(attr, "1"))
 
 
+# Element names, by namespace URI, compared with `tag`: an element is what
+# its namespace and local name say, whatever prefix the file binds, and one
+# of another namespace that happens to share a local name is no row and no
+# cell - LibreOffice skips it. `etree.QName(element).localname`, which
+# compared local names alone until 1.0, also built an object per call, on
+# the path that loads every row.
 _CELL_TAGS = frozenset(qn(name) for name in TAG_CELL)
+_ROW = qn("table:table-row")
+_COVERED_CELL = qn("table:covered-table-cell")
 # what holds a sheet's rows besides the sheet itself: header rows, and row
 # groups at any depth
-_ROW_CONTAINERS = frozenset({"table-rows", "table-header-rows", "table-row-group"})
+_ROW_CONTAINERS = frozenset(
+    qn(name) for name in ("table:table-rows", "table:table-header-rows", "table:table-row-group")
+)
+_ROW_LEVEL = (_ROW, *_ROW_CONTAINERS)
+_COLUMN = qn("table:table-column")
+_COLUMN_GROUPS = frozenset(
+    qn(name) for name in ("table:table-columns", "table:table-header-columns", "table:table-column-group")
+)
 
 
 def _row_cells(row: etree._Element) -> list[etree._Element]:
@@ -106,10 +120,10 @@ def _sheet_rows(parent: etree._Element) -> list[etree._Element]:
     never inside a cell: a cell may hold a table of its own, whose rows a
     search of every descendant counted among the sheet's."""
     found: list[etree._Element] = []
-    for element in elements(parent):
-        if local_name(element) == "table-row":
+    for element in parent.iterchildren(*_ROW_LEVEL):
+        if element.tag == _ROW:
             found.append(element)
-        elif local_name(element) in _ROW_CONTAINERS:
+        else:
             found.extend(_sheet_rows(element))
     return found
 
@@ -568,7 +582,7 @@ class Sheet:
             if tag.get(_COLUMNS_REPEATED, "1") != "1":
                 self._unrepeat_col(row, col)
                 continue
-            if local_name(tag) == "covered-table-cell":
+            if tag.tag == _COVERED_CELL:
                 self._unmerge(row, col)
                 continue
             return
@@ -625,7 +639,7 @@ class Sheet:
         """Find the top-left cell of the merged range covering (row, col)."""
         for r in range(row, -1, -1):
             for master in self.rows[r]:
-                if local_name(master.cell) == "covered-table-cell" or not self._is_merge_master(master):
+                if master.cell.tag == _COVERED_CELL or not self._is_merge_master(master):
                     continue
                 rows_span = int(master.cell.get(_ROWS_SPANNED, "1"))
                 cols_span = int(master.cell.get(_COLUMNS_SPANNED, "1"))
@@ -643,7 +657,7 @@ class Sheet:
         and reveal that value, exactly like un-merging in LibreOffice does.
         """
         cell = self.rows[row][col]
-        if local_name(cell.cell) == "covered-table-cell":
+        if cell.cell.tag == _COVERED_CELL:
             master = self._find_merge_master(row, col)
             if master is None:
                 raise RuntimeError(
@@ -668,7 +682,7 @@ class Sheet:
                 if r == mr and c == mc:
                     continue
                 covered = self.rows[r][c]
-                if local_name(covered.cell) == "covered-table-cell":
+                if covered.cell.tag == _COVERED_CELL:
                     rename(covered.cell, "table:table-cell")
                 covered.__init__(covered.cell, row=r, col=c, sheet=self)  # type: ignore[misc]
 
@@ -1085,10 +1099,10 @@ class Sheet:
             return _sheet_rows(self.table)
         node: etree._Element | None = self.rows[-1][0].cell.getparent()
         while node is not None and node is not self.table:
-            for sibling in node.itersiblings(etree.Element):
-                if local_name(sibling) == "table-row":
+            for sibling in node.itersiblings(*_ROW_LEVEL):
+                if sibling.tag == _ROW:
                     found.append(sibling)
-                elif local_name(sibling) in _ROW_CONTAINERS:
+                else:
                     found.extend(_sheet_rows(sibling))
             node = node.getparent()
         return found
@@ -1463,7 +1477,7 @@ class Sheet:
             )
             for cells_row in self.rows
             for cell in cells_row
-            if local_name(cell.cell) != "covered-table-cell" and self._is_merge_master(cell)
+            if cell.cell.tag != _COVERED_CELL and self._is_merge_master(cell)
         ]
 
     def _grow_merge(self, row: int, col: int, span_rows: int, span_cols: int) -> None:
@@ -1480,7 +1494,7 @@ class Sheet:
         for r in range(row, row + span_rows):
             for c in range(col, col + span_cols):
                 covered = self.rows[r][c]
-                if (r, c) == (row, col) or local_name(covered.cell) == "covered-table-cell":
+                if (r, c) == (row, col) or covered.cell.tag == _COVERED_CELL:
                     continue
                 rename(covered.cell, "table:covered-table-cell")
                 covered.__init__(covered.cell, row=r, col=c, sheet=self)  # type: ignore[misc]
@@ -1589,8 +1603,6 @@ class Sheet:
         return RowStyle(tag, sheet=self, row=row)
 
     # what may hold `<table:table-column>` elements, and what comes after them
-    _COLUMN_GROUPS = frozenset({"table-columns", "table-header-columns", "table-column-group"})
-    _ROW_LEVEL = frozenset({"table-row", "table-rows", "table-header-rows", "table-row-group"})
 
     def _column_default_cell_style(self, col: int) -> "str | None":
         """The default cell style of logical column `col` - the style a cell
@@ -1609,12 +1621,12 @@ class Sheet:
         or not. ODF puts them before the rows, and the scan stops there:
         looking a column up costs nothing like a pass over the sheet."""
         for element in parent.iterchildren(etree.Element):
-            name = local_name(element)
-            if name in cls._ROW_LEVEL:
+            name = element.tag
+            if name in _ROW_LEVEL:
                 return
-            if name == "table-column":
+            if name == _COLUMN:
                 yield element
-            elif name in cls._COLUMN_GROUPS:
+            elif name in _COLUMN_GROUPS:
                 yield from cls._column_definitions(element)
 
     def _find_column_tag(self, col: int) -> "etree._Element | None":

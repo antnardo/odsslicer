@@ -31,6 +31,7 @@ TESTS = ["tests/test_xmltree.py"]
 # the code built on the layer has its tests elsewhere: the mutations of
 # those guards name the tests that hold them
 POSITIONAL = ["tests/test_odsslicer.py", "-k", "never_places"]
+NAMES = ["tests/test_odsslicer.py", "-k", "NamesByNamespace"]
 
 
 def _by_index(reference: str, element: str, after: bool) -> str:
@@ -180,6 +181,22 @@ MUTATIONS = [
         "        if not all(_root_of(tag) is root for tag in (*ended, *objects)):\n",
         "        if False:\n",
         ["tests/test_odsslicer.py", "-k", "chart"],
+    ),
+    # sheet.py: an element is its namespace and local name, not its local name alone
+    (
+        "_sheet_rows takes a row of another namespace for a row",
+        "sheet.py",
+        "    for element in parent.iterchildren(*_ROW_LEVEL):\n        if element.tag == _ROW:\n",
+        "    for element in parent.iterchildren(etree.Element):\n"
+        '        if etree.QName(element).localname == "table-row":\n',
+        NAMES,
+    ),
+    (
+        "_column_definitions takes a column of another namespace for a column",
+        "sheet.py",
+        "            if name == _COLUMN:\n",
+        '            if etree.QName(element).localname == "table-column":\n',
+        NAMES,
     ),
     # sheet.py: next to a known element, never by index
     (

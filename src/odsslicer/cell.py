@@ -43,7 +43,6 @@ from .xmltree import (
     elements,
     following,
     insert_before,
-    local_name,
     name_of,
     new,
     paragraph_text,
@@ -80,6 +79,7 @@ _ROWS_SPANNED = qn("table:number-rows-spanned")
 _DATA_STYLE_NAME = qn("style:data-style-name")
 _TEXT_P = qn("text:p")
 _CELL_TAGS = tuple(qn(name) for name in TAG_CELL)
+_COVERED_CELL = qn("table:covered-table-cell")
 
 
 def _data_style_name(reader: "ODSReader", name: "str | None") -> "str | None":
@@ -1194,7 +1194,7 @@ class Cell:
         (a `table:covered-table-cell`) - its own value/formatting is still
         there in the XML, just not shown, until `Sheet.unmerge(...)`
         reveals it again."""
-        return local_name(self.cell) == "covered-table-cell"
+        return self.cell.tag == _COVERED_CELL
 
     @property
     def is_merged(self) -> bool:

@@ -665,6 +665,45 @@ class TestChildrenNotDescendants:
         assert names == ["dc:creator", "text:list"]
 
 
+# An element of another namespace that shares a local name with ODF's: what
+# a file may hold where it writes elements of its own (ODF 1.3, 3.17)
+OTHER_NAMESPACE = "urn:example:other"
+
+
+class TestNamesByNamespace:
+    """An element is what its namespace and local name say: since 1.0, one
+    of another namespace is not taken for a row, a cell or a column because
+    its local name is the same - LibreOffice skips it."""
+
+    def test_a_row_of_another_namespace_is_not_a_row(self, tmp_path):
+        xml = (
+            table_row(text_cell("a"))
+            + f'<x:table-row xmlns:x="{OTHER_NAMESPACE}">{text_cell("foreign")}</x:table-row>'
+            + table_row(text_cell("c"))
+        )
+        sheet = ODSReader(ods_with_sheet(tmp_path / "foreign.ods", xml)).sheet("Sheet1")
+        assert sheet.to_list() == [["a"], ["c"]]
+
+    def test_a_row_group_of_another_namespace_holds_no_row(self, tmp_path):
+        xml = (
+            table_row(text_cell("a"))
+            + f'<x:table-row-group xmlns:x="{OTHER_NAMESPACE}">'
+            + table_row(text_cell("b"))
+            + "</x:table-row-group>"
+            + table_row(text_cell("c"))
+        )
+        sheet = ODSReader(ods_with_sheet(tmp_path / "foreign.ods", xml)).sheet("Sheet1")
+        assert sheet.to_list() == [["a"], ["c"]]
+
+    def test_a_column_of_another_namespace_is_not_a_column(self, tmp_path):
+        xml = (
+            f'<x:table-column xmlns:x="{OTHER_NAMESPACE}" table:default-cell-style-name="other"/>'
+            '<table:table-column table:default-cell-style-name="mine"/>' + table_row(text_cell("a"))
+        )
+        sheet = ODSReader(ods_with_sheet(tmp_path / "foreign.ods", xml)).sheet("Sheet1")
+        assert sheet._column_default_cell_style(0) == "mine"
+
+
 class TestLoadingWideSheets:
     """A sheet formatted far past its data, as LibreOffice writes one."""
 
