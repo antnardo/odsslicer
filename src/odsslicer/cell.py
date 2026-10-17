@@ -464,6 +464,18 @@ class Cell:
         # style name, and a name-based check can't tell those apart.
         self._own_style_name: str | None = None
 
+    def _at(self, row: int, col: int) -> "Cell":
+        """This cell, read at (`row`, `col`): another position of the same
+        element - a cell repeated over columns, or a row over rows - which
+        reads alike, save a time value (see `_counts_elapsed_time`). A copy of
+        what `__init__` read rather than a second reading of the element: lxml
+        builds a string for each attribute it is asked, and a sheet's blank
+        padding is most of its positions."""
+        copy = Cell.__new__(type(self))
+        copy.__dict__ = self.__dict__.copy()
+        copy.row, copy.col = row, col
+        return copy
+
     @property
     def value(self) -> Any:
         return self._value

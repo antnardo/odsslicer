@@ -358,16 +358,26 @@ class Sheet:
         if content_end > 0 and real_width - content_end > MAX_REPEAT_COLS:
             built_width = content_end
 
-        # One `Cell` per position, and no other: the grid's.
+        # One `Cell` per position, and no other: the grid's. The positions
+        # an element repeats over read alike, and all but the first are
+        # copies of it (`Cell._at`), save a time value, whose reading may
+        # depend on the column (`Cell._counts_elapsed_time`).
         i = 0
         for row, pairs in zip(rows[:end], normalized, strict=True):
             n_rows = int(row.get(_ROWS_REPEATED, "1"))
+            first: list[Cell | None] = [None] * len(pairs)
             for _ in range(n_rows):
                 cells = []
                 j = 0
-                for cell, n_cols in pairs:
+                for k, (cell, n_cols) in enumerate(pairs):
+                    template = first[k]
                     for _ in range(min(n_cols, built_width - j)):
-                        built = Cell(cell, i, j, self)
+                        if template is None:
+                            built = Cell(cell, i, j, self)
+                            if built.format != "time":
+                                template = first[k] = built
+                        else:
+                            built = template._at(i, j)
                         cells.append(built)
                         if built._unreadable is not None:
                             unreadable.append(built)

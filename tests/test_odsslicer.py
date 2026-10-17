@@ -753,6 +753,24 @@ def test_cell_text_is_its_paragraphs_joined_whatever_else_it_holds(xml):
     assert Cell(element).text == expected
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        FIXTURES_DIR / "TEST.ods",
+        FIXTURES_DIR / "WHOLEROW.ods",
+        *sorted((FIXTURES_DIR / "wild").glob("*.ods")),
+    ],
+    ids=lambda path: path.name,
+)
+def test_every_position_of_the_grid_reads_as_its_element_read_afresh(path):
+    # `load` copies the first reading of a repeated cell to its other
+    # positions (`Cell._at`): each must be what a `Cell` built there reads
+    for sheet in ODSReader(path).sheets:
+        for r, row in enumerate(sheet.rows):
+            for c, cell in enumerate(row):
+                assert vars(cell) == vars(Cell(cell.cell, r, c, sheet)), (r, c)
+
+
 class TestLoadingWideSheets:
     """A sheet formatted far past its data, as LibreOffice writes one."""
 
@@ -770,14 +788,19 @@ class TestLoadingWideSheets:
     def test_no_cell_is_built_for_the_columns_left_out(self, tmp_path, monkeypatch):
         path = ods_with_sheet(tmp_path / "wide.ods", self.WIDE_XML)
         built = []
-        original = Cell.__init__
+        original, copied = Cell.__init__, Cell._at
 
         def recording(cell, tag, row=0, col=0, sheet=None):
             if sheet is not None:
                 built.append(col)
             original(cell, tag, row, col, sheet)
 
+        def recording_copy(cell, row, col):  # a repeated cell's other positions
+            built.append(col)
+            return copied(cell, row, col)
+
         monkeypatch.setattr(Cell, "__init__", recording)
+        monkeypatch.setattr(Cell, "_at", recording_copy)
         sheet = ODSReader(path).sheet("Sheet1")
         assert sheet.size == (51, 3)
         assert max(built) == 2
@@ -2865,6 +2888,23 @@ def test_a_time_value_reads_as_its_format_says(tmp_path):
     duration, clock = dt.timedelta(hours=7, minutes=30), dt.time(7, 30)
     # its own format, a time of day's, none, its parent's, its column's
     assert [s[0, col].value for col in range(5)] == [duration, clock, clock, duration, duration]
+
+
+def test_a_time_repeated_over_columns_reads_as_each_column_says(tmp_path):
+    # one element over two columns, the second formatted [HH]:MM as a whole,
+    # in a row repeated twice: `load` copies a repeated cell's first reading
+    # (`Cell._at`), save a time value's
+    repeated = _time_cell().replace(
+        "<table:table-cell", '<table:table-cell table:number-columns-repeated="2"', 1
+    )
+    xml = (
+        '<table:table-column/><table:table-column table:default-cell-style-name="elapsed"/>'
+        + table_row(repeated, repeat=2)
+        + table_row(text_cell("end"))
+    )
+    s = ODSReader(ods_with_sheet(tmp_path / "times.ods", xml, _ELAPSED_STYLES)).sheet("Sheet1")
+    duration, clock = dt.timedelta(hours=7, minutes=30), dt.time(7, 30)
+    assert [[cell.value for cell in row] for row in s.rows[:2]] == [[clock, duration], [clock, duration]]
 
 
 @pytest.mark.parametrize(

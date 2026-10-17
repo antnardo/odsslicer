@@ -33,6 +33,7 @@ TESTS = ["tests/test_xmltree.py"]
 POSITIONAL = ["tests/test_odsslicer.py", "-k", "never_places"]
 NAMES = ["tests/test_odsslicer.py", "-k", "NamesByNamespace"]
 READ_FROM_ELEMENT = ["tests/test_odsslicer.py", "-k", "holds_content or paragraphs_joined"]
+COPIES = ["tests/test_odsslicer.py", "-k", "read_afresh or repeated_over_columns"]
 
 
 def _by_index(reference: str, element: str, after: bool) -> str:
@@ -241,6 +242,20 @@ MUTATIONS = [
         "            if only.tag != _TEXT_P:\n",
         "            if False:\n",
         READ_FROM_ELEMENT,
+    ),
+    (
+        "load copies a repeated time value's first reading",
+        "sheet.py",
+        '                            if built.format != "time":\n',
+        "                            if True:\n",
+        COPIES,
+    ),
+    (
+        "Cell._at keeps the first position's column",
+        "cell.py",
+        "        copy.row, copy.col = row, col\n",
+        "        copy.row = row\n",
+        COPIES,
     ),
     # sheet.py: next to a known element, never by index
     (
