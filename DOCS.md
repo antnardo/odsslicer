@@ -68,6 +68,7 @@ sheet = table.sheet("Sheet1")
 13. [Known limitations](#13-known-limitations)
 14. [Appendix: notable bug fixes](#14-appendix-notable-bug-fixes)
 15. [What changes in 1.0](#15-what-changes-in-10)
+    - [Upgrading from 0.x](#upgrading-from-0x)
 
 ---
 
@@ -1315,37 +1316,47 @@ props.custom               # a dict snapshot of every custom property
 
 Measured with `benchmarks/bench.py` (kept in the repo — run it to re-measure on your own
 machine): synthetic workbooks of N rows × 5 columns (ids, text, floats, ratios, one formula
-column), Apple Silicon laptop, Python 3.12.
+column), one fresh process per size, median of three runs; Apple M4, Python 3.14, lxml 6.1, a
+load average of 2.7 to 4.3. The last column is 0.16.1, the last release on BeautifulSoup, run
+interleaved with 1.0 on the same machine.
 
-| operation | 1,000 rows | 10,000 rows | 100,000 rows |
-|---|---|---|---|
-| generate + save (bulk writes) | 0.40 s | 4.1 s | 42 s |
-| file size | 0.04 MB | 0.29 MB | 2.9 MB |
-| open (XML parse) | 79 ms | 0.96 s | 11 s |
-| first sheet access (`load()`) | 37 ms | 0.37 s | 5.3 s |
-| full read (`to_numpy`) | < 1 ms | 4 ms | 75 ms |
-| read / write one cell | < 1 ms | < 1 ms | ~1 ms |
-| write a 1,000-cell range | 13 ms | 13 ms | 14 ms |
-| `sort` 1,000 rows | 51 ms | 50 ms | 51 ms |
-| `delete_row` (single) | 9 ms | 88 ms | 0.9 s |
-| delete 10 rows, one by one | 81 ms | 0.86 s | 8.5 s |
-| `delete_rows` (10 at once) | 8 ms | 86 ms | 1.3 s |
-| `copy` a 1,000×2 block into new columns | 108 ms | 0.59 s | 5.3 s |
-| `save` | 58 ms | 0.45 s | 4.1 s |
-| peak memory (RSS) | 68 MB | 318 MB | 2.0 GB |
+| operation | 1,000 rows | 10,000 rows | 100,000 rows | 100,000 rows, 0.16.1 |
+|---|---|---|---|---|
+| generate + save (bulk writes) | 0.09 s | 0.88 s | 8.9 s | 22 s |
+| file size | 0.04 MB | 0.29 MB | 2.8 MB | 2.9 MB |
+| open (XML parse) | 2 ms | 21 ms | 0.21 s | 8.0 s |
+| first sheet access (`load()`) | 10 ms | 0.10 s | 1.06 s | 1.72 s |
+| full read (`to_numpy`) | < 1 ms | 7 ms | 72 ms | 0.35 s |
+| read / write one cell | < 1 ms | < 1 ms | < 1 ms | < 1 ms |
+| write a 1,000-cell range | 8 ms | 11 ms | 33 ms | 0.34 s |
+| `sort` 1,000 rows | 32 ms | 34 ms | 58 ms | 0.41 s |
+| `delete_row` (single) | 7 ms | 66 ms | 0.66 s | 0.70 s |
+| delete 10 rows, one by one | 56 ms | 0.59 s | 5.9 s | 6.6 s |
+| `delete_rows` (10 at once) | 6 ms | 58 ms | 0.59 s | 0.64 s |
+| `copy` a 1,000×2 block into new columns | 49 ms | 0.15 s | 1.2 s | 3.5 s |
+| `save` | 6 ms | 35 ms | 0.33 s | 3.4 s |
+| peak memory (RSS) | 62 MB | 169 MB | 1.26 GB | 2.23 GB |
+
+No operation is slower than with 0.16.1, at any of the three sizes; the deletions, whose cost
+is the pass over every formula (below), are the ones 1.0 leaves nearly as they were. On a real
+gradebook, `NotesReference.ods` - three sheets, styles, notes, merged and repeated cells -
+opening and loading every sheet takes 9 ms instead of 46 (`benchmarks/time_open.py`, median
+of 9 fresh processes).
 
 What the numbers mean in practice:
 
-> **Out of date since 1.0** (section 15): the figures above and the two bullets that follow were
-> measured with BeautifulSoup, which 1.0 drops for lxml alone; opening and loading are several
-> times faster, and the peak memory lower. They are to be measured again before 1.0 is
-> released.
-
 - **Time scales linearly** with document size for whole-document operations (open, save,
-  full read), and the per-cell constants are small. **Memory is the real limit**: every cell
-  is materialized (a bs4 XML element plus a `Cell`, before 1.0), costing ~4.5 KB per cell — a
-  100,000-row × 5-column sheet peaks around 2.3 GB of RSS. Beyond that scale, `odsslicer` is
-  the wrong tool; use a streaming reader like `python-calamine` for pure reading.
+  full read), and the per-cell constants are small. **Memory is the real limit**: every
+  position of the grid gets a `Cell`, on top of the lxml tree - opening and loading the
+  100,000-row × 5-column sheet in a fresh process peaks at 0.85 GB, about 1.7 KB per cell
+  (1.38 GB with 0.16.1; the 1.26 GB above includes generating the workbook in the same
+  process). Beyond that scale, `odsslicer` is the wrong tool; use a streaming reader like
+  `python-calamine` for pure reading.
+- **Opening is parsing, loading is building the grid.** `ODSReader(path)` parses the parts
+  and stops there; the first access to a sheet builds a `Cell` per position, and that is now
+  most of what opening and loading a large sheet costs: 1.06 of 1.27 s at 100,000 rows (7.6 s
+  with 0.16.1, where BeautifulSoup built a Python object for every element while parsing). The
+  positions a repeated cell or row stands for are copies of its first reading.
 - **Local operations don't scale with document size**: reading or writing a cell, writing a
   range, sorting a range — their cost depends on the operation's own size only.
 - **Deleting many rows: batch it.** Each `delete_row`/`delete_column` call runs one
@@ -1368,46 +1379,51 @@ What the numbers mean in practice:
 - Another, fixed in 0.15.0: **writing past the data grows the sheet one row per cell**, and
   from 0.14.0 each new row was placed after the last one with BeautifulSoup's `insert_after`,
   which finds that row by scanning the table from its first row — so writing a column of N
-  rows past the data cost N²/2 comparisons. `generate + save` above took 246 s at 100,000 rows
+  rows past the data cost N²/2 comparisons. `generate + save` took 246 s at 100,000 rows
   instead of 32 s (Apple M4, Python 3.14, one fresh process each, the same machine before and
   after); median of 5 interleaved runs of the bulk writes alone: 3.8 s → 3.2 s at 10,000 rows,
   15.7 s → 9.9 s at 30,000. The rows then went in at an index counted from the end of the table,
   and the cost was linear again; since 1.0 each goes right after the one before (lxml's
   `addnext`, in constant time), never by index, which lxml's `insert` walks to.
+  `benchmarks/bench_insertions.py` times the edits that place many elements at once, at
+  20,000 rows: writing a column past the data 0.44 s (1.04 s with 0.16.1), inserting 20,000
+  rows 0.07 s (0.15 s), inserting 10 columns 0.49 s (1.18 s), writing into a run of 20,000
+  repeated rows 0.09 s (0.20 s).
 
 ### How it compares to other readers
 
 Measured with `benchmarks/compare_readers.py` on the competitors' home turf: a purely
 numeric matrix (N rows × 5 float columns, one sheet) read in full into Python values.
-Contenders: [`odfdo`](https://pypi.org/project/odfdo/) 3.24 (the other maintained full
-read/write library) and [`python-calamine`](https://pypi.org/project/python-calamine/) 0.8
-(the Rust streaming reader). Fresh subprocess per measurement, median of 3 runs, library
-import excluded; same Apple Silicon laptop as above.
+Contenders: [`odfdo`](https://pypi.org/project/odfdo/) 3.27 (the other maintained full
+read/write library) and [`python-calamine`](https://pypi.org/project/python-calamine/) 0.9
+(the Rust streaming reader), with odsslicer 0.16.1 for reference. Fresh subprocess per
+measurement, median of 3 runs, library import excluded; same machine as above.
 
 Read time:
 
-| Rows (×5 float columns) | odsslicer 0.11 | odfdo | python-calamine |
-|---|---|---|---|
-| 100 | 25 ms | 4 ms | < 1 ms |
-| 1,000 | 150 ms | 30 ms | 2 ms |
-| 10,000 | 1.6 s | 0.30 s | 13 ms |
-| 100,000 | 25 s | 9.2 s | 0.27 s |
+| Rows (×5 float columns) | odsslicer 1.0 | odsslicer 0.16.1 | odfdo | python-calamine |
+|---|---|---|---|---|
+| 100 | 2 ms | 12 ms | 3 ms | < 1 ms |
+| 1,000 | 14 ms | 82 ms | 26 ms | 1 ms |
+| 10,000 | 134 ms | 0.89 s | 0.25 s | 12 ms |
+| 100,000 | 1.4 s | 12.3 s | 2.6 s | 0.12 s |
 
 Peak memory (RSS):
 
-| Rows (×5 float columns) | odsslicer 0.11 | odfdo | python-calamine |
-|---|---|---|---|
-| 1,000 | 68 MB | 43 MB | 17 MB |
-| 10,000 | 304 MB | 120 MB | 25 MB |
-| 100,000 | 2.1 GB | 644 MB | 109 MB |
+| Rows (×5 float columns) | odsslicer 1.0 | odsslicer 0.16.1 | odfdo | python-calamine |
+|---|---|---|---|---|
+| 1,000 | 57 MB | 75 MB | 54 MB | 25 MB |
+| 10,000 | 139 MB | 277 MB | 119 MB | 33 MB |
+| 100,000 | 968 MB | 2.2 GB | 768 MB | 115 MB |
 
-The honest conclusion: **for reading values in bulk, odsslicer is the slowest of the
-three** — about 5-6× odfdo and ~100× python-calamine, which streams from compiled Rust
-without building any DOM and stays nearly flat on memory. That is the structural price of
-odsslicer's editable model (a full XML tree plus a `Cell` object per cell carrying formats,
-styles, formulas and write support), not an accident — and it is why the README says to use
-`python-calamine` when all you need is to read values fast. odsslicer's sweet spot is
-reading *and rewriting* documents whose formatting must survive.
+The honest conclusion: **for reading values in bulk, python-calamine is about ten times
+faster than odsslicer**, and takes an eighth of its memory at 100,000 rows: it streams from compiled Rust
+without building any DOM. Since 1.0, odsslicer reads about twice as fast as odfdo, at a
+quarter more memory - before, it was the slowest of the three by far. The gap with calamine is
+the structural price of odsslicer's editable model (a full XML tree plus a `Cell` object per
+cell carrying formats, styles, formulas and write support), not an accident — and it is why
+the README says to use `python-calamine` when all you need is to read values fast.
+odsslicer's sweet spot is reading *and rewriting* documents whose formatting must survive.
 
 ## 13. Known limitations
 
@@ -1486,10 +1502,10 @@ issue it was reported in.
 ## 15. What changes in 1.0
 
 odsslicer 1.0 drops BeautifulSoup and reads and writes the XML with lxml alone: opening and
-loading a large sheet was projected about six times faster, with half the memory, in
-[`benchmarks/LXML_STUDY.md`](benchmarks/LXML_STUDY.md) (section 12 is to be measured again). The
-high-level API - `ODSReader`, `Sheet`, `Cell`, `CellStyle`, values, styles, formulas - stays as
-it is. What changes, decided before the code was written (ROADMAP.md, step 4):
+loading a 100,000-row sheet takes 1.3 s instead of 7.6 s, with 40 % less memory, and no
+operation is slower than in 0.16 (measured in [section 12](#12-performance)). The high-level
+API - `ODSReader`, `Sheet`, `Cell`, `CellStyle`, values, styles, formulas - stays as it is.
+What changes, decided before the code was written (ROADMAP.md, steps 4 and 6):
 
 - **`Cell.attrs` and `Sheet.attrs` are removed.** They were the element's own attribute
   dictionary, with the file's prefixed keys, and writing to them bypassed everything the library
@@ -1535,4 +1551,99 @@ it is. What changes, decided before the code was written (ROADMAP.md, step 4):
   `encoding="utf-8"`), `&apos;` and `&quot;` written out, an empty element as `<x/>`, and
   without the namespace declarations bs4 repeated on some of the elements it created.
   `export_content_xml(pretty=True)` indents with lxml.
+- **An element is known by its namespace and local name**, not its local name alone: an element of
+  another namespace that a file writes among the rows - a `<x:table-row>` - read as a row of the
+  sheet, where LibreOffice skips it, as odsslicer now does.
 - **lxml 5.0 or later** is required, and BeautifulSoup no longer is.
+
+### Upgrading from 0.x
+
+What code written for 0.x has to change, break by break - nothing, if it uses only the high-level
+API. Each pair below is the 0.x line, then its 1.0 equivalent.
+
+**`Cell.attrs` and `Sheet.attrs`.** What they were read for has a property:
+
+```python
+cell.attrs.get("table:style-name")      # 0.x
+cell.style_name                         # 1.0 - and since 0.16.0: the name, None if the cell has none
+cell.style                              # the style itself, resolved, readable and writable
+
+cell.attrs.get("table:formula")         # 0.x
+cell.formula                            # 1.0: the ODF formula, "of:=SUM([.A1:.A3])"
+cell.formula_friendly                   # in ordinary syntax, "=SUM(A1:A3)"
+
+sheet.attrs["table:name"]               # 0.x
+sheet.name                              # 1.0
+sheet.attrs.get("table:style-name")     # 0.x
+sheet.style                             # 1.0: its TableStyle, resolved and writable
+```
+
+Any other attribute is read on the element, by namespace URI:
+`cell.cell.get(qn("table:number-columns-repeated"))`, with `qn` from `odsslicer.xmltree`.
+
+**A search in the XML.** `reader.data`, `styles_data`, `meta_data` and `settings_data` are
+`lxml.etree._ElementTree`s, `cell.cell`, `sheet.table` and the items of `reader.tables`
+elements; names are spelled by namespace URI, which `qn` builds from the usual prefixes. bs4's
+`find` and `find_all` searched every descendant, unless told `recursive=False`; lxml's `find`
+and `findall` look at the children only, and `iter` at every descendant:
+
+```python
+from odsslicer.xmltree import qn
+
+# 0.x: BeautifulSoup
+reader.data.find_all("table:named-range")
+cell.cell.find_all("text:p", recursive=False)
+cell.cell.find("office:annotation")
+cell.cell.get_text()
+cell.cell.attrs
+reader.settings_data.find("config:config-item", {"config:name": "ActiveTable"})
+
+# 1.0: lxml
+reader.data.getroot().iter(qn("table:named-range"))
+cell.cell.iterchildren(qn("text:p"))
+next(cell.cell.iter(qn("office:annotation")), None)
+"".join(cell.cell.itertext())
+cell.cell.attrib                        # keyed by URI: "{urn:oasis:...:table:1.0}style-name"
+next(
+    (item for item in reader.settings_data.getroot().iter(qn("config:config-item"))
+     if item.get(qn("config:name")) == "ActiveTable"),
+    None,
+)
+```
+
+Writing into these trees is what it was: possible, and outside what the library keeps
+consistent. `save()` writes `content.xml` and `meta.xml` out of their trees, and copies the
+other parts byte for byte unless odsslicer itself wrote to them: a change made directly in
+`styles_data` or `settings_data` is not saved, in 1.0 as in 0.x.
+
+**`EMPTY_CELL_BS`** is renamed: it is the element a position past the sheet reads from, an lxml
+element now.
+
+```python
+from odsslicer.classes import EMPTY_CELL_BS     # 0.x
+from odsslicer.classes import EMPTY_CELL        # 1.0
+
+sheet["Z1000"].cell is EMPTY_CELL               # True past the sheet's extent
+```
+
+**`MalformedDocumentError`**, new. 0.x opened a malformed document repaired, with what the
+repair dropped missing, and `save()` wrote that back; 1.0 raises, naming the part:
+
+```python
+from odsslicer import MalformedDocumentError
+
+try:
+    reader = ODSReader(path)                    # content.xml, styles.xml, meta.xml
+except MalformedDocumentError as error:         # a ValueError, as EncryptedDocumentError is
+    ...
+```
+
+`settings.xml` raises on the first read of `settings_data`, and a chart's own content at the
+first structural edit (`insert_rows`, `insert_columns`, `delete_rows`, `delete_column`,
+`rename_sheet`), before the edit changes anything.
+
+**BeautifulSoup is no longer installed with odsslicer**: code that imports `bs4` itself depends
+on it in its own right.
+
+`CellStyle.cell_properties` and `text_properties` keep their keys, and `export_content_xml()` its
+signature (`pretty=True` indents as lxml does).

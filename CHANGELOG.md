@@ -2,86 +2,106 @@
 
 All notable changes to `odsslicer` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
-[Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
-still change between minor versions.
+[Semantic Versioning](https://semver.org/): from 1.0 on, a breaking change waits for a new major
+version (until 1.0, the API could change between minor versions).
 
 ## [Unreleased]
 
-### Changed in 1.0 (on the 1.0 branch, not in a 0.x release)
+odsslicer 1.0 reads and writes every part of the package with lxml alone: BeautifulSoup is gone.
+The high-level API - `ODSReader`, `Sheet`, `Cell`, `CellStyle`, values, styles, formulas - is
+unchanged, and code that uses only it needs no change. What breaks is the access to the XML
+underneath; DOCS.md, section 15, gives the 1.0 equivalent of each 0.x line ("Upgrading from
+0.x"). From 1.0 on, a breaking change waits for the next major version.
 
-These come with the move to lxml (DOCS.md, section 15) and wait for 1.0.
+### Removed
 
+- **BeautifulSoup is no longer a dependency**; `lxml` 5.0 or later is. Code that imports `bs4`
+  itself has to depend on it.
+- **`Cell.attrs` and `Sheet.attrs`**, deprecated in 0.16.0: `cell.style_name`, `cell.style`,
+  `cell.formula`, `sheet.name` and `sheet.style` say what they were used for.
+- **`odsslicer.classes.EMPTY_CELL_BS` is renamed `EMPTY_CELL`**: the element a position past the
+  sheet reads from is an lxml element, and the BeautifulSoup in its name went with it.
+
+### Changed
+
+- **The escape hatches to the XML are lxml trees and elements**: `reader.data`,
+  `reader.styles_data`, `reader.meta_data` and `reader.settings_data` are
+  `lxml.etree._ElementTree`s, `reader.tables` a list of elements, `sheet.table` and `cell.cell`
+  elements. Search them with lxml (`iter`, `iterchildren`, `find`, `xpath`), names spelled by
+  namespace URI: `cell.cell.get(xmltree.qn("table:formula"))`,
+  `settings_data.getroot().iter(xmltree.qn("config:config-item"))`. An element taken out of the
+  document - a cell of a deleted sheet - stays readable, where bs4 emptied it. `settings_data`
+  is still parsed only when asked for, and `save()` still copies `settings.xml` and
+  `styles.xml` byte for byte unless odsslicer wrote to them.
+- **A malformed part raises `MalformedDocumentError`** (new, a `ValueError`, exported next to
+  `EncryptedDocumentError`), naming the part, rather than reading a repaired guess that `save()`
+  would write back - a truncated `content.xml` read with cells missing. `content.xml`,
+  `styles.xml` and `meta.xml` raise when the document is opened, `settings.xml` when
+  `settings_data` is first read, a chart's part at the first structural edit (rows or columns
+  inserted or deleted, a sheet renamed), before the edit changes anything. None of 500 real files
+  needs the repair.
 - **An element is known by its namespace and local name, not its local name alone.** An element
   of another namespace sharing its local name with a row, a group of rows or columns, a column or
   a covered cell was taken for one: a `<x:table-row>` a file holds among its rows read as a row of
-  the sheet. LibreOffice skips such an element, and odsslicer now does too.
-
-- **`odsslicer.classes.EMPTY_CELL_BS` is renamed `EMPTY_CELL`**: the empty cell stood in for a
-  position past the sheet is an lxml element now, and the BeautifulSoup in its name went with it.
-
-- **BeautifulSoup is gone: every part of the package is read and written with lxml alone.**
-  `beautifulsoup4` is no longer a dependency; `lxml` 5.0 or later is. The high-level API -
-  `ODSReader`, `Sheet`, `Cell`, `CellStyle`, values, styles, formulas - is unchanged.
-- **Opening a workbook is much faster, and takes less memory.** At 100,000 rows × 5 columns,
-  opening then loading the sheet went from 7.4 s to 2.5 s in a fresh process, the peak memory
-  from 1.38 GB to 0.84 GB; opening alone from 5.8 s to 0.2 s, saving from 3.3 s to 0.3 s. Loading
-  a sheet, taken alone, is slower (1.5 s to 2.3 s): lxml builds a Python object for each element
-  it reaches, where bs4 had built them all while parsing. `NotesReference.ods`, a real gradebook,
-  opens and loads in 17 ms instead of 47.
-- **The escape hatches to the XML are lxml elements and trees**: `reader.data` and
-  `reader.styles_data` are `lxml.etree._ElementTree`s, `reader.tables` a list of elements,
-  `sheet.table` and `cell.cell` elements. Search them with lxml (`iter`, `iterchildren`, `find`,
-  `xpath`), names spelled by namespace URI: `cell.cell.get(xmltree.qn("table:formula"))`. An
-  element taken out of the document - a cell of a deleted sheet - stays readable, where bs4
-  emptied it.
-- **`Cell.attrs` and `Sheet.attrs` are removed**, as announced in 0.16.0: `cell.style_name`,
-  `cell.style`, `sheet.name` and `sheet.style` say what they were used for.
-- **`CellStyle.cell_properties` and `text_properties` keep the specification's prefixes**
-  (`"fo:background-color"`) whatever the file binds; an attribute of a namespace the
-  specification does not name, LibreOffice's `officeooo:rsid`, keeps the file's prefix, as it did.
-- **A document binding the ODF namespaces to other prefixes reads like any other** - a `table`
-  namespace written `tab:` read as a document with no sheet - and what odsslicer writes into it
-  takes its prefixes. No file among 492 sampled does it; LibreOffice reads such a file as it
-  reads the original.
+  the sheet. LibreOffice skips such an element, and odsslicer now does too. None of 2,112 real
+  files and 611 of LibreOffice's test files holds one. Number formats still read their parts by
+  local name: LibreOffice writes `<loext:text>` among them, and shows it as text.
 - **A formula is written with the prefix the document binds to OpenFormula** (`of:=` in every
   file LibreOffice writes), and a document that binds it to none gets `of` declared on the root
   of `content.xml`: `of:=...` went in with no declaration, which only LibreOffice's leniency
   made work.
-- **`content.xml` is written in other bytes, in the same canonical form** (C14N): under the XML
-  declaration it was read with, `&apos;` and `&quot;` written out as characters, an empty
-  element as `<x/>`, and without the namespace declaration bs4 repeated on an element it
-  created where the document had no element of that name yet. `export_content_xml(pretty=True)`
-  indents with lxml.
-- **`reader.settings_data` is an lxml tree** (`lxml.etree._ElementTree`), no longer a
-  BeautifulSoup document. Its elements are named by namespace URI, whatever prefix the file
-  binds: `settings_data.getroot().iter(xmltree.qn("config:config-item"))`. It is still parsed only
-  when asked for, and `save()` still copies `settings.xml` byte for byte unless something wrote to
-  it. **`reader.meta_data`** is an lxml tree too, since `DocumentProperties` moved to lxml.
-- **A chart's own content is read and rewritten by lxml.** Its ranges are found by namespace: a
-  chart part binding the chart, table or office namespace to other prefixes now follows
-  structural edits, and is written back with its own prefixes - it was left as it was. A chart
-  part a structural edit rewrites says what 0.16 wrote, in canonical form (C14N), in other bytes:
-  `&apos;` written out, an empty element as `<x/>`, the XML declaration as the file had it.
-- **A malformed part raises `MalformedDocumentError`** (new, a `ValueError`, exported next to
-  `EncryptedDocumentError`), naming the part, rather than reading a repaired guess that `save()`
-  would write back - a truncated `content.xml` read with cells missing: `content.xml`,
-  `styles.xml` and `meta.xml` when the document is opened, `settings.xml` when `settings_data` is
-  first read, a chart's part at the first structural edit (rows or columns inserted or deleted, a
-  sheet renamed) - before the edit changes anything, so that it refuses rather than stops
-  halfway.
+- **`content.xml`, and a chart's part a structural edit rewrites, are written in other bytes, in
+  the same canonical form** (C14N): under the XML declaration they were read with, `&apos;` and
+  `&quot;` written out as characters, an empty element as `<x/>`, and without the namespace
+  declaration bs4 repeated on an element it created where the document had no element of that
+  name yet. `export_content_xml(pretty=True)` indents with lxml.
+- **`CellStyle.cell_properties` and `text_properties` keep their keys** as the specification
+  prefixes them (`"fo:background-color"`) whatever prefix the file binds; an attribute of a
+  namespace the specification does not name, LibreOffice's `officeooo:rsid`, keeps the file's
+  prefix, as it did.
+
+### Fixed
+
+- **A document binding the ODF namespaces to other prefixes reads like any other** - a `table`
+  namespace written `tab:` read as a document with no sheet - and what odsslicer writes into it
+  takes its prefixes. A chart part binding the chart, table or office namespace to other prefixes
+  follows structural edits, where it was left as it was. No file among 492 sampled does it;
+  LibreOffice reads such a file as it reads the original.
+- **A line break in an attribute survives a save.** LibreOffice writes one as `&#x0a;` - in a
+  formula written over several lines, in the text a formula computed (`office:string-value`) -
+  and BeautifulSoup wrote it back as a raw line break, which every XML parser reads as a space:
+  each save turned `of:=1&#xA;+&#xA;2` into `of:=1 + 2`. A carriage return written `&#x0d;`, in
+  an attribute or in a cell's text, went the same way. Found on 5 of the author's files and 4 of
+  LibreOffice's own test files (`tdf76310.ods` among them, the bug report about formulas with
+  line breaks), by comparing the saved `content.xml` with the original's in canonical form.
+- **A part past libxml2's size limit is read**: LibreOffice's `tdf136551.ods`, well formed, holds
+  an attribute of 10.9 MB.
+
+### Performance
+
+No operation is slower than with 0.16.1, and most are several times faster (DOCS.md, section
+12, measured on the same machine, interleaved). At 100,000 rows × 5 columns:
+
+- **opening** takes 0.21 s instead of 8.0 s: parsing is lxml's, in C, where BeautifulSoup built
+  a Python object for every element;
+- **loading the sheet** 1.06 s instead of 1.72 s, and opening then loading, in a fresh process,
+  1.27 s instead of 7.6 s, with a peak memory of 0.85 GB instead of 1.38 GB. Loading builds one
+  `Cell` per position, and decides what the grid leaves out on the elements, without one; the
+  positions a repeated cell stands for are copies of its first reading;
+- **saving** 0.33 s instead of 3.4 s, a full read (`to_numpy`) 72 ms instead of 0.35 s, writing
+  1,000 cells 33 ms instead of 0.34 s, sorting 1,000 rows 58 ms instead of 0.41 s, copying a
+  1,000 × 2 block 1.2 s instead of 3.5 s, generating and saving the workbook 8.9 s instead of
+  22 s. Deleting rows is 5 to 10 % faster: its cost is the pass over every formula.
+
+`NotesReference.ods`, a real gradebook, opens and loads its three sheets in 9 ms instead of 46.
+Every edit that places many elements at once (writing past the data, inserting rows or columns,
+writing into a run of repeated rows) places them next to a known element, never by index, which
+lxml walks to: more than twice as fast as 0.16.1 at 20,000 rows.
 
 ## [0.16.1] — 2026-10-17
 
 ### Fixed
 
-- **A line break in an attribute survives a save** (1.0, with lxml). LibreOffice writes one as
-  `&#x0a;` - in a formula written over several lines, in the text a formula computed
-  (`office:string-value`) - and BeautifulSoup wrote it back as a raw line break, which every XML
-  parser reads as a space: each save turned `of:=1&#xA;+&#xA;2` into `of:=1 + 2`. A carriage
-  return written `&#x0d;`, in an attribute or in a cell's text, went the same way. Found on 5 of
-  the author's files and 4 of LibreOffice's own test files (`tdf76310.ods` among them, the bug
-  report about formulas with line breaks), by comparing the saved `content.xml` with the
-  original's in canonical form.
 - **Deleting a row no longer deletes a chart or a shape anchored in it past the grid's columns.**
   LibreOffice writes a chart there when the data stops short of it, in the cells a row element
   keeps beyond the grid. The rescue of [#24](https://github.com/antnardo/odsslicer/issues/24),

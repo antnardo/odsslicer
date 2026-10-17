@@ -129,8 +129,10 @@ no `soffice`/`libreoffice` binary is on `PATH`.
 ## Versions
 
 Version numbers are derived automatically from git tags (via `setuptools-scm`) and follow
-[Semantic Versioning](https://semver.org/) — while the major version stays `0`, the API can
-still change between minor versions. See
+[Semantic Versioning](https://semver.org/): from 1.0 on, a breaking change waits for a new major
+version. Code written for 0.x that reaches into the XML (`cell.attrs`, a BeautifulSoup search in
+`reader.data`) has a line-by-line upgrade guide in
+[DOCS.md, section 15](https://github.com/antnardo/odsslicer/blob/master/DOCS.md#upgrading-from-0x). See
 [CHANGELOG.md](https://github.com/antnardo/odsslicer/blob/master/CHANGELOG.md) (and the
 [Releases](https://github.com/antnardo/odsslicer/releases) page) for what changed in each
 version.

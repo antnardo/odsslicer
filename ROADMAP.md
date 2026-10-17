@@ -330,20 +330,53 @@ objets bs4 (`reader.data`, `styles_data`, `meta_data`, `settings_data`, `cell.ce
 propriétés obscures, peu utilisées, et le paquet n'a pas d'utilisateurs à ménager. À faire à la
 **1.0**, annoncée comme telle, pas au fil d'une 0.14.x.
 
-### Pour démarrer (état au 2026-10-17, soir)
+### Pour démarrer (état au 2026-10-18)
 
-**Où en est-on.** La 0.16.0 est publiée (2026-10-17) avec les étapes 2, 3 et 4 du plan
-ci-dessous. La branche de la 1.0, `claude/lxml-study`, part de `master` (v0.16.0) et porte les
-étapes 0 et 1 ; **l'étape 5, la bascule, est faite** sur `claude/lxml-step5`, partie d'elle, à
-relire et fusionner : `content.xml` et `styles.xml` sont sur lxml avec le reste, `xmlbs.py` et
-BeautifulSoup ont quitté le paquet (`lxml>=5.0` seul ; bs4 reste dans l'extra `test`, pour
-inspecter les fichiers enregistrés et comparer à ce que faisait le code bs4). Le détail, ce
-qu'elle a coûté et ce qu'elle apprend pour l'étape 6 sont dans le plan.
+**Où en est-on : la 1.0 est prête à publier.** Les six étapes du plan sont faites. La 0.16.1
+est publiée (`master`, tag `v0.16.1`) ; la branche de la 1.0, `claude/lxml-study`, porte les
+étapes 0, 1 et 5 ; **l'étape 6, la dernière, est faite** sur `claude/lxml-step6`, partie d'elle,
+à relire et fusionner : le chemin chaud (`Sheet.load` plus lent qu'en 0.16 n'est plus vrai, rien
+ne l'est), les noms comparés par URI, la mesure complète (DOCS.md, section 12, refaite) et la
+documentation de la 1.0 (CHANGELOG « Unreleased » écrit comme les notes de la 1.0, DOCS.md
+section 15 avec « Upgrading from 0.x »). Le détail est dans le plan, étape 6.
 
-**Lire, dans l'ordre** : cette section ; « Plan d'engagement » plus bas, l'étape 5 surtout ;
-DOCS.md, section 15 (ce que la 1.0 change, écrit au passé) ; puis `xmltree.py` et
-`tests/test_xmltree.py`, qui sont la spécification exécutable de chaque piège — les tests de
-parité de `tests/test_xmlbs.py` y ont été versés, côté lxml, contre ce que faisait le code bs4.
+**Ce qui reste à décider pour publier** :
+
+- **La fusion et le tag** : `claude/lxml-step6` dans `claude/lxml-study`, puis la branche
+  rebasée sur `master` (v0.16.1 : rien n'est venu depuis) et fusionnée ; le tag `v1.0.0` et la
+  release GitHub, que `publish.yml` envoie sur PyPI. La version vient du tag (setuptools-scm),
+  rien à éditer ; seul le titre « [Unreleased] » du CHANGELOG devient « [1.0.0] — date ».
+- **Le classificateur** `Development Status :: 4 - Beta` : passer à `5 - Production/Stable`
+  avec la 1.0, ou non.
+- **Python 3.14** : toutes les mesures de l'étape 6 sont faites sous 3.14, que ni la matrice de
+  la CI ni les classificateurs ne nomment (3.10 à 3.13).
+- **`<loext:text>` dans les formats de nombre** : les composants d'un format (`number:text`,
+  `number:number`…) sont encore comparés par nom local (`local_name`, `styles.py`), parce que
+  LibreOffice écrit `<loext:text>` parmi eux (307 des 2 112 vrais fichiers de l'auteur, 27 du
+  corpus de LibreOffice, toujours dans des `number:number-style` à caractère de remplissage), et
+  l'affiche comme du texte : par URI, ce texte disparaîtrait du texte affiché inféré à
+  l'écriture (`_render_number_from_format`). Trancher : garder le nom local là, ou comparer
+  à `{qn("number:text"), qn("loext:text")}` explicitement.
+- **Les dépendants** : aucun code de `pylocalmodules` n'utilise plus une échappatoire de la 0.x
+  (`attrs`, une recherche bs4, `EMPTY_CELL_BS`), sauf trois scripts de reproduction archivés
+  dans `promotion/fiches/bancs/odsslicer/corrections-2026-09-27/` (`cell.attrs`, une recherche
+  bs4) ; avant de monter `~/Envs/main` en 1.0, relancer les suites de devoir_utils, copiedouble
+  et compta contre elle (`uv run --frozen --with 'odsslicer==1.0.0'`).
+
+**Ce qui vient après la 1.0** : les autres pistes de cette feuille de route, aucune n'attendant
+plus la bascule — les plages nommées et les références 3D dans la syntaxe des formules
+(« Formules ») ; les séparateurs des nombres selon la locale, faire suivre les autres plages
+(tableaux croisés, plages nommées, mises en forme conditionnelles) aux éditions de structure,
+le texte enrichi partiel, puis les non-couverts (validation, filtres, volets figés, protection,
+plans), avec la contrainte qu'impose leur régénération (« Relecture de DOCS.md du
+2026-10-01 », et « La contrainte à respecter si l'on régénère `styles.xml` et `settings.xml` ») ; la réécriture de `Sheet.load` avec des tests dédiés
+(« Vers 1.0 — consolidation », point 1), qui a gagné à l'étape 6 un filet de plus. Et la mémoire,
+devenue la seule limite : un `Cell` par position (environ 1,7 Ko par cellule, ouverture et
+chargement compris).
+
+**Lire, dans l'ordre** (pour reprendre la migration elle-même) : cette section ; « Plan
+d'engagement » plus bas, les étapes 5 et 6 surtout ; DOCS.md, section 15 ; puis `xmltree.py` et
+`tests/test_xmltree.py`, qui sont la spécification exécutable de chaque piège.
 `benchmarks/LXML_STUDY.md` (en anglais) décrit le code d'avant la bascule.
 
 **Où vit le travail — décidé le 2026-10-04.** Les étapes 0, 1, 5 et 6 changent le type d'une
@@ -352,10 +385,6 @@ rebasée sur `master` après chaque 0.x.
 
 **Le formatage** est vérifié par la CI : formater chaque commit avant de le pousser (`ruff format
 src tests benchmarks`, ruff 0.16.x épinglé), sinon le job `lint` échoue.
-
-**Par où commencer** : fusionner `claude/lxml-step5` dans `claude/lxml-study`, puis l'étape 6, le
-chemin chaud : `Sheet.load` est plus lent qu'avec bs4 (voir l'étape 5, « mesuré »), seule ombre
-d'une ouverture trois fois plus rapide.
 
 **À ne pas oublier en route** :
 
@@ -774,14 +803,80 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
    - `_declare_on_root` refait la racine et déplace tout le document : une passe, payée une fois,
      par un document qui ne lie aucun préfixe à OpenFormula — 5 fichiers sur 492 du corpus.
 
-   **Laissé à décider** : publier la 1.0 après l'étape 6 ou avant, `Sheet.load` étant plus lent
-   que la 0.16 pris seul (l'ouverture et le chargement ensemble sont trois fois plus rapides) ;
+   **Laissé à décider** : ~~publier la 1.0 après l'étape 6 ou avant, `Sheet.load` étant plus lent
+   que la 0.16 pris seul~~ (sans objet depuis l'étape 6, où il ne l'est plus) ;
    et le nom `EMPTY_CELL_BS`, gardé parce qu'exporté par `odsslicer.classes` — tranché le 2026-10-18 :
    renommé `EMPTY_CELL` à la 1.0, `near` retiré pour de bon.
 
-6. **Le chemin chaud et la mesure.** `Cell.__init__` et `Sheet.load` en appels lxml natifs, banc
-   complet contre la section 12 de DOCS.md, CHANGELOG et DOCS de la 1.0 (les échappatoires
-   devenues lxml, nommées une à une).
+6. ~~**Le chemin chaud et la mesure.**~~ **Fait le 2026-10-18** (branche `claude/lxml-step6`,
+   partie de `claude/lxml-study`, à fusionner) : plus aucune opération n'est plus lente qu'en
+   0.16.1, chargement seul compris.
+
+   **Le chemin chaud**, profilé (cProfile sur `Sheet.load`, puis chronométré en processus neufs,
+   en alternance avec la 0.16.1) ; chargement d'une feuille de 10 000 lignes × 5 :
+
+   - *Les noms par URI* (`43b0340`) : `local_name` (un `etree.QName` par appel) remplacé par des
+     comparaisons de `tag` à des constantes `{URI}local` dans `sheet.py` et `Cell.is_covered`
+     ; 0,233 → 0,226 s. Décision appliquée : un élément d'un autre espace de noms au même nom
+     local n'est plus pris pour une ligne, un groupe, une colonne ou une cellule couverte — ce
+     que fait LibreOffice (vérifié par conversion en CSV : il saute un `<x:table-row>`, la 0.16.1
+     le lisait comme une ligne). Aucun tel élément dans les 2 112 vrais fichiers de l'auteur ni
+     les 611 du corpus de LibreOffice (`benchmarks/namespace_scan.py`). **Sauf les
+     formats de nombre**, laissés au nom local : voir « Pour démarrer », `<loext:text>`.
+   - *Un `Cell` par position* (`6a0e1dc`) : `load` en construisait 120 013 pour 50 005 cellules
+     (les gardes de largeur, de lignes vides et de colonnes vides, puis la grille).
+     `_holds_content` lit désormais l'élément (type de valeur, `office:value`, formule, paragraphe
+     ou note), un test le tient égal à `Cell.is_empty` sur 23 formes de cellule ; chaque ligne
+     est listée et mesurée une fois (`measure`, que `_normalize_row_width` reçoit) ;
+     `_row_cells` filtre par lxml (`iterchildren(*tags)`) ; `Cell.__init__` lit une cellule sans
+     enfant ou d'un seul paragraphe sans lister ses enfants (1 324 → 818 ns par cellule).
+     0,226 → 0,094 s (0.16.1 : 0,111 s). Mesuré pas à pas : un seul `Cell` 0,237 → 0,136 s,
+     paragraphes 0,136 → 0,112, mesure unique 0,112 → 0,096 ; incorporer `_compute_is_empty` n'a
+     rien rapporté (laissé tel quel).
+   - *La copie des cellules répétées* (`165007f`) : les positions qu'un élément répété couvre
+     sont des copies de sa première lecture (`Cell._at`, un `dict` copié), sauf une valeur de
+     temps, que le format de sa colonne peut lire en durée. Sans effet sur les classeurs
+     synthétiques ; `NotesReference.ods`, trois feuilles chargées : 9,0 → 6,8 ms (0.16.1 :
+     7,9), 8 667 de ses 10 626 positions copiées. Un test relit chaque position des fixtures et
+     des fichiers sauvages à neuf et compare.
+   - *Le tri* (`b99f335`) : seul `sort` à 1 000 lignes restait plus lent (39 ms contre 36) —
+     `_style_name` remonte au style par défaut de la colonne en parcourant ses définitions,
+     deux fois par cellule, et ce parcours crée des mandataires lxml là où bs4 avait ses objets
+     tout faits. Le style par défaut de chaque colonne est lu une fois par tri : 29 ms.
+   - Écarté : couper le ramasse-miettes pendant `load` (17 % du chargement à 100 000 lignes),
+     un effet de bord global qu'une bibliothèque n'a pas à imposer.
+
+   Chaque garde-fou a sa mutation (`mutate_layers.py` : 11 nouvelles, 41 au total ;
+   `mutate_flags.py` 15), toutes attrapées.
+
+   **Mesuré**, Apple M4, Python 3.14, lxml 6.1, charge 2,7 à 4,3, `bench.py` en processus neuf
+   par taille, médiane de trois, en alternance avec la 0.16.1 (le tableau est dans DOCS.md,
+   section 12, et le détail aux trois tailles dans le compte rendu de la session) : à 100 000
+   lignes, ouvrir 8,0 → 0,21 s, charger 1,72 → 1,06 s, ouvrir puis charger en processus neuf
+   7,6 → 1,27 s (la projection de l'étude donnait 1,9), pic 1,38 → 0,85 Go ; enregistrer 3,4 →
+   0,33 s ; supprimer des lignes 5 à 10 % plus vite seulement (la passe sur les formules). Rien
+   n'est plus lent qu'en 0.16.1 à aucune taille ; à 1 000 lignes, les petites opérations
+   (`to_numpy`, lire et écrire une cellule, supprimer une ligne) sont égales ou plus rapides au
+   chronomètre fin. `NotesReference.ods` (`time_open.py`, médiane de 9) : 46,1 → 9,4 ms.
+   `bench_insertions.py` à 20 000 lignes : 2,3 à 2,4 fois plus rapide que la 0.16.1 partout.
+   `compare_readers.py` : odsslicer lit désormais deux fois plus vite qu'odfdo 3.27 (1,4 s
+   contre 2,6 s à 100 000 lignes, 12,3 s en 0.16.1), python-calamine 0.9 restant onze fois plus
+   rapide.
+
+   *Balayage* de 250 vrais fichiers contre `claude/lxml-study` (557 feuilles, 146 écrits et
+   relus) : zéro partout — lecture, grille, écriture-relecture, parties recopiées, erreurs
+   nouvelles (4 illisibles des deux côtés). *Fidélité* (`edit_parts.py`) : fixtures, 48
+   éditions, 542 parties identiques à l'octet, zéro différence ; corpus de LibreOffice, 614
+   fichiers, 3 366 éditions : 59 777 parties identiques à l'octet (les deux versions écrivent
+   désormais avec lxml), 24 erreurs identiques des deux côtés, `too-many-cols-rows.ods` hors
+   délai (300 s), zéro différence.
+
+   **La documentation** : CHANGELOG « Unreleased » réécrit en notes de la 1.0 (retiré, changé,
+   corrigé, vitesse ; le correctif des sauts de ligne dans un attribut, rangé par erreur sous la
+   0.16.1, y est revenu : il n'a jamais été publié sur bs4) ; DOCS.md section 12 remesurée,
+   comparaison aux autres lecteurs comprise, section 15 avec « Upgrading from 0.x » (chaque
+   rupture, l'ancienne ligne et la nouvelle, vérifiées en les exécutant) ; README et CHANGELOG ne
+   parlent plus de la règle des versions 0.x.
 
 Pourquoi cet ordre : du plus isolé au plus couplé, et pour que chaque différence de balayage ait
 une seule cause possible. Les étapes 1 et 2 ne changent rien à ce qu'on lit ou écrit, et le
@@ -797,7 +892,8 @@ Ruptures d'API de la 1.0 (faites à l'étape 5, dans le CHANGELOG et DOCS.md §1
 sort l'indentation de lxml. Changements de comportement : un fichier mal formé lève au lieu de
 s'ouvrir réparé en silence ; un fichier aux préfixes non standard se lit ; une formule prend le
 préfixe d'OpenFormula du document ; un saut de ligne écrit en référence dans un attribut survit à
-l'enregistrement.
+l'enregistrement ; un élément d'un autre espace de noms au nom local d'une ligne ou d'une colonne
+n'en est plus une (étape 6).
 
 ### À décider
 
