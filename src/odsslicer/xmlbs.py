@@ -19,12 +19,14 @@ else. `xmlutils` keeps what does not have that one-to-one counterpart -
 parsing a part, reading the manifest, the style helpers built on top of
 these functions.
 
-What bs4 does that lxml does not is not reproduced here, and does not need
-to be: bs4 keeps the text after an element as a node of its parent, so
-`remove`, `clone`, `insert_after` and `unwrap` are its own methods, with
-nothing to fix. The one operation that needs more than a call is `new`: bs4
-cannot know whether the document an element is for binds its namespace,
-and that is what `near` is for (see there).
+Most bodies are a single bs4 call: bs4 keeps the text after an element as
+a node of its parent, so removing, copying or moving an element has no
+tail to look after - the pitfalls are lxml's, and `xmltree` handles them.
+Two operations needed more. `new`: bs4 cannot know whether the document a
+new element is for binds its namespace, which `near` stands in for (see
+there). And removing comes in two kinds, `remove` for an element put
+elsewhere and `discard` for one dropped, because only bs4 needs telling
+them apart (see `discard`).
 
 Names are compared by local name where the code compared local names
 (`local_name(child) == "table-row"`), as it did on bs4: moving those to a
@@ -43,6 +45,7 @@ from .xmltree import NAMESPACES
 __all__ = [
     "children",
     "clone",
+    "discard",
     "insert_after",
     "insert_before",
     "local_name",
@@ -113,17 +116,23 @@ def set_text(element: Tag, value: str) -> None:
 
 
 def remove(element: Tag) -> Tag:
-    """Take `element` out of its tree and return it - `extract()`,
-    `xmltree.remove`. The text that followed it stays where it was: in bs4
-    it is a node of the parent.
-
-    Where the code called `decompose()`, it now removes: the tree written
-    is the same, and an element still held somewhere - a `Cell` of a
-    deleted sheet - stays readable instead of being emptied. `decompose()`
-    clears every descendant, which bs4 needs to free a subtree at once,
-    its elements pointing at each other; lxml frees an element nothing
-    holds, so `remove` is all `xmltree` has."""
+    """Take `element` out of its tree and return it, to be put elsewhere -
+    `extract()`, `xmltree.remove`. The text that followed it stays where it
+    was: in bs4 it is a node of the parent."""
     return cast(Tag, element.extract())
+
+
+def discard(element: Tag) -> None:
+    """Take `element` out of its tree for good - `decompose()`,
+    `xmltree.discard`.
+
+    Not `remove`, which would write the same tree: bs4's elements point at
+    one another, so a subtree merely taken out waits for the garbage
+    collector, where `decompose()` empties it at once - and a `Cell` still
+    holding the element, one of a deleted sheet say, sees it emptied, as it
+    always did. lxml frees an element nothing holds: there, `discard` is
+    `remove`."""
+    element.decompose()
 
 
 def clone(element: Tag) -> Tag:

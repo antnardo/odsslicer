@@ -139,6 +139,13 @@ MUTATIONS = [
         "return cast(Tag, element.extract())",
         "return element.decompose()",
     ),
+    ("xmlbs.discard only takes out", "xmlbs.py", "    element.decompose()\n", "    element.extract()\n"),
+    (
+        "xmltree.discard keeps the element",
+        "xmltree.py",
+        'lxml not."""\n    remove(element)\n',
+        'lxml not."""\n    pass\n',
+    ),
     ("xmlbs.clone copies nothing", "xmlbs.py", "    return copy.deepcopy(element)\n", "    return element\n"),
     (
         "xmlbs.insert_after inserts before",

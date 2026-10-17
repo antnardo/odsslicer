@@ -15,7 +15,7 @@ from .libreoffice import _recalculate_file
 from .properties import DocumentProperties
 from .sheet import Sheet
 from .styles import _NUMBER_STYLE_TAGS, NumberFormat
-from .xmlbs import insert_after, insert_before, name_of, new, remove, text
+from .xmlbs import discard, insert_after, insert_before, name_of, new, remove, text
 from .xmlutils import _encrypted_parts, _parse_xml
 
 logger = logging.getLogger("odsslicer")
@@ -264,7 +264,7 @@ class ODSReader:
         qualified_name = name_of(tag)
         for other in self._automatic_styles().find_all(qualified_name, recursive=False):
             if other is not tag and _same_number_format(other, tag):
-                remove(tag)
+                discard(tag)
                 name = cast(str, other["style:name"])
                 break
         self._default_date_formats[kind] = name
@@ -564,14 +564,14 @@ class ODSReader:
         Raises `KeyError` for an unknown name, and `ValueError` for the
         document's last remaining sheet (an ODF spreadsheet needs at least
         one). Any `Sheet`/`Cell` object obtained before the call that
-        pointed into this sheet is now backed by an XML element detached
-        from the document - stop using it."""
+        pointed into this sheet is now backed by a decomposed, detached
+        XML element - stop using it."""
         if name not in self.sheets_names:
             raise KeyError(f"No sheet named {name}")
         if len(self.sheets_names) <= 1:
             raise ValueError("cannot delete the only remaining sheet in the document")
         idx = self.sheets_names.index(name)
-        remove(self.tables[idx])
+        discard(self.tables[idx])
         del self.tables[idx]
         del self.sheets_names[idx]
         del self._sheets[name]

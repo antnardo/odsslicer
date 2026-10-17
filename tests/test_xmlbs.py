@@ -304,6 +304,28 @@ class TestRemove:
         assert side.layer.text(side.kids(root)[0]) == "Total 42 €"
 
 
+class TestDiscard:
+    @pytest.mark.parametrize(
+        ("xml", "index"),
+        [
+            (TOTAL, 0),
+            ("<table:table-row>\n  <table:table-cell/>\n  <table:table-cell/>\n</table:table-row>", 1),
+        ],
+    )
+    def test_discard_leaves_what_bs4_decompose_left(self, side, xml, index):
+        root = side.root(xml)
+        side.layer.discard(side.kids(side.kids(root)[0])[index])
+        assert side.canonical(root) == bs4_did(
+            xml, lambda el: el.find_all(True, recursive=False)[index].decompose()
+        )
+
+    def test_discard_empties_a_bs4_element_at_once(self):
+        # what frees its memory without waiting for the garbage collector
+        span = _bs4_root(TOTAL).find("text:span")
+        xmlbs.discard(span)
+        assert span.decomposed
+
+
 class TestClone:
     def test_clone_leaves_the_text_after_the_original_out(self, side):
         root = side.root(TOTAL)
@@ -469,7 +491,16 @@ class TestChildren:
 
 
 def test_both_layers_have_the_same_operations():
-    shared = {"children", "clone", "insert_after", "insert_before", "local_name", "name_of", "namespace_of"}
+    shared = {
+        "children",
+        "clone",
+        "discard",
+        "insert_after",
+        "insert_before",
+        "local_name",
+        "name_of",
+        "namespace_of",
+    }
     shared |= {"new", "paragraph_text", "remove", "rename", "set_paragraph_text", "set_text", "text"}
     shared |= {"unwrap", "wrap_contents"}
     assert set(xmlbs.__all__) == shared

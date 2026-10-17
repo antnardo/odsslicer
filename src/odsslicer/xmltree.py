@@ -49,6 +49,7 @@ __all__ = [
     "children",
     "clone",
     "descendants",
+    "discard",
     "following",
     "insert_after",
     "insert_before",
@@ -283,6 +284,13 @@ def remove(element: etree._Element) -> etree._Element:
     element.tail = None
     parent.remove(element)
     return element
+
+
+def discard(element: etree._Element) -> None:
+    """Take `element` out of its tree for good - bs4's `decompose()`:
+    `remove`, the element left to go, which lxml frees once nothing holds
+    it. bs4 needs the distinction, lxml not."""
+    remove(element)
 
 
 def clone(element: etree._Element) -> etree._Element:

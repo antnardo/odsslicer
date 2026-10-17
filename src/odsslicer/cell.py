@@ -38,12 +38,12 @@ from .styles import CellStyle, _render_date_time_from_format, _render_number_fro
 from .xmlbs import (
     children,
     clone,
+    discard,
     insert_before,
     local_name,
     name_of,
     new,
     paragraph_text,
-    remove,
     set_paragraph_text,
     set_text,
     text,
@@ -274,7 +274,7 @@ class Comment:
     @text.setter
     def text(self, value: "str | None") -> None:
         for p in self._tag.find_all("text:p"):
-            remove(p)
+            discard(p)
         for line in (value or "").split("\n"):
             p = new("text:p", near=self._tag)
             set_paragraph_text(p, line)
@@ -290,7 +290,7 @@ class Comment:
         tag = cast("Tag | None", self._tag.find("dc:creator"))
         if value is None:
             if tag is not None:
-                remove(tag)
+                discard(tag)
             return
         if tag is None:
             tag = new("dc:creator", near=self._tag)
@@ -312,7 +312,7 @@ class Comment:
         tag = cast("Tag | None", self._tag.find("dc:date"))
         if value is None:
             if tag is not None:
-                remove(tag)
+                discard(tag)
             return
         if not isinstance(value, dt.datetime):
             raise TypeError(f"Comment.date must be a datetime.datetime or None, got {type(value)!r}")
@@ -887,14 +887,14 @@ class Cell:
         paragraphs = self.cell.find_all("text:p", recursive=False)  # see __init__'s note on scoping
         if text is None:
             for p in paragraphs:
-                remove(p)
+                discard(p)
             self.text = None
             return
         # one paragraph per line, the only way ODF represents a multi-line
         # cell (a literal "\n" inside a paragraph is just whitespace there)
         lines = text.split("\n")
         for extra in paragraphs[len(lines) :]:
-            remove(extra)
+            discard(extra)
         for i, line in enumerate(lines):
             p = paragraphs[i] if i < len(paragraphs) else self._new_text_paragraph()
             set_paragraph_text(p, line)
@@ -1120,7 +1120,7 @@ class Cell:
                     _ensure_style_child(tag, child_name).attrs.update(child.attrs)
                 else:
                     for previous in tag.find_all(child_name, recursive=False):
-                        remove(previous)  # this nearer style replaces them
+                        discard(previous)  # this nearer style replaces them
                     tag.append(clone(child))
 
     @property
@@ -1204,7 +1204,7 @@ class Cell:
         tag = cast("Tag | None", self.cell.find("office:annotation", recursive=False))
         if value is None:
             if tag is not None:
-                remove(tag)
+                discard(tag)
             return
         if not isinstance(value, str):
             raise TypeError(f"cell.comment must be a str or None, got {type(value)!r}")

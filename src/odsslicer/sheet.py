@@ -38,7 +38,18 @@ from .formulas import (
     _unquote_odf_sheet_name,
 )
 from .styles import ColumnStyle, RowStyle, TableStyle
-from .xmlbs import children, clone, insert_after, insert_before, local_name, namespace_of, new, remove, rename
+from .xmlbs import (
+    children,
+    clone,
+    discard,
+    insert_after,
+    insert_before,
+    local_name,
+    namespace_of,
+    new,
+    remove,
+    rename,
+)
 from .xmltree import NAMESPACES
 from .xmlutils import _ensure_style_child, _is_forked_style_name
 
@@ -473,7 +484,7 @@ class Sheet:
                 dropped = cells_bs[k:]
             for extra in dropped:
                 if not _carries_formatting(extra):
-                    remove(extra)
+                    discard(extra)
             return keep
         if width < real_width:
             pad = self._empty_cell_template()
@@ -1111,7 +1122,7 @@ class Sheet:
                             heir = self._empty_cell_template()
                             insert_after(cell_tag, heir)
                         _rescue_drawings(cell_tag, heir)
-                    remove(cell_tag)
+                    discard(cell_tag)
                     break
                 position += _repeat(cell_tag, "table:number-columns-repeated")
 
@@ -1188,7 +1199,7 @@ class Sheet:
                     if _drawings_in(cell.cell):
                         self._unrepeat_col(heir_row, c)
                         _rescue_drawings(cell.cell, self.rows[heir_row][c].cell)
-            remove(cast(Tag, self.rows[row][0].cell.parent))
+            discard(cast(Tag, self.rows[row][0].cell.parent))
             del self.rows[row]
         for r in range(targets[0], len(self.rows)):
             for cell in self.rows[r]:
@@ -1223,10 +1234,10 @@ class Sheet:
         if self._find_column_tag(col) is not None:
             definition = self._unrepeat_column_tag(col)
             group = cast(Tag, definition.parent)
-            remove(definition)
+            discard(definition)
             # a group of definitions - the print titles' - holds one at least
             if group is not self.table and group.find("table:table-column") is None:
-                remove(group)
+                discard(group)
         for run in self._runs_in(self.rows):
             # same as for a row: the chart anchored in the column moves to the
             # cell taking its place, rather than going with it (issue #24)
@@ -1234,7 +1245,7 @@ class Sheet:
             if 0 <= heir_col < self.n_cols:
                 self._unrepeat_col(run.start, heir_col)
                 _rescue_drawings(self.rows[run.start][col].cell, self.rows[run.start][heir_col].cell)
-            remove(self.rows[run.start][col].cell)  # once for the whole run
+            discard(self.rows[run.start][col].cell)  # once for the whole run
             for r in run:
                 del self.rows[r][col]
                 for c in range(col, len(self.rows[r])):
