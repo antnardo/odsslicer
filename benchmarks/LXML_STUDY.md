@@ -191,6 +191,10 @@ a truncated or malformed part, which recovery completes without a word (tested).
 Three smaller pitfalls are tested in the same file: `el.iter(name)` includes `el` itself where
 bs4's `find_all` does not; `el.text` stops at the first child where `get_text()` reads
 everything; and iterating an element's children yields comments, whose `tag` is not a string.
+A fourth was found by step 1 of the migration (ROADMAP.md): an element taken out of its tree
+stays in the same lxml document, and `el.getroottree()` still answers that document's root.
+Finding which part a write went to, as `ODSReader._touched_tag` does, climbs `getparent()`
+instead, as bs4's `parent` would: a detached element is then a root of its own.
 
 ### Fidelity, measured again
 
