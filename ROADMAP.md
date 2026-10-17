@@ -330,7 +330,7 @@ objets bs4 (`reader.data`, `styles_data`, `meta_data`, `settings_data`, `cell.ce
 propriétés obscures, peu utilisées, et le paquet n'a pas d'utilisateurs à ménager. À faire à la
 **1.0**, annoncée comme telle, pas au fil d'une 0.14.x.
 
-### Pour démarrer (état au 2026-10-04)
+### Pour démarrer (état au 2026-10-17)
 
 **Où en est-on.** La 0.15.0 est publiée : blancs conservés (0.14.2), `<text:s/>` lu et écrit
 (0.14.3), fichiers chiffrés refusés et éditions de feuille linéaires, bs4 ≥ 4.13 (0.15.0). Depuis,
@@ -340,6 +340,11 @@ L'étude (`benchmarks/LXML_STUDY.md`) et ses scripts (`benchmarks/lxml_*.py`) so
 aussi. Seul reste sur la branche `claude/lxml-study`, poussée sur GitHub et rebasée sur `master`,
 le portage de `properties.py` avec `meta.xml` — l'étape 0 du plan ci-dessous —, parce qu'il fait
 de `meta_data` un arbre lxml.
+
+**L'étape 2 est faite** (2026-10-17, branche `claude/lxml-step2`, sur la 0.15.1) : tout ce que bs4
+et lxml font différemment passe par `src/odsslicer/xmlbs.py`, des fonctions à corps bs4 sous les
+noms de `xmltree`, testées des deux côtés (`tests/test_xmlbs.py`). Le détail, ce qu'elle a coûté
+et ce qu'elle a relevé pour les étapes 3 et 5 sont dans le plan ci-dessous.
 
 **Lire, dans l'ordre** : cette section ; « Ce que l'étude a établi », « Plan d'engagement » et
 « À décider » plus bas ; puis `benchmarks/LXML_STUDY.md` (en anglais), dont la section 2, les
@@ -361,10 +366,11 @@ CI le vérifie : formater chaque commit avant de le pousser (`ruff format src te
 ruff 0.16.x épinglé), sinon le job `lint` échoue. `.git-blame-ignore-revs` fait sauter ce commit
 à `git blame`.
 
-**Par où commencer** : l'étape 2 sur `master`, module `xmlutils` d'abord (création d'éléments :
-57 sites, `_blank_template`, `_new_qualified_tag`, `EMPTY_CELL_BS`, `_TAG_FACTORY` → `new`). C'est
-publiable, le balayage la vérifie, et c'est là que se règlent une fois pour toutes les pièges du
-`tail`. L'étape 1 (`settings.xml`, graphiques) se fait sur la branche 1.0, en parallèle ou après.
+**Par où commencer** : l'étape 3 sur `master`, avec la liste des recherches relevées à l'étape 2
+(plan, étape 3) ; l'étape 1 (`settings.xml`, graphiques) se fait sur la branche 1.0, en parallèle
+ou après. Rebaser `claude/lxml-study` sur `master` une fois l'étape 2 fusionnée : `reader.py` y
+change d'imports des deux côtés, et `xmlutils._blank_template` reste, réduit à `new(near=...)`,
+pour le seul `properties.py` de `master`, que la branche porte en entier.
 
 **À ne pas oublier en route** :
 
@@ -373,9 +379,10 @@ publiable, le balayage la vérifie, et c'est là que se règlent une fois pour t
   appelants (`_take_back_rows`, `insert_rows`, `insert_columns`), et `_split_repetitions`
   (`replace_with(*copies)`) — et deviennent à l'étape 5 des `insert_after` successifs.
 - **Enfants ou descendants** : 47 recherches comptent sur le défaut récursif de bs4 ; c'est
-  l'étape 3, et c'est là que se cachent les bogues (la note lue comme valeur).
-- **Le `tail`** : deux sites travaillent dans du texte mixte, tous deux dans `hyperlink`
-  (`cell.py`), et `set_paragraph_text` doit mettre le texte suivant `<text:s/>` dans son `tail`.
+  l'étape 3, et c'est là que se cachent les bogues (la note lue comme valeur). La liste, relevée à
+  l'étape 2, est au plan.
+- **Le `tail`** : réglé à l'étape 2, une fois, dans `xmlbs`/`xmltree` et leurs tests de parité ;
+  les deux sites de texte mixte de `hyperlink` appellent `unwrap` et `wrap_contents`.
 
 **Vérifier chaque étape** — dans un venv propre au worktree, jamais dans `~/Envs/main` :
 `pytest` (suite LibreOffice comprise), `mypy` (avec l'extra `typecheck` : bs4 4.13 a ses
@@ -512,20 +519,89 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
    (`settings_data`, `_charts`, la réécriture de leurs plages) : petit, et le premier usage de la
    couche sur un chemin de `save()` qui recopie ou régénère. `_touched_tag` apprend à remonter à
    la racine d'un arbre lxml (`getroottree()`). Rupture : `settings_data`, à garder pour la 1.0.
-2. **Préparation sur bs4, sans changer de bibliothèque.** Faire passer par des fonctions à corps
-   bs4, aux noms et à la sémantique de `xmltree`, tout ce qui diffère entre les deux : création
-   d'éléments (`_blank_template`, `_new_qualified_tag`, `EMPTY_CELL_BS`, `_TAG_FACTORY` → `new`,
-   57 sites), texte (`text`, `set_text`, les deux fonctions de paragraphe), suppression, clonage,
-   insertion avant ou après, remplacement, désenrobage (59 sites), comparaison de nom (`.name`,
-   `.prefix` → 26 sites). Module par module : `xmlutils`, `styles`, `cell`, `sheet`, `reader`.
-   Comportement inchangé, balayage à zéro : c'est ce qui le garantit. Les pièges du `tail` se
-   règlent alors une fois, dans des fonctions testées des deux côtés, au lieu d'une fois par site
-   dans la bascule.
+2. ~~**Préparation sur bs4, sans changer de bibliothèque.**~~ **Fait le 2026-10-17** (branche
+   `claude/lxml-step2`, un commit par module : `xmlutils`, `styles`, `cell`, `sheet`, `reader`,
+   puis `discard`).
+   `src/odsslicer/xmlbs.py` donne un corps bs4 à 17 opérations sous le nom et la sémantique de
+   leur homologue de `xmltree` : `new`, `text`, `set_text`, `paragraph_text`,
+   `set_paragraph_text`, `remove`, `discard`, `clone`, `insert_after`, `insert_before`, `unwrap`,
+   `wrap_contents`, `children`, `local_name`, `name_of`, `namespace_of`, `rename`. À la bascule,
+   chaque module change sa ligne `from .xmlbs import ...` en `from .xmltree import ...`, et
+   `xmlbs.py` disparaît. `xmltree` y a gagné les sept qui lui manquaient (`insert_before`,
+   `discard`, `wrap_contents`, les trois noms, `rename`) ; il n'y a pas de `replace` : son seul
+   site, `_split_repetitions`, reste tel quel (voir l'étape 5).
+
+   Ce que ça a coûté : une session, ~310 lignes pour `xmlbs`, 80 de plus pour `xmltree`, et
+   aucune ligne de comportement. Passés : 31 créations (`cell` 6, `sheet` 6, `styles` 10,
+   `reader` 6, `xmlutils` 2, `constants` 1) et ~95 sites de l'inventaire (`lxml_inventory.py` :
+   texte 16, clonage 6, insertions avant ou après 18, suppressions 21, noms 28, construction 5),
+   plus les appels aux fonctions de paragraphe et à `_children_named`. L'inventaire passe de 520
+   à 454 points d'appel, dont une quarantaine dans `xmlbs` même. Trois choix, chacun pour que
+   rien ne change :
+
+   - **`new(name, near=...)`** : bs4 ne sait pas si le document lie l'espace de noms d'un élément
+     neuf ; lxml le décide à l'insertion. `near`, un élément du document, reprend la règle de
+     `_blank_template` : l'élément déclare son espace de noms (`xmlns:text="..."`) quand le
+     document n'a encore aucun élément de ce nom, rien sinon — octet pour octet ce qui s'écrivait
+     (testé contre l'ancienne copie sur les huit fixtures). `xmltree.new` accepte `near` et
+     l'ignore. À la bascule, la déclaration redondante de ces cas-là disparaît : différence
+     d'octets, pas de forme canonique.
+   - **`remove` et `discard`** : `extract()` pour un élément qu'on replace ailleurs,
+     `decompose()` pour un élément qu'on jette, comme avant — bs4 libère ainsi le sous-arbre sans
+     attendre le ramasse-miettes, et un `Cell` d'une feuille supprimée le voit vidé, comme avant.
+     En lxml les deux sont `remove`.
+   - **`children` rend une liste, des deux côtés** : en générateur, la version bs4 ralentissait
+     `Sheet.load` de 11 % (9,7 → 10,8 ms sur `NotesReference.ods`), le chemin chaud testant le
+     résultat une fois par cellule.
+
+   Mesuré à la fin, contre la 0.15.1, en alternance : `NotesReference.ods` ouvert et ses trois
+   feuilles chargées, médiane 48,8 ms contre 48,9 ; `Sheet.load` seul, 9,7 ms des deux côtés ;
+   `bench.py` à 10 000 lignes, ouverture 614 contre 624 ms, chargement 311 contre 307, le reste
+   dans le bruit, sauf la génération (2,1 s contre 2,7 s) et la copie d'un bloc (378 contre
+   445 ms), plus rapides : `new` construit l'élément au lieu de copier puis vider un modèle. Le pic
+   mémoire varie de 277 à 290 Mo d'une exécution à l'autre, des deux côtés. Balayage contre la
+   0.15.1 : 250 fichiers, 617 feuilles, 147 écrits et relus, zéro partout (lecture, grille,
+   écriture-relecture, parties recopiées, erreurs nouvelles).
+
+   Les noms se comparent par nom local (`local_name(child) == "table-row"`), comme avant ; le
+   seul passage à l'URI est `_drawings_in` (`namespace_of`), où le préfixe du fichier décidait.
+   `EMPTY_CELL_BS` est `new("table:table-cell")`, un élément détaché plutôt qu'un document à lui
+   seul : il se lit pareil, seul `cell.cell` d'une position hors de la feuille change de type.
+
+   Le filet : `tests/test_xmlbs.py` (163 cas, chacun passé par les deux couches et comparé à ce
+   que faisait le code bs4), `benchmarks/mutate_layers.py`, qui casse un à un les 39 garde-fous
+   des deux couches — chacun fait échouer un test —, et `benchmarks/time_open.py`, qui chronomètre
+   l'ouverture de vrais fichiers contre une autre extraction, en alternance.
+
+   Reste hors de `xmlbs`, volontairement : `properties.py` (porté sur la branche 1.0), les
+   `append` (même nom, même sens dans les deux bibliothèques), les insertions par indice de
+   `sheet.py`, les recherches (étapes 3 et 5) et l'analyse et la sérialisation (`encode`,
+   `prettify`, étape 5).
 3. **Enfants ou descendants, site par site.** Les 47 recherches qui comptent sur le défaut
    récursif de `find_all` disent ce qu'elles veulent (`recursive=False` là où ce sont des
    enfants). Étape à part parce qu'elle peut changer un comportement — elle corrige des bogues du
    type de la note lue comme valeur — et que chaque différence au balayage doit pouvoir lui être
    imputée.
+
+   **Relevé à l'étape 2** (lignes de la branche `claude/lxml-step2`), par ce qu'il faut sans doute
+   en faire — à confirmer site par site, et contre LibreOffice :
+
+   - *Probablement des enfants, et un bogue possible* : les feuilles, `reader.py:124`
+     (`data.find_all("table:table")`) — un tableau imbriqué dans une cellule compterait pour une
+     feuille ; les lignes d'une feuille, `sheet.py:214` (`load`, `find_all("table:table-row")`,
+     qui doit descendre dans les groupes de lignes mais pas dans une cellule : `_rows_past_grid`
+     le fait déjà à la main) ; les cellules d'une ligne, `sheet.py:249, 261, 266` (`load`), `542`
+     (`_unrepeat_row`), `1023` (`_take_back_rows`), `1336` (`insert_rows`) —
+     `row.find_all(TAG_CELL)`.
+   - *Enfants, sans changement attendu* : les propriétés d'un style, `styles.py:149, 156, 158, 617,
+     652, 668, 671, 696, 996, 1066, 1120`, `xmlutils.py:105` (`_ensure_style_child`),
+     `sheet.py:1638` (`_fork_style`) ; l'auteur et la date d'une note, `cell.py:285, 290, 302,
+     312`, et son premier paragraphe, `cell.py:263` ; `sheet.py:900, 1239` ; `reader.py:225, 226,
+     236, 278, 281`.
+   - *À trancher* : les paragraphes d'une note, `cell.py:271, 276` — une note en liste à puces
+     garde ses paragraphes dans `text:list`, que des enfants manqueraient.
+   - *Des descendants, voulus* : `reader.py:227, 233, 295, 442, 443, 467, 492, 508`,
+     `sheet.py:899`. `properties.py` (8 recherches) est sur la branche 1.0.
 4. **Décisions d'API, écrites dans DOCS.md avant le code** : ce que deviennent `Cell.attrs`,
    `Sheet.attrs`, les clés de `cell_properties`/`text_properties` (voir « À décider »), et le
    message d'erreur d'un fichier mal formé (un fichier chiffré a déjà le sien).
@@ -538,6 +614,28 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
    dans des groupes de lignes), l'alias `Cell.attrs` écrit à travers lui-même, `_touched_tag`, et
    la vitesse de `Sheet.load`, à remesurer contre la projection. Balayage attendu à zéro, hors
    fichiers aux préfixes non standard (qui se lisent) ; le corpus n'en a pas.
+
+   **Relevé à l'étape 2**, pour la bascule :
+
+   - `sheet.py` : `_position_after` et ses appelants (`_take_back_rows`, `insert_rows`,
+     `insert_columns`), et `_split_repetitions` (`copy.deepcopy` puis `replace_with(*copies)`),
+     restés sur les méthodes de bs4 — un commentaire le dit sur place — deviennent des `clone`
+     posés par `insert_after` successifs.
+   - `cell.py`, `comment` : `self.cell.insert(0, note)` met la note avant le texte par lequel la
+     cellule commence en bs4, après en lxml (`cell.text`) — de l'indentation au plus.
+   - `cell.py`, `hyperlink` : `a.attrs["xmlns:xlink"] = ...` n'a pas d'équivalent en lxml, où
+     l'on ne pose pas une déclaration comme un attribut ; un `xlink:href` sur un document qui ne
+     lie pas `xlink` y prendrait le préfixe `ns0`. `new("text:a")` devra déclarer `xlink` aussi.
+   - `cell.py`, `_format_template_candidates` : la recherche en ordre de document
+     (`previous_elements`/`next_elements` filtrés sur le nom local `table-cell`) devient
+     `preceding`/`following`, et `p.string` (le texte d'un paragraphe qui n'en a qu'un nœud)
+     `p.text if len(p) == 0`, commentaires compris ; `_new_text_paragraph` cherche un modèle par
+     `find_previous`/`find_next`, qui deviennent les mêmes.
+   - `name_of` donne le préfixe du document en bs4, celui de la spécification en lxml :
+     `_default_date_format` s'en sert pour une recherche parmi les enfants, qui y gagne.
+   - `local_name` coûte un appel en lxml (`etree.QName`) là où bs4 lit un attribut : sur les
+     chemins chauds (`_merge_masters`, `materialize_cell`, `_column_definitions`), des
+     comparaisons `el.tag == QN` à constantes précalculées, à l'étape 6.
 6. **Le chemin chaud et la mesure.** `Cell.__init__` et `Sheet.load` en appels lxml natifs, banc
    complet contre la section 12 de DOCS.md, CHANGELOG et DOCS de la 1.0 (les échappatoires
    devenues lxml, nommées une à une).
