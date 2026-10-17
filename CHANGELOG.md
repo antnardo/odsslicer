@@ -14,6 +14,12 @@ These come with the move to lxml (DOCS.md, section 15) and wait for 1.0.
 - **BeautifulSoup is gone: every part of the package is read and written with lxml alone.**
   `beautifulsoup4` is no longer a dependency; `lxml` 5.0 or later is. The high-level API -
   `ODSReader`, `Sheet`, `Cell`, `CellStyle`, values, styles, formulas - is unchanged.
+- **Opening a workbook is much faster, and takes less memory.** At 100,000 rows × 5 columns,
+  opening then loading the sheet went from 7.4 s to 2.5 s in a fresh process, the peak memory
+  from 1.38 GB to 0.84 GB; opening alone from 5.8 s to 0.2 s, saving from 3.3 s to 0.3 s. Loading
+  a sheet, taken alone, is slower (1.5 s to 2.3 s): lxml builds a Python object for each element
+  it reaches, where bs4 had built them all while parsing. `NotesReference.ods`, a real gradebook,
+  opens and loads in 17 ms instead of 47.
 - **The escape hatches to the XML are lxml elements and trees**: `reader.data` and
   `reader.styles_data` are `lxml.etree._ElementTree`s, `reader.tables` a list of elements,
   `sheet.table` and `cell.cell` elements. Search them with lxml (`iter`, `iterchildren`, `find`,
@@ -60,6 +66,14 @@ These come with the move to lxml (DOCS.md, section 15) and wait for 1.0.
 
 ### Fixed
 
+- **A line break in an attribute survives a save** (1.0, with lxml). LibreOffice writes one as
+  `&#x0a;` - in a formula written over several lines, in the text a formula computed
+  (`office:string-value`) - and BeautifulSoup wrote it back as a raw line break, which every XML
+  parser reads as a space: each save turned `of:=1&#xA;+&#xA;2` into `of:=1 + 2`. A carriage
+  return written `&#x0d;`, in an attribute or in a cell's text, went the same way. Found on 5 of
+  the author's files and 4 of LibreOffice's own test files (`tdf76310.ods` among them, the bug
+  report about formulas with line breaks), by comparing the saved `content.xml` with the
+  original's in canonical form.
 - **Deleting a row no longer deletes a chart or a shape anchored in it past the grid's columns.**
   LibreOffice writes a chart there when the data stops short of it, in the cells a row element
   keeps beyond the grid. The rescue of [#24](https://github.com/antnardo/odsslicer/issues/24),

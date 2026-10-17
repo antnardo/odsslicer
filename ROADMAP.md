@@ -330,80 +330,59 @@ objets bs4 (`reader.data`, `styles_data`, `meta_data`, `settings_data`, `cell.ce
 propriétés obscures, peu utilisées, et le paquet n'a pas d'utilisateurs à ménager. À faire à la
 **1.0**, annoncée comme telle, pas au fil d'une 0.14.x.
 
-### Pour démarrer (état au 2026-10-17)
+### Pour démarrer (état au 2026-10-17, soir)
 
 **Où en est-on.** La 0.16.0 est publiée (2026-10-17) avec les étapes 2, 3 et 4 du plan
-ci-dessous : la couche d'accès lxml (`src/odsslicer/xmltree.py`) et son pendant bs4
-(`src/odsslicer/xmlbs.py`), avec leurs tests de parité, l'étude (`benchmarks/LXML_STUDY.md`) et ses
-scripts, le code formaté par ruff et vérifié par la CI. La branche de la 1.0, `claude/lxml-study`,
-part de `master` (v0.16.0) et porte ce qui change le type d'une échappatoire : l'étape 0
-(`properties.py` et `meta.xml` sur lxml, `meta_data` devenu un arbre lxml) et, une fois
-`claude/lxml-step1` fusionnée, l'étape 1.
+ci-dessous. La branche de la 1.0, `claude/lxml-study`, part de `master` (v0.16.0) et porte les
+étapes 0 et 1 ; **l'étape 5, la bascule, est faite** sur `claude/lxml-step5`, partie d'elle, à
+relire et fusionner : `content.xml` et `styles.xml` sont sur lxml avec le reste, `xmlbs.py` et
+BeautifulSoup ont quitté le paquet (`lxml>=5.0` seul ; bs4 reste dans l'extra `test`, pour
+inspecter les fichiers enregistrés et comparer à ce que faisait le code bs4). Le détail, ce
+qu'elle a coûté et ce qu'elle apprend pour l'étape 6 sont dans le plan.
 
-**L'étape 1 est faite** (2026-10-17, branche `claude/lxml-step1`, partie de `claude/lxml-study`) :
-`settings.xml` et le contenu propre des graphiques passent par lxml seul, `settings_data` devient
-un arbre lxml, et `MalformedDocumentError` existe. Le détail, et ce qu'elle apprend pour
-l'étape 5, sont dans le plan.
+**Lire, dans l'ordre** : cette section ; « Plan d'engagement » plus bas, l'étape 5 surtout ;
+DOCS.md, section 15 (ce que la 1.0 change, écrit au passé) ; puis `xmltree.py` et
+`tests/test_xmltree.py`, qui sont la spécification exécutable de chaque piège — les tests de
+parité de `tests/test_xmlbs.py` y ont été versés, côté lxml, contre ce que faisait le code bs4.
+`benchmarks/LXML_STUDY.md` (en anglais) décrit le code d'avant la bascule.
 
-**L'étape 2 est faite** (2026-10-17, branche `claude/lxml-step2`, sur la 0.15.1) : tout ce que bs4
-et lxml font différemment passe par `src/odsslicer/xmlbs.py`, des fonctions à corps bs4 sous les
-noms de `xmltree`, testées des deux côtés (`tests/test_xmlbs.py`). Le détail, ce qu'elle a coûté
-et ce qu'elle a relevé pour les étapes 3 et 5 sont dans le plan ci-dessous.
-
-**Lire, dans l'ordre** : cette section ; « Ce que l'étude a établi », « Plan d'engagement » et
-« À décider » plus bas ; puis `benchmarks/LXML_STUDY.md` (en anglais), dont la section 2, les
-pièges, avant d'écrire la moindre ligne ; enfin `xmltree.py` et ses tests, qui sont la spécification
-exécutable de chaque piège.
-
-**Où vit le travail — décidé le 2026-10-04.** Les étapes 2 à 4 ne cassent rien : elles se font
-sur `master` et sortent en 0.15.x, l'étape 2 écrivant ses fonctions bs4 sous les noms de
-`xmltree` et contre ses tests de parité. Les étapes 0, 1, 5 et 6 changent le type d'une
+**Où vit le travail — décidé le 2026-10-04.** Les étapes 0, 1, 5 et 6 changent le type d'une
 échappatoire et attendent la 1.0 : elles vivent sur `claude/lxml-study`, la branche de la 1.0,
-rebasée sur `master` après chaque 0.15.x.
+rebasée sur `master` après chaque 0.x.
 
-Les décisions qui restent attendent leur étape : `Cell.attrs`/`Sheet.attrs` et les clés de propriétés à l'étape
-4 ; `of:` non déclaré au portage de `formulas.py` (étape 5) ; analyse stricte (recommandée, par
-l'étude comme par la session qui l'a relue) et plancher de lxml à la 1.0.
+**Le formatage** est vérifié par la CI : formater chaque commit avant de le pousser (`ruff format
+src tests benchmarks`, ruff 0.16.x épinglé), sinon le job `lint` échoue.
 
-**Le formatage est fait** (2026-10-04, `f33f352`, sans changer un seul arbre syntaxique) et la
-CI le vérifie : formater chaque commit avant de le pousser (`ruff format src tests benchmarks`,
-ruff 0.16.x épinglé), sinon le job `lint` échoue. `.git-blame-ignore-revs` fait sauter ce commit
-à `git blame`.
-
-**L'étape 3 est faite** (2026-10-17, branche `claude/lxml-step3`) : chaque recherche dit si elle
-vise les enfants ou les descendants ; trois défauts corrigés contre LibreOffice, sur des structures
-qu'aucun des 500 vrais fichiers balayés ne porte (voir le plan).
-
-**L'étape 4 est faite** (2026-10-17) : les décisions d'API sont dans DOCS.md, section 15, et
-`Cell.style_name` remplace l'usage réel de `Cell.attrs`.
-
-**Par où commencer** : la branche 1.0 (`claude/lxml-study`, `claude/lxml-step1` fusionnée) —
-l'étape 5, la bascule. Lire d'abord, dans le plan, ce que l'étape 1 a relevé pour elle : les deux
-couches de `_touched_tag`, le cache de `_drawings`, et les deux défauts de la 0.16.0 qu'il cache.
+**Par où commencer** : fusionner `claude/lxml-step5` dans `claude/lxml-study`, puis l'étape 6, le
+chemin chaud : `Sheet.load` est plus lent qu'avec bs4 (voir l'étape 5, « mesuré »), seule ombre
+d'une ouverture trois fois plus rapide.
 
 **À ne pas oublier en route** :
 
-- **Jamais d'insertion par indice en lxml** : `insert(i)` y parcourt la liste. Les sites hérités
-  des correctifs de la 0.15.0 sont tous dans `sheet.py` — `_position_after` et ses trois
-  appelants (`_take_back_rows`, `insert_rows`, `insert_columns`), et `_split_repetitions`
-  (`replace_with(*copies)`) — et deviennent à l'étape 5 des `insert_after` successifs.
-- **Enfants ou descendants** : réglé à l'étape 3 ; à la bascule, `recursive=False` devient
-  `children`, une recherche sans lui `descendants`.
-- **Le `tail`** : réglé à l'étape 2, une fois, dans `xmlbs`/`xmltree` et leurs tests de parité ;
-  les deux sites de texte mixte de `hyperlink` appellent `unwrap` et `wrap_contents`.
+- **Jamais d'insertion par indice en lxml** : `insert(i)` et `index()` y parcourent la liste. Tout
+  `sheet.py` place désormais à côté d'un élément connu (`_insert_chain`, `insert_before`) ; des
+  tests l'enregistrent (`positional`, dans `tests/test_odsslicer.py`), quatre mutations le
+  vérifient.
+- **Un élément sans enfant est faux en lxml** : jamais `a or b` entre deux éléments, toujours
+  `is None` (`xmltree.child` le rappelle). Trois sites l'avaient (`NumberFormat`,
+  `_find_in_styles`, `_new_text_paragraph`), les deux premiers gardés par une mutation ; la suite
+  tourne sans `FutureWarning` (`pytest -W error::FutureWarning`), que lxml émet à chaque test de
+  vérité d'un élément.
+- **Un élément retiré reste lisible** en lxml, là où bs4 le vidait : `_drawings` écarte ceux qui
+  ne remontent plus à la racine de `content.xml` (`_root_of`).
 
 **Vérifier chaque étape** — dans un venv propre au worktree, jamais dans `~/Envs/main` :
-`pytest` (suite LibreOffice comprise), `mypy` (avec l'extra `typecheck` : bs4 4.13 a ses
-propres types, mais sans `types-beautifulsoup4` mypy relève 53 erreurs — le garder jusqu'au départ
-de bs4), `ruff check` et `ruff format --check` sur `src tests benchmarks`,
+`pytest` (suite LibreOffice comprise, et `-W error::FutureWarning`), `mypy` (avec l'extra
+`typecheck`), `ruff check` et `ruff format --check` sur `src tests benchmarks`,
 `benchmarks/mutate_layers.py` et `benchmarks/mutate_flags.py` (chaque garde-fou cassé doit faire
 échouer un test), puis `benchmarks/sweep_real_files.py --baseline-src <src d'un worktree détaché
 sur la branche de départ> --limit 250 --write-limit 150` (7 minutes pour 250 fichiers au calme,
 bien plus sous charge ; 500 dépassent 30 minutes : le lancer en arrière-plan avec un délai long).
 Le balayage n'édite que des valeurs : ce qu'une édition de structure réécrit (les graphiques)
-se compare partie par partie avec `benchmarks/edit_parts.py --baseline-src ...`, sur le corpus
-public de LibreOffice (`promotion/corpus/libreoffice-core`) et sur les vrais fichiers qui ont des
-objets.
+se compare partie par partie avec `benchmarks/edit_parts.py --baseline-src ... --timeout 300`,
+sur le corpus public de LibreOffice (`promotion/corpus/libreoffice-core`, 614 fichiers : une heure
+sous charge ; `too-many-cols-rows.ods` y retient chaque version plus d'une demi-heure, d'où le
+délai) et sur les vrais fichiers qui ont des objets.
 Toute différence de lecture se tranche contre LibreOffice (`soffice --headless --convert-to
 csv`), jamais contre odsslicer, et le balayage n'imprime jamais le contenu d'une cellule. Deux
 sessions qui lancent LibreOffice en même temps font échouer ses tests par intermittence :
@@ -697,37 +676,107 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
    - **lxml ≥ 5.0**, bs4 retiré des dépendances.
    - Contrats de l'étape 2 gardés : `new(name, near=...)` (ignoré par `xmltree`), `children`
      rend une liste dans les deux couches.
-5. **La bascule : `content.xml` et `styles.xml` sur lxml, ensemble — 1.0.** Les fonctions de
-   l'étape 2 prennent les corps de `xmltree` ; reste le mécanique : 238 accès aux attributs
-   (`el.get(qn(...))`, constantes précalculées sur le chemin chaud), 82 recherches, 27
-   navigations, 132 annotations. bs4 quitte les dépendances ; le `xfail` du fichier `tab:` saute.
-   **C'est l'étape la plus risquée** : les éditions de structure de `sheet.py` (découpe des
-   répétitions, `_unrepeat_*`, `_take_back_rows`, 22 navigations vers le parent ou les frères,
-   dans des groupes de lignes), l'alias `Cell.attrs` écrit à travers lui-même, `_touched_tag`, et
-   la vitesse de `Sheet.load`, à remesurer contre la projection. Balayage attendu à zéro, hors
-   fichiers aux préfixes non standard (qui se lisent) ; le corpus n'en a pas.
+5. ~~**La bascule : `content.xml` et `styles.xml` sur lxml, ensemble — 1.0.**~~ **Faite le
+   2026-10-17** (branche `claude/lxml-step5`, partie de `claude/lxml-study`, à fusionner). Chaque
+   module importe de `xmltree` ; `content.xml` et `styles.xml` passent par `xmltree.parse`
+   (strict) et `xmltree.serialize` ; `xmlbs.py`, `_parse_xml`, `_root_local_name`,
+   `_ODF_NAMESPACES`, la branche bs4 de `_touched_tag` et le tri bs4 de `_drawings` ont disparu.
+   L'inventaire (`lxml_inventory.py`) ne trouve plus aucun point d'appel bs4 sous `src`, et un
+   test vérifie dans un interpréteur neuf que le paquet n'importe jamais bs4.
 
-   **Relevé à l'étape 2**, pour la bascule :
+   **Les décisions de DOCS.md §15, toutes appliquées** : `Cell.attrs` et `Sheet.attrs` retirés ;
+   échappatoires en arbres et éléments lxml ; clés de `cell_properties`/`text_properties` au
+   préfixe de la spécification (`xmltree.attributes`), celui du fichier pour un espace de noms que
+   la spécification ne nomme pas (`officeooo:rsid`), comme avant ; `MalformedDocumentError` à
+   l'ouverture pour `content.xml` et `styles.xml` ; le fichier `tab:` se lit (le `xfail` strict est
+   devenu trois tests qui passent, lecture des valeurs et écriture comprises) ; une formule prend
+   le préfixe que le document lie à OpenFormula (`ODSReader._formula_prefix`), sinon `of` est
+   déclaré sur la racine (`_declare_on_root` : lxml ne sait pas ajouter une déclaration à un
+   élément existant, la racine est refaite et le contenu déplacé dessous, les objets `Sheet` et
+   `Cell` gardant leurs éléments ; vérifié contre LibreOffice, qui calcule la formule).
 
-   - `sheet.py` : `_position_after` et ses appelants (`_take_back_rows`, `insert_rows`,
-     `insert_columns`), et `_split_repetitions` (`copy.deepcopy` puis `replace_with(*copies)`),
-     restés sur les méthodes de bs4 — un commentaire le dit sur place — deviennent des `clone`
-     posés par `insert_after` successifs.
-   - `cell.py`, `comment` : `self.cell.insert(0, note)` met la note avant le texte par lequel la
-     cellule commence en bs4, après en lxml (`cell.text`) — de l'indentation au plus.
-   - `cell.py`, `hyperlink` : `a.attrs["xmlns:xlink"] = ...` n'a pas d'équivalent en lxml, où
-     l'on ne pose pas une déclaration comme un attribut ; un `xlink:href` sur un document qui ne
-     lie pas `xlink` y prendrait le préfixe `ns0`. `new("text:a")` devra déclarer `xlink` aussi.
-   - `cell.py`, `_format_template_candidates` : la recherche en ordre de document
-     (`previous_elements`/`next_elements` filtrés sur le nom local `table-cell`) devient
-     `preceding`/`following`, et `p.string` (le texte d'un paragraphe qui n'en a qu'un nœud)
-     `p.text if len(p) == 0`, commentaires compris ; `_new_text_paragraph` cherche un modèle par
-     `find_previous`/`find_next`, qui deviennent les mêmes.
-   - `name_of` donne le préfixe du document en bs4, celui de la spécification en lxml :
-     `_default_date_format` s'en sert pour une recherche parmi les enfants, qui y gagne.
-   - `local_name` coûte un appel en lxml (`etree.QName`) là où bs4 lit un attribut : sur les
-     chemins chauds (`_merge_masters`, `materialize_cell`, `_column_definitions`), des
-     comparaisons `el.tag == QN` à constantes précalculées, à l'étape 6.
+   **Ce qui n'était pas prévu** : `new(name, near=...)` perd `near`, qui ne servait qu'à `xmlbs` ;
+   `new` déclare aussi les espaces de noms de ses attributs (sinon `xlink:href` posé sur un
+   élément détaché devient `ns0:href`) ; `xmltree` gagne `child`, `elements`, `attributes` et
+   `unset` (les stubs de lxml refusent `attrib.pop(k, None)`) ; `parse` lève la limite de taille
+   de libxml2 (`huge_tree`), sans quoi le `tdf136551.ods` de LibreOffice, bien formé, avec un
+   attribut de 10,9 Mo, était refusé comme mal formé ; `EMPTY_CELL_BS` garde son nom, exporté par
+   `odsslicer.classes`.
+
+   **Ce que ça a coûté** : une session ; `src` +928 −1 116 lignes (7 961 au lieu de 8 149),
+   `tests` +892 −812 (la moitié dans `test_odsslicer.py`, `test_xmlbs.py` versé dans
+   `test_xmltree.py`). Tests : 1 298 (1 380 et un `xfail` avant : les 163 cas de
+   `test_xmlbs.py` passaient par les deux couches, seul le côté lxml reste) ; ajoutés : le
+   préfixe d'OpenFormula (5), les clés de propriétés (2), les nouvelles fonctions de `xmltree`
+   (8), le fichier `tab:` lu et écrit (2), `content.xml`/`styles.xml` mal formés (2), un graphique supprimé avec ses cellules qui
+   ne suit plus les éditions, l'absence de bs4, les déclarations superflues, le saut de ligne
+   dans un attribut, la limite de libxml2. Les tests qui comptaient les `Tag.index` de bs4
+   enregistrent maintenant les `index`/`insert` de lxml par une sous-classe d'élément
+   (`positional`). Mutations : `mutate_layers.py` en a 30 (les 21 de `xmlbs` et celle de
+   `xmltree.discard` sont partis avec eux ; 13 nouvelles : les fonctions ajoutées, les `or`, les
+   dessins retirés, les quatre placements par indice), `mutate_flags.py` 15 (celle de la branche
+   bs4 de `_touched_tag` partie, une pour `styles.xml` touché ajoutée) : toutes attrapées.
+
+   **Mesuré**, contre `claude/lxml-study`, même machine (Apple M4, charge 2 à 4) :
+
+   - *Balayage* de 250 vrais fichiers (608 feuilles, 148 écrits et relus) : zéro partout —
+     lecture, grille, écriture-relecture, parties recopiées, erreurs nouvelles (2 illisibles
+     des deux côtés, des zip tronqués).
+   - *Fidélité* (`edit_parts.py`) : fixtures, 48 éditions, `content.xml` en même forme canonique,
+     tout le reste à l'octet. Corpus de LibreOffice, 614 fichiers, 3 360 éditions : `content.xml`
+     en même forme canonique sur 3 338, le reste à l'octet ; 24 erreurs identiques des deux
+     côtés ; un fichier hors délai (`too-many-cols-rows.ods`, des deux côtés) ; 22 différences,
+     toutes du côté de bs4 — `tdf76310.ods`, `tdf42481.ods`, `tdf100793.ods`, `tdf123479.ods`
+     ont un saut de ligne ou un retour chariot écrit `&#xA;`/`&#x0d;` dans un attribut (ou un
+     retour chariot dans un texte), que bs4 réécrivait brut, et qu'un analyseur relit en espace :
+     la version lxml redonne l'original en forme canonique, bs4 non (`tdf76310` est le rapport de
+     LibreOffice sur les formules à sauts de ligne) ; 6 sur `tdf136551.ods`, refusé avant le
+     correctif `huge_tree`, à zéro après. Vrais fichiers de l'auteur à objets, 84 : 503 éditions,
+     `content.xml` en même forme canonique sur 473, 30 différences sur 5 fichiers, toutes ce même
+     saut de ligne dans `office:string-value` que bs4 perdait — la version lxml égale l'original.
+     Corrigé, donc, et annoncé dans le CHANGELOG.
+   - *Vitesse*, `lxml_profile_open.py --only time`, ouvrir puis charger dans un processus neuf,
+     meilleur de trois : 100 000 lignes, **7,35 s → 2,52 s** (×2,9 ; la projection, sur cette
+     machine, donne 1,88 à 1,96 s), pic mémoire **1 379 → 835 Mo** (projection 790) ;
+     10 000 lignes, 0,60 → 0,25 s (projection 0,18) ; 1 000, 0,06 → 0,03 s. Les chiffres de
+     l'étude (12,2 s → 2,1 s, 1,9 → 0,9 Go) ont été pris sur des classeurs plus gros
+     (`content.xml` de 75 Mo contre 51 aujourd'hui) et sous une autre charge. L'ouverture seule
+     tombe de 5,82 à 0,21 s ; **le chargement monte de 1,45 à 2,30 s** : bs4 avait tout bâti en
+     objets Python à l'ouverture, lxml crée un mandataire par élément atteint, et
+     `Cell.__init__` (120 000 appels à 10 000 lignes, deux par cellule : `load` construit un
+     `Cell` pour décider du contenu, puis celui de la grille) en fait 60 % — l'étape 6.
+     `bench.py` (100 000 lignes) : générer et enregistrer 21,3 → 9,1 s, ouvrir 7,5 → 0,2 s,
+     charger 1,65 → 2,32 s, `to_numpy` 334 → 71 ms, écrire 1 000 cellules 302 → 35 ms, trier
+     395 → 73 ms, copier 1 000 × 2 3,4 → 1,1 s, enregistrer 3,3 → 0,33 s, supprimer des lignes
+     inchangé (~0,7 s, la passe sur les formules), pic 2 440 → 1 396 Mo. `NotesReference.ods`
+     (`time_open.py`, 3 feuilles chargées, médiane de 9) : 46,8 → 17,0 ms.
+   - *Placements*, `bench_insertions.py` à 20 000 lignes, contre bs4 : écrire 20 000 valeurs sous
+     les données 1,05 → 0,43 s, insérer 20 000 lignes 0,15 → 0,06 s, insérer 10 colonnes 1,18 →
+     0,51 s, écrire dans une série de 20 000 lignes répétées 0,20 → 0,08 s. Les mêmes, placés par
+     indice en lxml (les quatre mutations appliquées à une copie) : 8,0 s, 3,3 s, 0,5 s, 8,0 s —
+     le piège que l'étude annonçait, évité.
+
+   **Ce qu'elle apprend pour l'étape 6** :
+
+   - **Le chargement est le chemin chaud**, et le seul à avoir reculé : `Cell.__init__` lit cinq
+     à huit attributs par `get` (constantes `qn` déjà précalculées) et ses paragraphes ; `load`
+     construit deux `Cell` par cellule (`_holds_content(Cell(...))`, puis la grille), ce qu'un
+     test du contenu sur l'élément seul éviterait ; `local_name` (`etree.QName`) reste sur
+     `_sheet_rows`, `_column_definitions`, `_merge_masters`, `materialize_cell`, à remplacer par
+     des comparaisons de `tag` à des constantes (un changement de comportement pour un nom local
+     d'un autre espace de noms, à trancher).
+   - **DOCS.md, section 12**, est marquée périmée : à remesurer (`bench.py`), avec la comparaison
+     aux autres lecteurs (`compare_readers.py`).
+   - `xmltree.preceding` construit une liste par sous-arbre de frère ; paresseux sur les frères,
+     pas dans chaque sous-arbre — sans effet mesuré ici (`_format_template_candidates` s'arrête au
+     premier voisin), à revoir si un profil le montre.
+   - `_declare_on_root` refait la racine et déplace tout le document : une passe, payée une fois,
+     par un document qui ne lie aucun préfixe à OpenFormula — 5 fichiers sur 492 du corpus.
+
+   **Laissé à décider** : publier la 1.0 après l'étape 6 ou avant, `Sheet.load` étant plus lent
+   que la 0.16 pris seul (l'ouverture et le chargement ensemble sont trois fois plus rapides) ;
+   et le nom `EMPTY_CELL_BS`, gardé parce qu'exporté par `odsslicer.classes`.
+
 6. **Le chemin chaud et la mesure.** `Cell.__init__` et `Sheet.load` en appels lxml natifs, banc
    complet contre la section 12 de DOCS.md, CHANGELOG et DOCS de la 1.0 (les échappatoires
    devenues lxml, nommées une à une).
@@ -740,11 +789,13 @@ déplacée et testée à l'étape 2. La bascule elle-même ne peut pas être dé
 `content.xml` et `styles.xml` partagent leur code, il n'y a pas d'état intermédiaire où l'un est
 en lxml et l'autre en bs4.
 
-Ruptures d'API à annoncer à la 1.0 : `reader.data`, `styles_data`, `meta_data`, `settings_data`,
-`reader.tables`, `sheet.table`, `cell.cell` deviennent des éléments ou arbres lxml ; `Cell.attrs`
-et `Sheet.attrs` selon la décision ci-dessous ; `export_content_xml(pretty=True)` sort
-l'indentation de lxml. Changements de comportement : un fichier mal formé lève au lieu de s'ouvrir
-réparé en silence ; un fichier aux préfixes non standard se lit.
+Ruptures d'API de la 1.0 (faites à l'étape 5, dans le CHANGELOG et DOCS.md §15) : `reader.data`,
+`styles_data`, `meta_data`, `settings_data`, `reader.tables`, `sheet.table`, `cell.cell` sont des
+éléments ou arbres lxml ; `Cell.attrs` et `Sheet.attrs` sont retirés ; `export_content_xml(pretty=True)`
+sort l'indentation de lxml. Changements de comportement : un fichier mal formé lève au lieu de
+s'ouvrir réparé en silence ; un fichier aux préfixes non standard se lit ; une formule prend le
+préfixe d'OpenFormula du document ; un saut de ligne écrit en référence dans un attribut survit à
+l'enregistrement.
 
 ### À décider
 
