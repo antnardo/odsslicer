@@ -46,8 +46,7 @@ from conftest import (
     text_cell,
     with_chart,
 )
-from odsslicer import ODSReader
-from odsslicer.classes import Border, NumberFormat
+from odsslicer import Border, NumberFormat, ODSReader
 
 
 @requires_soffice

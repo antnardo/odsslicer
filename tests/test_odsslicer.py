@@ -53,8 +53,17 @@ from conftest import (
     text_cell,
     with_chart,
 )
-from odsslicer import MalformedDocumentError, ODSReader, xmltree
-from odsslicer.classes import ArrayValues, Border, Cell, CellStyle, NumberFormat, Sheet
+from odsslicer import (
+    ArrayValues,
+    Border,
+    Cell,
+    CellStyle,
+    MalformedDocumentError,
+    NumberFormat,
+    ODSReader,
+    Sheet,
+    xmltree,
+)
 from odsslicer.constants import TAG_CELL
 from odsslicer.xmltree import qn
 
@@ -4329,7 +4338,7 @@ def test_raw_properties_of_a_namespace_the_specification_does_not_name_keep_the_
 
 
 def test_cell_style_walks_parent_inheritance_chain():
-    from odsslicer.classes import CellStyle
+    from odsslicer import CellStyle
 
     xml = (
         '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
@@ -4364,7 +4373,7 @@ def test_cell_style_walks_parent_inheritance_chain():
 
 
 def test_cell_style_nearest_ancestor_wins_on_conflicting_property():
-    from odsslicer.classes import CellStyle
+    from odsslicer import CellStyle
 
     xml = (
         '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
@@ -4395,7 +4404,7 @@ def test_cell_style_font_underline_strikethrough_and_rotation():
     # real attribute names/values taken from tests/TEST.ods's styles.xml
     # (style:font-name="Liberation Sans") and the ODF spec for the rest,
     # since none of our fixture files happen to apply these to a real cell.
-    from odsslicer.classes import CellStyle
+    from odsslicer import CellStyle
 
     xml = (
         '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
@@ -4425,7 +4434,7 @@ def test_cell_style_font_underline_strikethrough_and_rotation():
 def test_cell_style_border_shorthand_applies_to_every_side():
     # real value taken from tests/TEST.ods's styles.xml (the unused "Note"
     # built-in style: fo:border="0.74pt solid #808080")
-    from odsslicer.classes import CellStyle
+    from odsslicer import CellStyle
 
     xml = (
         '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
@@ -4451,7 +4460,7 @@ def test_cell_style_border_shorthand_applies_to_every_side():
 
 
 def test_cell_style_border_specific_side_overrides_shorthand():
-    from odsslicer.classes import Border, CellStyle
+    from odsslicer import Border, CellStyle
 
     xml = (
         '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
@@ -4561,7 +4570,7 @@ def test_number_format_resolves_conditional_currency_by_value(reader):
 
 def test_number_format_condition_and_manual_resolve(reader):
     number_tag = reader._find_number_style("N108")
-    from odsslicer.classes import NumberFormat
+    from odsslicer import NumberFormat
 
     base = NumberFormat(number_tag, reader=reader)
     assert base.font_color == "#ff0000"
@@ -5016,7 +5025,7 @@ def test_table_style_write_forks_and_reuses(writable_reader):
 
 
 def test_style_write_without_owner_raises_for_row_column_table():
-    from odsslicer.classes import ColumnStyle, RowStyle, TableStyle
+    from odsslicer import ColumnStyle, RowStyle, TableStyle
 
     with pytest.raises(RuntimeError):
         RowStyle(tag=None).height = "1cm"

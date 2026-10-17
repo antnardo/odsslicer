@@ -1503,9 +1503,16 @@ issue it was reported in.
 
 odsslicer 1.0 drops BeautifulSoup and reads and writes the XML with lxml alone: opening and
 loading a 100,000-row sheet takes 1.3 s instead of 7.6 s, with 40 % less memory, and no
-operation is slower than in 0.16 (measured in [section 12](#12-performance)). The high-level
-API - `ODSReader`, `Sheet`, `Cell`, `CellStyle`, values, styles, formulas - stays as it is.
-What changes, decided before the code was written (ROADMAP.md, steps 4 and 6):
+operation is slower than in 0.16 (measured in [section 12](#12-performance)). It also settles
+the public API before freezing it. What indexing a sheet, `Cell`, `CellStyle`, values, styles
+and formulas do stays as it is. What changes, decided before the code was written (ROADMAP.md,
+steps 4 and 6, and the audit before 1.0):
+
+- **One place to import from: `odsslicer`.** `odsslicer.classes`, the compatibility module left
+  from the time the package was one file, is removed. `odsslicer` exports every public name,
+  `Sheet`, `Cell`, `ArrayValues`, `string_address` and `string_to_col` among them; the internals
+  `odsslicer.classes` re-exported (`EMPTY_CELL_BS`, `TAG_CELL`, `RE_STRING_CELL`,
+  `MAX_REPEAT_ROWS`, `MAX_REPEAT_COLS`) are no longer public.
 
 - **`Cell.attrs` and `Sheet.attrs` are removed.** They were the element's own attribute
   dictionary, with the file's prefixed keys, and writing to them bypassed everything the library
@@ -1616,14 +1623,20 @@ consistent. `save()` writes `content.xml` and `meta.xml` out of their trees, and
 other parts byte for byte unless odsslicer itself wrote to them: a change made directly in
 `styles_data` or `settings_data` is not saved, in 1.0 as in 0.x.
 
-**`EMPTY_CELL_BS`** is renamed: it is the element a position past the sheet reads from, an lxml
-element now.
+**`odsslicer.classes`** is removed: everything public is imported from `odsslicer`.
 
 ```python
-from odsslicer.classes import EMPTY_CELL_BS     # 0.x
-from odsslicer.classes import EMPTY_CELL        # 1.0
+from odsslicer.classes import Sheet, Cell, ArrayValues, string_address     # 0.x
+from odsslicer import Sheet, Cell, ArrayValues, string_address             # 1.0
+```
 
-sheet["Z1000"].cell is EMPTY_CELL               # True past the sheet's extent
+`EMPTY_CELL_BS`, the element a position past the sheet reads from, is no longer public; the
+position says as much:
+
+```python
+cell = sheet["Z1000"]
+cell.cell is EMPTY_CELL_BS                                  # 0.x: past the sheet's extent
+cell.row >= sheet.n_rows or cell.col >= sheet.n_cols        # 1.0
 ```
 
 **`MalformedDocumentError`**, new. 0.x opened a malformed document repaired, with what the

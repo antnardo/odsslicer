@@ -8,10 +8,11 @@ version (until 1.0, the API could change between minor versions).
 ## [Unreleased]
 
 odsslicer 1.0 reads and writes every part of the package with lxml alone: BeautifulSoup is gone.
-The high-level API - `ODSReader`, `Sheet`, `Cell`, `CellStyle`, values, styles, formulas - is
-unchanged, and code that uses only it needs no change. What breaks is the access to the XML
-underneath; DOCS.md, section 15, gives the 1.0 equivalent of each 0.x line ("Upgrading from
-0.x"). From 1.0 on, a breaking change waits for the next major version.
+It also settles the public API before freezing it: one place to import it from, `odsslicer`;
+no duplicate accessors on `Sheet`; flags passed by name. What indexing a sheet, `Cell`,
+`CellStyle`, values, styles and formulas do is unchanged. What breaks is the access to the XML
+underneath and those few names; DOCS.md, section 15, gives the 1.0 equivalent of each 0.x line
+("Upgrading from 0.x"). From 1.0 on, a breaking change waits for the next major version.
 
 ### Removed
 
@@ -19,8 +20,11 @@ underneath; DOCS.md, section 15, gives the 1.0 equivalent of each 0.x line ("Upg
   itself has to depend on it.
 - **`Cell.attrs` and `Sheet.attrs`**, deprecated in 0.16.0: `cell.style_name`, `cell.style`,
   `cell.formula`, `sheet.name` and `sheet.style` say what they were used for.
-- **`odsslicer.classes.EMPTY_CELL_BS` is renamed `EMPTY_CELL`**: the element a position past the
-  sheet reads from is an lxml element, and the BeautifulSoup in its name went with it.
+- **`odsslicer.classes` is removed**, the compatibility module left from the time the package was
+  one file: everything public is imported from `odsslicer`, which now exports `Sheet`, `Cell`,
+  `ArrayValues`, `string_address` and `string_to_col` too. The internals it re-exported are no
+  longer public: `EMPTY_CELL_BS` (the element a position past the sheet reads from), `TAG_CELL`,
+  `RE_STRING_CELL`, `MAX_REPEAT_ROWS` and `MAX_REPEAT_COLS`.
 
 ### Changed
 
