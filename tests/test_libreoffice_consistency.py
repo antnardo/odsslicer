@@ -829,7 +829,11 @@ def test_libreoffice_keeps_a_shape_past_the_grid_where_its_deleted_row_left_it(t
         + table_row(text_cell("2"), number_cell(2), empty_cells(12), shape_cell("Box"))
         + table_row(text_cell("3"), number_cell(3))
     )
-    path = ods_with_sheet(tmp_path / "past-the-grid.ods", xml)
+    # in a folder of its own: converted to .ods next to itself, LibreOffice
+    # would have to overwrite its source, which it refuses on Linux
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    path = ods_with_sheet(src_dir / "past-the-grid.ods", xml)
     reader = ODSReader(path)
     reader.sheet("Sheet1").delete_rows([1])
     reader.save()
