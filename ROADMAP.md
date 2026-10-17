@@ -570,14 +570,16 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
    - **Le cache de `_drawings` est fragile.** Rempli à la première édition de structure, après
      elle ; lire les graphiques avant l'édition par lui l'aurait rempli d'éléments que l'édition
      jette, d'où un `TypeError` (attrapé sur `ser_labels.ods`, d'où `_read_objects` lit les
-     objets dans la liste du paquet). Il cache **deux défauts de la 0.16.0**, sur `master`, hors
-     de cette étape et non corrigés : (a) supprimer une ligne qui porte un dessin ancré au-delà
+     objets dans la liste du paquet). Il cachait **deux défauts présents depuis la 0.14**, corrigés à
+     part sur `master` le 2026-10-17 (`62ea419`, contre LibreOffice) : (a) supprimer une ligne qui porte un dessin ancré au-delà
      des colonnes de la grille supprime le dessin avec elle (`_rescue_drawings` ne parcourt que
      les colonnes de la grille ; `ser_labels.ods` de LibreOffice : un graphique en F2, la grille
      en A:E), contrairement à l'issue #24 ; (b) deux éditions de structure de suite, dont la
      seconde jette un dessin mis en cache par la première, lèvent `TypeError`
-     (`insert_columns(5)` puis `delete_rows([1])` sur le même fichier). À trancher contre
-     LibreOffice, à part.
+     (`insert_columns(5)` puis `delete_rows([1])` sur le même fichier). Corrigés : la
+     suppression de lignes parcourt aussi les cellules au-delà de la grille
+     (`_cell_starting_at`), et `_drawings` écarte ce que bs4 a vidé. À la bascule, lxml ne vide
+     rien : un élément retiré reste lisible, et ce tri devient inutile.
    - **`serialize` veut les octets lus** pour la déclaration : `self.content` et `self.styles`
      serviront à l'étape 5, comme `self.settings` ici.
    - **Préfixes** : bs4 ne reconnaissait même pas comme graphique une partie qui lie `office:`
