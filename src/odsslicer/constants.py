@@ -1,13 +1,11 @@
 """Shared constants: ODF cell-type conversions, size limits, sentinel objects."""
 
-import re
 from collections.abc import Callable
 from typing import Any
 
 from .datetimes import _parse_date_value, _parse_time_value
 from .xmltree import new
 
-RE_STRING_CELL = re.compile(r"([A-Z]+)?([0-9]+)?(:)?([A-Z]+)?([0-9]+)?")
 TAG_CELL = ["table:table-cell", "table:covered-table-cell"]
 # what a position past the sheet reads from: a blank cell, in no document -
 # writing there grows the sheet first (`Cell._prepare_for_write`)

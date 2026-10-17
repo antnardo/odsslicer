@@ -248,26 +248,33 @@ for row in sheet:              # equivalent to sheet[:]
 
 ### Address conversion helpers
 
-`Sheet.address(string, n_rows=1)` converts a text address into a Python index/slice:
+`sheet[...]` reads a text address as an index or a slice, row first:
 
-| Notation      | Result                                 |
+| Notation      | Indexes as                                 |
 |---------------|------------------------------------------|
-| `"A1"`        | `(0, 0)` — (row, col)                     |
-| `"1"`         | `0` — single row                          |
-| `"A"`         | `(slice(n_rows), 0)` — entire column       |
-| `"A1:B3"`     | `(slice(0, 3), slice(0, 2))`               |
-| `"A:B"`       | `(slice(n_rows), slice(0, 2))`             |
-| `"1:2"`       | `slice(0, 2)`                              |
+| `"A1"`        | `sheet[0, 0]` — one cell                    |
+| `"1"`         | `sheet[0]` — one row                        |
+| `"A"`         | `sheet[:, 0]` — one column                  |
+| `"A1:B3"`     | `sheet[0:3, 0:2]`                          |
+| `"A1:C1"`     | `sheet[0, 0:3]` — one row, so `(3,)`        |
+| `"A:B"`       | `sheet[:, 0:2]`                            |
+| `"1:2"`       | `sheet[0:2]`                               |
 
-A malformed address (`"1A"`, `"A:2"`, `"2:A"`, `"B:A"`...) raises `ValueError`.
+An address that is none of these raises `ValueError`, saying what is wrong: `"1A"` or `"a1"`
+(not an address), `"A0"` (rows are numbered from 1), `"A:2"` or `"A1:B"` (a range joins two
+cells, two columns or two rows), `"B:A"` (a range runs from its first row and column to its
+last).
 
-`Sheet.string_address(row, col)` performs the reverse (0-indexed -> `"A1"`, `"AZ12"`...) and
-`Sheet.string_to_col("AZ")` converts column letters to an index — both use the usual
-spreadsheet bijective base-26 numbering (`Z` = 25, `AA` = 26, `AZ` = 51, `BA` = 52...).
+`string_address(row, col)` turns a 0-indexed position into an address (`"A1"`, `"AZ12"`...), and
+`string_to_col("AZ")` column letters into a 0-indexed column; both use the usual spreadsheet
+bijective base-26 numbering (`Z` = 25, `AA` = 26, `AZ` = 51, `BA` = 52...). A cell knows its own
+address: `cell.address`.
 
 ```python
-Sheet.string_address(0, 27)   # "AB1"
-Sheet.string_to_col("AZ")      # 51
+from odsslicer import string_address, string_to_col
+
+string_address(0, 27)   # "AB1"
+string_to_col("AZ")     # 51
 ```
 
 ---
@@ -1514,6 +1521,13 @@ steps 4 and 6, and the audit before 1.0):
   `odsslicer.classes` re-exported (`EMPTY_CELL_BS`, `TAG_CELL`, `RE_STRING_CELL`,
   `MAX_REPEAT_ROWS`, `MAX_REPEAT_COLS`) are no longer public.
 
+- **`Sheet`'s duplicate accessors are removed.** `get_row`, `get_rows`, `get_cell`, `get_cells`,
+  `get_row_slice`, `get_col`, `get_cols`, `empty_row` and `empty_col` did what indexing does;
+  `Sheet.address`, `Sheet.string_address` and `Sheet.string_to_col` what `sheet["B2:C5"]` and the
+  functions `string_address` and `string_to_col` do. A malformed address raises `ValueError`
+  saying what is wrong, where `Sheet.address` raised it without a message, raised `TypeError` on
+  `"A1:B"`, and read `"A:B1"` as `"A:B"` and `"A0"` as the cell in
+  column A of the last row.
 - **`Cell.attrs` and `Sheet.attrs` are removed.** They were the element's own attribute
   dictionary, with the file's prefixed keys, and writing to them bypassed everything the library
   keeps consistent. Their one common use has a property of its own: `cell.attrs.get("table:style-name")`
@@ -1637,6 +1651,40 @@ position says as much:
 cell = sheet["Z1000"]
 cell.cell is EMPTY_CELL_BS                                  # 0.x: past the sheet's extent
 cell.row >= sheet.n_rows or cell.col >= sheet.n_cols        # 1.0
+```
+
+**`Sheet`'s duplicate accessors** are removed: index the sheet. Each 0.x accessor returned a
+list of `Cell`, or a list of lists; indexing returns the same cells in an `ArrayValues`, whose
+`.array` is that list.
+
+```python
+sheet.get_cell(i, j)                        # 0.x
+sheet[i, j]                                 # 1.0, a Cell, blank past the data as before
+
+sheet.get_row(i)                            # 0.x
+sheet[i]                                    # 1.0
+sheet.get_rows(slice(0, 3))                 # 0.x
+sheet[0:3]                                  # 1.0
+sheet.get_row_slice(i, slice(1, 4))         # 0.x
+sheet[i, 1:4]                               # 1.0
+sheet.get_cells(slice(0, 3), slice(1, 4))   # 0.x
+sheet[0:3, 1:4]                             # 1.0
+sheet.get_col(j)                            # 0.x
+sheet[:, j]                                 # 1.0
+sheet.get_cols(slice(1, 3))                 # 0.x
+sheet[:, 1:3]                               # 1.0
+
+sheet.empty_row(sheet.n_rows)               # 0.x: blank cells, past the data
+sheet[sheet.n_rows]                         # 1.0: the same, indexed
+sheet.empty_col(sheet.n_cols)               # 0.x
+sheet[:, sheet.n_cols]                      # 1.0
+
+Sheet.string_address(0, 27)                 # 0.x
+string_address(0, 27)                       # 1.0: "AB1", from odsslicer import string_address
+Sheet.string_to_col("AZ")                   # 0.x
+string_to_col("AZ")                         # 1.0: 51
+Sheet.address("B2:C5")                      # 0.x: (slice(1, 5), slice(1, 3))
+sheet["B2:C5"]                              # 1.0: the cells; each knows its .row and .col
 ```
 
 **`MalformedDocumentError`**, new. 0.x opened a malformed document repaired, with what the

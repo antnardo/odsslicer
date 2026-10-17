@@ -15,13 +15,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 from lxml import etree
 
-from .addresses import string_address, string_to_col
+from .addresses import _parse_address, string_address
 from .cell import ArrayValues, Cell
 from .constants import (
     EMPTY_CELL,
     MAX_REPEAT_COLS,
     MAX_REPEAT_ROWS,
-    RE_STRING_CELL,
     TAG_CELL,
 )
 from .datetimes import _comparable
@@ -734,7 +733,7 @@ class Sheet:
         else `sheet[...]` accepts - into `(row0, row1, col0, col1)`
         (inclusive, 0-based) bounds, without actually reading any cell."""
         if isinstance(address, str):
-            address = self.address(address, self.n_rows)
+            address = _parse_address(address, self.n_rows)
         if isinstance(address, int):
             return address, address, 0, self.n_cols - 1
         if isinstance(address, slice):
@@ -786,8 +785,7 @@ class Sheet:
             for c in range(col0, col1 + 1):
                 if self.rows[r][c].is_merged:
                     raise ValueError(
-                        f"cell {Sheet.string_address(r, c)} is already part of a "
-                        "merged range - unmerge it first"
+                        f"cell {string_address(r, c)} is already part of a merged range - unmerge it first"
                     )
         for r in range(row0, row1 + 1):
             for c in range(col0, col1 + 1):
@@ -817,7 +815,7 @@ class Sheet:
         if row0 != row1 or col0 != col1:
             raise ValueError(f"{address!r} must resolve to a single cell")
         if not self.rows[row0][col0].is_merged:
-            raise ValueError(f"cell {Sheet.string_address(row0, col0)} is not part of a merged range")
+            raise ValueError(f"cell {string_address(row0, col0)} is not part of a merged range")
         self._unmerge(row0, col0)
 
     def copy(
@@ -851,10 +849,10 @@ class Sheet:
         snapshot = [
             [
                 (
-                    self.get_cell(r, c).value,
-                    self.get_cell(r, c).formula,
+                    self._cell(r, c).value,
+                    self._cell(r, c).formula,
                     # the style it shows with, its column's if it has none
-                    self.get_cell(r, c)._style_name(),
+                    self._cell(r, c)._style_name(),
                 )
                 for c in range(col0, col1 + 1)
             ]
@@ -1000,7 +998,7 @@ class Sheet:
         source_sheet = self if source_sheet_name == self.name else self.reader.sheet(source_sheet_name)
         row0, row1, col0, col1 = source_sheet._resolve_range(m.group("addr"))
 
-        headers = [source_sheet.get_cell(row0, c).value for c in range(col0, col1 + 1)]
+        headers = [source_sheet._cell(row0, c).value for c in range(col0, col1 + 1)]
         rows = list(rows or ())
         columns = list(columns or ())
         values = dict(values or {})
@@ -1030,14 +1028,14 @@ class Sheet:
         target_row0, _, target_col0, _ = self._resolve_range(target)
         pivot.set(
             qn("table:target-range-address"),
-            f"{_quote_odf_sheet_name(self.name)}.{Sheet.string_address(target_row0, target_col0)}",
+            f"{_quote_odf_sheet_name(self.name)}.{string_address(target_row0, target_col0)}",
         )
 
         source_range_tag = new("table:source-cell-range")
         source_range_tag.set(
             qn("table:cell-range-address"),
             f"{_quote_odf_sheet_name(source_sheet_name)}."
-            f"{Sheet.string_address(row0, col0)}:{Sheet.string_address(row1, col1)}",
+            f"{string_address(row0, col0)}:{string_address(row1, col1)}",
         )
         pivot.append(source_range_tag)
 
@@ -1788,53 +1786,21 @@ class Sheet:
         self.table.set(_STYLE_NAME, tag.attrib[qn("style:name")])
         return tag
 
-    def empty_row(
-        self,
-        i: "int | None" = None,
-        n_cols: "int | None" = None,
-        start: int = 0,
-        slice: "slice | None" = None,
-    ) -> list[Cell]:
-        step = 1
-        if slice is not None:
-            start, stop, step = self._unslice(slice)
-        elif n_cols is not None:
-            stop = n_cols
-        else:
-            stop = self.n_cols
-        return [Cell(EMPTY_CELL, cast(int, i), j, sheet=self) for j in range(start, stop, step)]
+    def _cell(self, row: int, col: int) -> Cell:
+        """The cell at `(row, col)`; past the data, a blank one reading from
+        `EMPTY_CELL`, in no document, which writing to grows the sheet first
+        (`Cell._prepare_for_write`)."""
+        if row < self.n_rows and col < self.n_cols:
+            return self.rows[row][col]
+        return Cell(EMPTY_CELL, row, col, sheet=self)
 
-    def empty_col(
-        self,
-        j: "int | None" = None,
-        n_rows: "int | None" = None,
-        start: int = 0,
-        slice: "slice | None" = None,
-    ) -> list[list[Cell]]:
-        step = 1
-        if slice is not None:
-            start, stop, step = self._unslice(slice)
-        elif n_rows is not None:
-            stop = n_rows
-        else:
-            stop = self.n_rows
-        return [[Cell(EMPTY_CELL, i, cast(int, j), sheet=self)] for i in range(start, stop, step)]
+    def _row(self, row: int) -> list[Cell]:
+        """Row `row`'s cells: the sheet's own list, or blank ones past the data."""
+        if row < self.n_rows:
+            return self.rows[row]
+        return [Cell(EMPTY_CELL, row, col, sheet=self) for col in range(self.n_cols)]
 
-    def get_row(self, i: int) -> list[Cell]:
-        if i >= self.n_rows:
-            return self.empty_row(i)
-        return self.rows[i]
-
-    def get_rows(self, slice: slice) -> list[list[Cell]]:
-        return [self.get_row(i) for i in range(*self._unslice(slice, row=True))]
-
-    def get_cell(self, i: int, j: int) -> Cell:
-        row = self.get_row(i)
-        if j >= self.n_cols:
-            return Cell(EMPTY_CELL, i, j, sheet=self)
-        return row[j]
-
-    def _unslice(self, slice: slice, row: bool = False, col: bool = False) -> tuple[int, int, int]:
+    def _unslice(self, slice: slice, *, row: bool = False, col: bool = False) -> tuple[int, int, int]:
         start = slice.start
         if start is None:
             start = 0
@@ -1849,103 +1815,39 @@ class Sheet:
             step = 1
         return start, stop, step
 
-    def get_cells(self, row_slice: slice, col_slice: slice) -> list[list[Cell]]:
+    def _cells(self, rows: slice, cols: slice) -> list[list[Cell]]:
         return [
-            [self.get_cell(i, j) for j in range(*self._unslice(col_slice, col=True))]
-            for i in range(*self._unslice(row_slice, row=True))
+            [self._cell(i, j) for j in range(*self._unslice(cols, col=True))]
+            for i in range(*self._unslice(rows, row=True))
         ]
 
-    def get_row_slice(self, i: int, col_slice: slice) -> list[Cell]:
-        return [self.get_cell(i, j) for j in range(*self._unslice(col_slice, col=True))]
-
-    def get_col(self, j: int) -> list[list[Cell]]:
-        if j >= self.n_cols:
-            return self.empty_col(j)
-        return [[row[j]] for row in self.rows]
-
-    def get_cols(self, slice: slice) -> list[list[Cell]]:
-        return [[row[j] for j in range(*self._unslice(slice, col=True))] for row in self.rows]
-
     def __getitem__(self, address: "str | int | tuple[Any, ...] | slice") -> Any:
-        """ROW en premier, COL en second (plus naturel, comme numpy, et correspond aux données)"""
+        """Row first, column second, as in numpy and as the data is laid out:
+        `sheet[0, 1]`, `sheet[0]`, `sheet[:, 1]`, `sheet[0:3, 1:4]`, or a text
+        address read by `_parse_address` - `sheet["B1"]`, `sheet["B1:D3"]`.
+        A `Cell` for one position, an `ArrayValues` of them otherwise."""
         if type(address) is str:
-            # "A2" ou "A2:B3" ou...
-            address = self.address(address, self.n_rows)
+            address = _parse_address(address, self.n_rows)
         if type(address) is int:
-            return ArrayValues(self.get_row(address))
+            return ArrayValues(self._row(address))
         if type(address) is slice:
-            return ArrayValues(self.get_rows(address))
+            return ArrayValues([self._row(i) for i in range(*self._unslice(address, row=True))])
         if type(address) is tuple and len(address) == 2:
-            # 1, 2 ou 1:3, 2 ou 1:3, 2:5 ou 1, 2:5
             rows_address, cols_address = address
             if type(rows_address) is int and type(cols_address) is int:
-                return self.get_cell(*address)
+                return self._cell(rows_address, cols_address)
             if type(rows_address) is int and type(cols_address) is slice:
-                return ArrayValues(self.get_row_slice(rows_address, cols_address))
+                return ArrayValues(
+                    [self._cell(rows_address, j) for j in range(*self._unslice(cols_address, col=True))]
+                )
             if type(rows_address) is slice and type(cols_address) is int:
-                return ArrayValues(self.get_cells(rows_address, slice(cols_address, cols_address + 1)))
+                return ArrayValues(self._cells(rows_address, slice(cols_address, cols_address + 1)))
             if type(rows_address) is slice and type(cols_address) is slice:
-                return ArrayValues(self.get_cells(rows_address, cols_address))
-        raise ValueError(f"Format demandé non conforme ou données non définie dans le tableur : {address}")
+                return ArrayValues(self._cells(rows_address, cols_address))
+        raise ValueError(f"cannot index a sheet with {address!r}: expected an address, an index or a slice")
 
     def __iter__(self) -> Iterator[list[Cell]]:
         return iter(self.rows)
-
-    @staticmethod
-    def string_to_col(s: str) -> int:
-        return string_to_col(s)
-
-    @classmethod
-    def address(cls, string: str, n_rows: int = 1) -> int | tuple[Any, ...] | slice:
-        m = RE_STRING_CELL.fullmatch(string)
-        if m is None:
-            raise ValueError
-        c1, r1, dp, c2, r2 = m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
-        if c1 is not None:
-            c1 = cls.string_to_col(c1)
-        if r1 is not None:
-            r1 = int(r1) - 1
-        if c2 is not None:
-            c2 = cls.string_to_col(c2) + 1
-        if r2 is not None:
-            r2 = int(r2)
-        if dp is None and (r2 is not None or c2 is not None):
-            raise ValueError
-        if dp is None:
-            if c1 is None:
-                # 1
-                return r1  # type: ignore[return-value]
-            if r1 is None:
-                # A
-                return slice(n_rows), c1
-            # A1
-            return r1, c1
-        if (c1 is None and r2 is None) or (c2 is None and r1 is None):
-            raise ValueError
-        # dp is not None
-        if (c1 is not None and c2 <= c1) or (r1 is not None and r2 <= r1):  # type: ignore[operator]
-            raise ValueError
-        if r1 is None:
-            # A:B
-            return slice(n_rows), slice(c1, c2)
-        if c1 is None:
-            # 1:2
-            return slice(r1, r2)
-        if r2 == r1 + 1 and c2 > c1 + 1:  # type: ignore[operator]
-            # A1:B1
-            return r1, slice(c1, c2)
-        if c2 == c1 + 1 and r2 > r1 + 1:  # type: ignore[operator]
-            # A1:A2
-            return slice(r1, r2), c1
-        if r2 == r1 + 1 and c2 == c1 + 1:
-            # A1:A1 == A1
-            return r1, c1
-        return slice(r1, r2), slice(c1, c2)
-
-    @classmethod
-    def string_address(cls, row: int, col: int) -> str:
-        # 0->A, 25->Z, 26->AA, 51->AZ, 52->BA (bijective base-26)
-        return string_address(row, col)
 
     def to_list(self) -> Any:
         return self[:].to_list()

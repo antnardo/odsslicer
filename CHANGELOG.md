@@ -18,6 +18,11 @@ underneath and those few names; DOCS.md, section 15, gives the 1.0 equivalent of
 
 - **BeautifulSoup is no longer a dependency**; `lxml` 5.0 or later is. Code that imports `bs4`
   itself has to depend on it.
+- **`Sheet`'s duplicate accessors**: `get_row`, `get_rows`, `get_cell`, `get_cells`,
+  `get_row_slice`, `get_col`, `get_cols`, `empty_row` and `empty_col` - `sheet[i, j]`,
+  `sheet[i]`, `sheet[0:3, 1:4]`, `sheet[:, j]` return the same cells - and `Sheet.address`,
+  `Sheet.string_address` and `Sheet.string_to_col`: index the sheet with the address, and use the
+  functions `odsslicer.string_address` and `odsslicer.string_to_col`.
 - **`Cell.attrs` and `Sheet.attrs`**, deprecated in 0.16.0: `cell.style_name`, `cell.style`,
   `cell.formula`, `sheet.name` and `sheet.style` say what they were used for.
 - **`odsslicer.classes` is removed**, the compatibility module left from the time the package was
@@ -66,6 +71,10 @@ underneath and those few names; DOCS.md, section 15, gives the 1.0 equivalent of
 
 ### Fixed
 
+- **A malformed address raises `ValueError` saying what is wrong**: `sheet["A0"]` read the cell in
+  column A of the last row, `sheet["0"]` the last row, `sheet["A:B1"]` columns A and B, `sheet["1:B2"]` rows 1 and 2, and `sheet["A1:B"]` raised
+  `TypeError`; an address that was none of the accepted forms raised `ValueError` without a
+  message.
 - **A document binding the ODF namespaces to other prefixes reads like any other** - a `table`
   namespace written `tab:` read as a document with no sheet - and what odsslicer writes into it
   takes its prefixes. A chart part binding the chart, table or office namespace to other prefixes

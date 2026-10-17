@@ -3,10 +3,10 @@ Suite de tests pytest pour le module `odsslicer`.
 
 Basée à l'origine sur les scripts manuels historiques du module interne,
 étendue avec des cas de régression pour les bugs corrigés :
-- Sheet.string_address sur les colonnes multi-lettres (>= Z)
-- Sheet.get_col sur les colonnes hors bornes
+- string_address sur les colonnes multi-lettres (>= Z)
+- une colonne hors bornes (l'ancien Sheet.get_col)
 - l'avertissement de lignes de longueur différente (générateur épuisé)
-- empty_row / empty_col avec l'argument `slice`
+- une tranche au-delà des données (les anciens empty_row / empty_col)
 - ODSReader.sheets qui doit renvoyer une liste réutilisable
 
 Et une section dédiée à l'écriture (Cell.value = ... / ODSReader.save()).
@@ -14,6 +14,7 @@ Et une section dédiée à l'écriture (Cell.value = ... / ODSReader.save()).
 
 import datetime as dt
 import math
+import re
 import warnings
 import zipfile
 from decimal import Decimal
@@ -62,8 +63,11 @@ from odsslicer import (
     NumberFormat,
     ODSReader,
     Sheet,
+    string_address,
+    string_to_col,
     xmltree,
 )
+from odsslicer.addresses import _parse_address
 from odsslicer.constants import TAG_CELL
 from odsslicer.xmltree import qn
 
@@ -76,62 +80,97 @@ def _repeat(tag, attr):
 
 
 # ---------------------------------------------------------------------------
-# Sheet.address : conversion "A1" / "A1:B3" / "A:B" / "1:2" -> index/slice
+# _parse_address : conversion "A1" / "A1:B3" / "A:B" / "1:2" -> index/slice
 # ---------------------------------------------------------------------------
 
 
 def test_address_simple_cell():
-    assert Sheet.address("A1") == (0, 0)
-    assert Sheet.address("Z2") == (1, 25)
-    assert Sheet.address("AA1") == (0, 26)
+    assert _parse_address("A1", 1) == (0, 0)
+    assert _parse_address("Z2", 1) == (1, 25)
+    assert _parse_address("AA1", 1) == (0, 26)
 
 
 def test_address_row_only():
-    assert Sheet.address("1") == 0
-    assert Sheet.address("3") == 2
+    assert _parse_address("1", 1) == 0
+    assert _parse_address("3", 1) == 2
 
 
 def test_address_col_only():
-    row, col = Sheet.address("A", n_rows=5)
+    row, col = _parse_address("A", 5)
     assert col == 0
     assert (row.start, row.stop, row.step) == (None, 5, None)
 
 
 def test_address_row_range():
-    row, col = Sheet.address("A1:A10")
+    row, col = _parse_address("A1:A10", 1)
     assert (row.start, row.stop, row.step) == (0, 10, None)
     assert col == 0
 
 
 def test_address_col_range():
-    row, col = Sheet.address("A1:C1")
+    row, col = _parse_address("A1:C1", 1)
     assert row == 0
     assert (col.start, col.stop, col.step) == (0, 3, None)
 
 
 def test_address_box_range():
-    row, col = Sheet.address("B2:C5")
+    row, col = _parse_address("B2:C5", 1)
     assert (row.start, row.stop, row.step) == (1, 5, None)
     assert (col.start, col.stop, col.step) == (1, 3, None)
 
 
 def test_address_single_cell_range_collapses():
-    row, col = Sheet.address("A1:A1")
+    row, col = _parse_address("A1:A1", 1)
     assert row == 0 and col == 0
 
 
 def test_address_rows_range_only():
-    assert Sheet.address("1:2") == slice(0, 2)
+    assert _parse_address("1:2", 1) == slice(0, 2)
 
 
-@pytest.mark.parametrize("bad", ["1A", "A1=", "A:2", "2:A", "B:A"])
-def test_address_invalid_raises(bad):
-    with pytest.raises(ValueError):
-        Sheet.address(bad)
+@pytest.mark.parametrize(
+    "bad, says",
+    [
+        ("1A", "is not a cell or range address"),
+        ("A1=", "is not a cell or range address"),
+        ("a1", "is not a cell or range address"),
+        ("A1B2", "is not a cell or range address"),
+        ("", "is not a cell or range address"),
+        ("A1:", "is not a cell or range address"),
+        ("A1:B2:C3", "is not a cell or range address"),
+        ("A0", "rows are numbered from 1"),
+        ("0", "rows are numbered from 1"),
+        ("A1:B0", "rows are numbered from 1"),
+        ("A:2", "a range joins two cells"),
+        ("2:A", "a range joins two cells"),
+        ("A1:B", "a range joins two cells"),
+        ("A:B1", "a range joins two cells"),
+        ("1:B2", "a range joins two cells"),
+        ("B:A", "a range runs from its first row and column to its last"),
+        ("3:1", "a range runs from its first row and column to its last"),
+        ("B1:A2", "a range runs from its first row and column to its last"),
+        ("A3:B1", "a range runs from its first row and column to its last"),
+    ],
+)
+def test_address_invalid_raises_saying_what_is_wrong(bad, says):
+    with pytest.raises(ValueError, match=re.escape(f"{bad!r}") + ".*" + re.escape(says)):
+        _parse_address(bad, 1)
+
+
+def test_address_single_column_and_row_ranges():
+    assert _parse_address("A:A", 4) == (slice(4), slice(0, 1))
+    assert _parse_address("2:2", 4) == slice(1, 2)
+
+
+def test_sheet_indexed_with_a_malformed_address_raises_value_error(sheet1):
+    with pytest.raises(ValueError, match="a range joins two cells"):
+        sheet1["A1:B"]
+    with pytest.raises(ValueError, match="cannot index a sheet with"):
+        sheet1[1.5]
 
 
 # ---------------------------------------------------------------------------
-# Sheet.string_address / string_to_col : conversion index <-> lettres
+# string_address / string_to_col : conversion index <-> lettres
 # ---------------------------------------------------------------------------
 
 
@@ -151,26 +190,26 @@ def test_address_invalid_raises(bad):
     ],
 )
 def test_string_address_columns(col, expected):
-    assert Sheet.string_address(0, col) == f"{expected}1"
+    assert string_address(0, col) == f"{expected}1"
 
 
 def test_string_address_row_is_one_indexed():
-    assert Sheet.string_address(0, 0) == "A1"
-    assert Sheet.string_address(9, 0) == "A10"
+    assert string_address(0, 0) == "A1"
+    assert string_address(9, 0) == "A10"
 
 
 @pytest.mark.parametrize("col", [*range(60), 100, 300, 701, 702, 703, 728, 729, 1000])
 def test_string_address_round_trips_through_string_to_col(col):
-    letters = Sheet.string_address(0, col)[:-1]
-    assert Sheet.string_to_col(letters) == col
+    letters = string_address(0, col)[:-1]
+    assert string_to_col(letters) == col
 
 
 def test_string_to_col_matches_docstring_examples():
-    assert Sheet.string_to_col("A") == 0
-    assert Sheet.string_to_col("Z") == 25
-    assert Sheet.string_to_col("AA") == 26
-    assert Sheet.string_to_col("AZ") == 51
-    assert Sheet.string_to_col("BA") == 52
+    assert string_to_col("A") == 0
+    assert string_to_col("Z") == 25
+    assert string_to_col("AA") == 26
+    assert string_to_col("AZ") == 51
+    assert string_to_col("BA") == 52
 
 
 # ---------------------------------------------------------------------------
@@ -316,12 +355,13 @@ def test_repeated_rows_and_cols_values(sheet_repeat):
     assert sheet_repeat["F8"].value is None
 
 
-def test_get_col_out_of_bounds_returns_empty_not_indexerror(sheet_repeat):
-    # regression: get_col used to compare against n_rows instead of n_cols,
-    # raising IndexError whenever n_rows > n_cols for an out-of-range column.
-    col = sheet_repeat.get_col(sheet_repeat.n_cols + 3)
-    assert len(col) == sheet_repeat.n_rows
-    assert all(cell[0].value is None for cell in col)
+def test_column_out_of_bounds_returns_empty_not_indexerror(sheet_repeat):
+    # regression: get_col, which 1.0 removed, compared against n_rows instead
+    # of n_cols, raising IndexError whenever n_rows > n_cols for an
+    # out-of-range column
+    col = sheet_repeat[:, sheet_repeat.n_cols + 3]
+    assert col.size == (sheet_repeat.n_rows, 1)
+    assert col.to_list() == [[None]] * sheet_repeat.n_rows
 
 
 # ---------------------------------------------------------------------------
@@ -359,32 +399,27 @@ def test_merged_and_hidden_cells(sheet_fusion):
 
 
 # ---------------------------------------------------------------------------
-# empty_row / empty_col : cas générique et cas avec un `slice` explicite
+# Lignes et colonnes au-delà des données : des cellules vides, à la bonne forme
 # ---------------------------------------------------------------------------
 
 
-def test_empty_row_default(sheet1):
-    row = sheet1.empty_row(0)
-    assert len(row) == sheet1.n_cols
-    assert all(cell.is_empty for cell in row)
+def test_row_past_the_data_is_blank(sheet1):
+    row = sheet1[sheet1.n_rows]
+    assert row.size == (sheet1.n_cols,)
+    assert all(cell.is_empty for cell in row.array)
 
 
-def test_empty_col_default(sheet1):
-    col = sheet1.empty_col(0)
-    assert len(col) == sheet1.n_rows
-    assert all(cell[0].is_empty for cell in col)
+def test_column_past_the_data_is_blank(sheet1):
+    col = sheet1[:, sheet1.n_cols]
+    assert col.size == (sheet1.n_rows, 1)
+    assert all(cell[0].is_empty for cell in col.array)
 
 
-def test_empty_row_with_slice(sheet1):
-    # regression: the slice branch used to recompute a *count* and pass it
-    # to range() as a *stop* index, silently dropping one element.
-    row = sheet1.empty_row(0, start=2, slice=slice(2, 10))
-    assert len(row) == 8
-
-
-def test_empty_col_with_slice(sheet1):
-    col = sheet1.empty_col(0, start=2, slice=slice(2, 10))
-    assert len(col) == 8
+def test_slices_past_the_data_keep_their_length(sheet1):
+    # regression of empty_row/empty_col, which 1.0 removed: a slice was
+    # turned into a count and passed to range() as a stop, dropping one cell
+    assert len(sheet1[sheet1.n_rows, 2:10]) == 8
+    assert len(sheet1[2:10, sheet1.n_cols]) == 8
 
 
 # ---------------------------------------------------------------------------
@@ -1082,7 +1117,7 @@ def test_write_growth_is_incremental_and_read_only_access_does_not_grow(writable
     s = writable_reader.sheet("Sheet1")
     s["Z1"].value = "far right"
     assert s.size == (9, 26)  # Sheet1 already had 9 rows; only the width grew
-    s.get_row(50)  # read-only access must not trigger growth
+    s[50]  # read-only access must not trigger growth
     assert s.size == (9, 26)
     s["A100"].value = "far down"
     assert s.size == (100, 26)
@@ -1824,7 +1859,7 @@ def test_a_note_right_of_the_data_is_in_the_grid(tmp_path, gap):
     assert [len(row) for row in r.sheet("Sheet1").rows] == [gap + 2, gap + 2]
     assert r.sheet("Sheet1")[0, gap + 1].comment.text == "far right"
     r.save()
-    assert addresses_holding(saved_table(path), _is_note) == [Sheet.string_address(0, gap + 1)]
+    assert addresses_holding(saved_table(path), _is_note) == [string_address(0, gap + 1)]
 
 
 def test_a_note_far_below_the_data_is_in_the_grid(tmp_path):
@@ -2089,7 +2124,7 @@ def test_inserting_columns_keeps_the_formatted_cells_past_the_data(tmp_path):
     r.save()
     yellow = addresses_holding(saved_table(path), _is_yellow)
     # D:R moved to F:T, on both rows
-    assert yellow == [Sheet.string_address(r, c) for r in (0, 1) for c in range(5, 20)]
+    assert yellow == [string_address(r, c) for r in (0, 1) for c in range(5, 20)]
 
 
 def test_inserting_a_column_into_a_row_as_wide_as_the_sheet_keeps_the_grid(tmp_path):
@@ -3952,7 +3987,7 @@ def test_slice_formula_expands_placeholders_per_cell(writable_reader):
     s = writable_reader.sheet("Sheet1")
     s["A2:A6"].formula = "$A{r-1}+1"
     for row in range(1, 6):  # 0-indexed rows 1..5 == A2..A6
-        assert s.get_cell(row, 0).formula == f"of:=[.$A{row}]+1"
+        assert s[row, 0].formula == f"of:=[.$A{row}]+1"
 
 
 def test_save_round_trip_after_slice_writes(writable_reader, tmp_path):
@@ -3969,7 +4004,7 @@ def test_save_round_trip_after_slice_writes(writable_reader, tmp_path):
 
     reread = ODSReader(out).sheet("Sheet1")
     for row in range(19, 25):
-        assert reread.get_cell(row, 0).formula == f"of:=[.$A{row}]+1"
+        assert reread[row, 0].formula == f"of:=[.$A{row}]+1"
     assert reread["C1:C3"].to_list() == [[1], [2], [3]]
 
 
@@ -4120,7 +4155,7 @@ def test_fill_formula_down_a_column_shifts_relative_rows(writable_reader):
     s["B2"].formula = "$A1+1"
     s["B2"].fill_formula("B3:B10")
     for row in range(1, 10):  # 0-indexed rows 1..9 == B2..B10
-        assert s.get_cell(row, 1).formula_friendly == f"=$A{row}+1"
+        assert s[row, 1].formula_friendly == f"=$A{row}+1"
 
 
 def test_fill_formula_right_shifts_relative_columns(writable_reader):
@@ -4139,7 +4174,7 @@ def test_fill_formula_keeps_absolute_references_fixed(writable_reader):
     s["A2"].fill_formula(s["B2:D3"])  # 2D block target, not just a string
     for row in (1, 2):
         for col in range(1, 4):
-            assert s.get_cell(row, col).formula_friendly == "=$A$1*10"
+            assert s[row, col].formula_friendly == "=$A$1*10"
 
 
 def test_fill_formula_accepts_a_single_cell_address(writable_reader):
@@ -4153,7 +4188,7 @@ def test_fill_formula_out_of_range_raises(writable_reader):
     s = writable_reader.sheet("Sheet2Repeat")
     s["B5"].formula = "$A1"
     with pytest.raises(ValueError):
-        s["B5"].fill_formula(s.get_cell(3, 1))  # one row up would need row 0 -> invalid
+        s["B5"].fill_formula(s[3, 1])  # one row up would need row 0 -> invalid
 
 
 def test_fill_formula_without_a_formula_raises(writable_reader):
@@ -4172,7 +4207,7 @@ def test_save_round_trip_after_fill_formula(writable_reader, tmp_path):
 
     reread = ODSReader(out).sheet("Sheet1")
     for row, ref_row in zip(range(1, 4), (1, 2, 3), strict=True):
-        assert reread.get_cell(row, 1).formula_friendly == f"=$A{ref_row}+1"
+        assert reread[row, 1].formula_friendly == f"=$A{ref_row}+1"
 
 
 # ---------------------------------------------------------------------------
