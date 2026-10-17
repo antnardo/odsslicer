@@ -7,6 +7,8 @@ still change between minor versions.
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-10-17
+
 ### Added
 
 - **`Cell.style_name`**: the name of a cell's own style (`"ce9"`), or `None` for a cell that has
@@ -689,7 +691,8 @@ typed cell values (text, number, percentage, currency, date, time, boolean), for
 repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
-[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/antnardo/odsslicer/compare/v0.15.1...v0.16.0
 [0.15.1]: https://github.com/antnardo/odsslicer/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/antnardo/odsslicer/compare/v0.14.3...v0.15.0
 [0.14.3]: https://github.com/antnardo/odsslicer/compare/v0.14.2...v0.14.3
