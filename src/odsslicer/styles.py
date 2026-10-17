@@ -16,7 +16,8 @@ from bs4 import Tag
 from .dateformats import _STANDARD_FORMATS
 from .datenames import _date_names
 from .datetimes import _ONE_DAY, _as_datetime, _as_timedelta, _clock_parts
-from .xmlutils import _blank_template, _ensure_style_child
+from .xmlbs import insert_before, local_name, new, set_text, text
+from .xmlutils import _ensure_style_child
 
 if TYPE_CHECKING:
     from .cell import Cell
@@ -143,7 +144,8 @@ class NumberFormat:
         self._tag = tag
         self._reader = reader
         self.name = cast("str | None", tag.get("style:name"))
-        self.family = tag.name[: -len("-style")] if tag.name.endswith("-style") else tag.name
+        name = local_name(tag)
+        self.family = name[: -len("-style")] if name.endswith("-style") else name
         number_tag = tag.find("number:number") or tag.find("number:boolean")
         self.decimal_places = None
         self.grouping = None
@@ -152,7 +154,7 @@ class NumberFormat:
             self.decimal_places = int(places) if places is not None else None
             self.grouping = number_tag.attrs.get("number:grouping") == "true"
         symbol = tag.find("number:currency-symbol")
-        self.currency_symbol = symbol.get_text() if symbol is not None else None
+        self.currency_symbol = text(cast(Tag, symbol)) if symbol is not None else None
         text_props = tag.find("style:text-properties")
         self.font_color = text_props.attrs.get("fo:color") if text_props is not None else None
         # for date/time styles: the ordered sequence of components/literal
@@ -163,11 +165,11 @@ class NumberFormat:
         if self.family in ("date", "time"):
             self.components = [
                 (
-                    child.name,
-                    child.get_text() if child.name == "text" else child.attrs.get("number:style", "short"),
+                    local_name(child),
+                    text(child) if local_name(child) == "text" else child.attrs.get("number:style", "short"),
                 )
                 for child in tag.find_all(True, recursive=False)
-                if child.name in _DATE_TIME_COMPONENT_NAMES
+                if local_name(child) in _DATE_TIME_COMPONENT_NAMES
             ]
 
         _seen = _seen or set()
@@ -244,15 +246,15 @@ class NumberFormat:
         if elapsed and family != "time":
             raise ValueError(f"elapsed=True applies to family='time', not {family!r}")
 
-        tag = _blank_template(reader.data, cls._FAMILY_TAGS[family])
+        tag = new(cls._FAMILY_TAGS[family], near=reader.data)
         tag.attrs["style:name"] = reader._new_style_name("N")
         if font_color is not None:
-            text_props = _blank_template(reader.data, "style:text-properties")
+            text_props = new("style:text-properties", near=reader.data)
             text_props.attrs["fo:color"] = font_color
             tag.append(text_props)
 
         if family in ("number", "percentage", "currency"):
-            number_child = _blank_template(reader.data, "number:number")
+            number_child = new("number:number", near=reader.data)
             if decimal_places is not None:
                 number_child.attrs["number:decimal-places"] = str(decimal_places)
                 number_child.attrs["number:min-decimal-places"] = str(decimal_places)
@@ -262,33 +264,33 @@ class NumberFormat:
             tag.append(number_child)
             if family == "percentage":
                 # a space before the sign always, where en-US has none
-                for text, before in zip(_percent_affixes(reader), (True, False), strict=True):
-                    if text:
-                        text_child = _blank_template(reader.data, "number:text")
-                        text_child.string = text
+                for affix, before in zip(_percent_affixes(reader), (True, False), strict=True):
+                    if affix:
+                        text_child = new("number:text", near=reader.data)
+                        set_text(text_child, affix)
                         if before:
-                            number_child.insert_before(text_child)
+                            insert_before(number_child, text_child)
                         else:
                             tag.append(text_child)
             elif family == "currency":
                 assert currency_symbol is not None  # validated above
-                separator = _blank_template(reader.data, "number:text")
-                separator.string = " "
+                separator = new("number:text", near=reader.data)
+                set_text(separator, " ")
                 tag.append(separator)
-                symbol_child = _blank_template(reader.data, "number:currency-symbol")
-                symbol_child.string = currency_symbol
+                symbol_child = new("number:currency-symbol", near=reader.data)
+                set_text(symbol_child, currency_symbol)
                 tag.append(symbol_child)
         elif family == "boolean":
-            tag.append(_blank_template(reader.data, "number:boolean"))
+            tag.append(new("number:boolean", near=reader.data))
         else:  # date / time
             if elapsed:
                 tag.attrs["number:truncate-on-overflow"] = "false"
             for kind, value in components:
                 if kind == "text":
-                    child = _blank_template(reader.data, "number:text")
-                    child.string = value
+                    child = new("number:text", near=reader.data)
+                    set_text(child, value)
                 else:
-                    child = _blank_template(reader.data, f"number:{kind}")
+                    child = new(f"number:{kind}", near=reader.data)
                     if value:
                         child.attrs["number:style"] = value
                 tag.append(child)
@@ -306,7 +308,7 @@ class NumberFormat:
             raise RuntimeError(f"number format {self.name!r} has no underlying tag and cannot be written to")
         if not isinstance(target, NumberFormat):
             raise TypeError(f"target must be a NumberFormat, got {type(target)!r}")
-        style_map = _blank_template(self._reader.data, "style:map")
+        style_map = new("style:map", near=self._reader.data)
         style_map.attrs["style:condition"] = condition
         style_map.attrs["style:apply-style-name"] = target.name
         self._tag.append(style_map)
@@ -358,10 +360,10 @@ def _render_number_from_format(number_format: "NumberFormat | None", value: floa
     rendered = f"{value * scale:,.{decimals}f}" if number_format.grouping else f"{value * scale:.{decimals}f}"
     parts = []
     for child in number_format._tag.find_all(True, recursive=False):
-        if child.name == "number":
+        if local_name(child) == "number":
             parts.append(rendered)
-        elif child.name in ("text", "currency-symbol"):
-            parts.append(child.get_text())
+        elif local_name(child) in ("text", "currency-symbol"):
+            parts.append(text(child))
     return "".join(parts) if rendered in parts else rendered
 
 
@@ -408,15 +410,22 @@ def _render_date_time_from_format(
     if tag.get("number:format-source") == "language":
         return None
     children = [
-        child for child in tag.find_all(True, recursive=False) if child.name in _DATE_TIME_COMPONENT_NAMES
+        child
+        for child in tag.find_all(True, recursive=False)
+        if local_name(child) in _DATE_TIME_COMPONENT_NAMES
     ]
-    kinds = {child.name for child in children}
+    kinds = {local_name(child) for child in children}
     named = any(
-        child.name == "day-of-week" or (child.name == "month" and child.get("number:textual") == "true")
+        local_name(child) == "day-of-week"
+        or (local_name(child) == "month" and child.get("number:textual") == "true")
         for child in children
     )
     decimals = max(
-        (int(child.get("number:decimal-places", "0")) for child in children if child.name == "seconds"),
+        (
+            int(child.get("number:decimal-places", "0"))
+            for child in children
+            if local_name(child) == "seconds"
+        ),
         default=0,
     )
     names = None
@@ -449,9 +458,9 @@ def _render_date_time_from_format(
         fraction = fields.microsecond
     parts = []
     for child in children:
-        kind, style = child.name, child.get("number:style", "short")
+        kind, style = local_name(child), child.get("number:style", "short")
         if kind == "text":
-            parts.append(child.get_text())
+            parts.append(text(child))
         elif kind == "am-pm":
             parts.append("PM" if fields.hour >= 12 else "AM")
         elif kind == "hours" and "am-pm" in kinds:  # 13:45 shows as 01:45 PM
