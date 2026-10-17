@@ -332,14 +332,18 @@ propriétés obscures, peu utilisées, et le paquet n'a pas d'utilisateurs à m�
 
 ### Pour démarrer (état au 2026-10-17)
 
-**Où en est-on.** La 0.15.0 est publiée : blancs conservés (0.14.2), `<text:s/>` lu et écrit
-(0.14.3), fichiers chiffrés refusés et éditions de feuille linéaires, bs4 ≥ 4.13 (0.15.0). Depuis,
-sur `master` : la couche d'accès lxml, `src/odsslicer/xmltree.py` et ses 84 tests
-(`tests/test_xmltree.py`), que rien n'utilise encore ; le code formaté par ruff, vérifié par la CI.
-L'étude (`benchmarks/LXML_STUDY.md`) et ses scripts (`benchmarks/lxml_*.py`) sont sur `master`
-aussi. Seul reste sur la branche `claude/lxml-study`, poussée sur GitHub et rebasée sur `master`,
-le portage de `properties.py` avec `meta.xml` — l'étape 0 du plan ci-dessous —, parce qu'il fait
-de `meta_data` un arbre lxml.
+**Où en est-on.** La 0.16.0 est publiée (2026-10-17) avec les étapes 2, 3 et 4 du plan
+ci-dessous : la couche d'accès lxml (`src/odsslicer/xmltree.py`) et son pendant bs4
+(`src/odsslicer/xmlbs.py`), avec leurs tests de parité, l'étude (`benchmarks/LXML_STUDY.md`) et ses
+scripts, le code formaté par ruff et vérifié par la CI. La branche de la 1.0, `claude/lxml-study`,
+part de `master` (v0.16.0) et porte ce qui change le type d'une échappatoire : l'étape 0
+(`properties.py` et `meta.xml` sur lxml, `meta_data` devenu un arbre lxml) et, une fois
+`claude/lxml-step1` fusionnée, l'étape 1.
+
+**L'étape 1 est faite** (2026-10-17, branche `claude/lxml-step1`, partie de `claude/lxml-study`) :
+`settings.xml` et le contenu propre des graphiques passent par lxml seul, `settings_data` devient
+un arbre lxml, et `MalformedDocumentError` existe. Le détail, et ce qu'elle apprend pour
+l'étape 5, sont dans le plan.
 
 **L'étape 2 est faite** (2026-10-17, branche `claude/lxml-step2`, sur la 0.15.1) : tout ce que bs4
 et lxml font différemment passe par `src/odsslicer/xmlbs.py`, des fonctions à corps bs4 sous les
@@ -373,10 +377,9 @@ qu'aucun des 500 vrais fichiers balayés ne porte (voir le plan).
 **L'étape 4 est faite** (2026-10-17) : les décisions d'API sont dans DOCS.md, section 15, et
 `Cell.style_name` remplace l'usage réel de `Cell.attrs`.
 
-**Par où commencer** : la branche 1.0 (`claude/lxml-study`) — l'étape 1 (`settings.xml`,
-graphiques), puis l'étape 5, la bascule. Rebaser `claude/lxml-study` sur `master` une fois l'étape 2 fusionnée : `reader.py` y
-change d'imports des deux côtés, et `xmlutils._blank_template` reste, réduit à `new(near=...)`,
-pour le seul `properties.py` de `master`, que la branche porte en entier.
+**Par où commencer** : la branche 1.0 (`claude/lxml-study`, `claude/lxml-step1` fusionnée) —
+l'étape 5, la bascule. Lire d'abord, dans le plan, ce que l'étape 1 a relevé pour elle : les deux
+couches de `_touched_tag`, le cache de `_drawings`, et les deux défauts de la 0.16.0 qu'il cache.
 
 **À ne pas oublier en route** :
 
@@ -392,9 +395,15 @@ pour le seul `properties.py` de `master`, que la branche porte en entier.
 **Vérifier chaque étape** — dans un venv propre au worktree, jamais dans `~/Envs/main` :
 `pytest` (suite LibreOffice comprise), `mypy` (avec l'extra `typecheck` : bs4 4.13 a ses
 propres types, mais sans `types-beautifulsoup4` mypy relève 53 erreurs — le garder jusqu'au départ
-de bs4), `ruff check` et `ruff format --check` sur `src tests benchmarks`, puis
-`benchmarks/sweep_real_files.py --baseline v0.15.0 --limit 250 --write-limit 150` (7 minutes
-pour 250 fichiers ; 500 dépassent 30 minutes : le lancer en arrière-plan avec un délai long).
+de bs4), `ruff check` et `ruff format --check` sur `src tests benchmarks`,
+`benchmarks/mutate_layers.py` et `benchmarks/mutate_flags.py` (chaque garde-fou cassé doit faire
+échouer un test), puis `benchmarks/sweep_real_files.py --baseline-src <src d'un worktree détaché
+sur la branche de départ> --limit 250 --write-limit 150` (7 minutes pour 250 fichiers au calme,
+bien plus sous charge ; 500 dépassent 30 minutes : le lancer en arrière-plan avec un délai long).
+Le balayage n'édite que des valeurs : ce qu'une édition de structure réécrit (les graphiques)
+se compare partie par partie avec `benchmarks/edit_parts.py --baseline-src ...`, sur le corpus
+public de LibreOffice (`promotion/corpus/libreoffice-core`) et sur les vrais fichiers qui ont des
+objets.
 Toute différence de lecture se tranche contre LibreOffice (`soffice --headless --convert-to
 csv`), jamais contre odsslicer, et le balayage n'imprime jamais le contenu d'une cellule. Deux
 sessions qui lancent LibreOffice en même temps font échouer ses tests par intermittence :
@@ -520,10 +529,68 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
 
 0. ~~**Couche d'accès et `meta.xml`**~~ — fait : la couche sur `master`, le portage de
    `meta.xml` sur `claude/lxml-study`, où `meta_data` devient un arbre lxml ; il attend la 1.0.
-1. **`settings.xml` et le contenu des graphiques.** Deux parties que seul `reader.py` lit
-   (`settings_data`, `_charts`, la réécriture de leurs plages) : petit, et le premier usage de la
-   couche sur un chemin de `save()` qui recopie ou régénère. `_touched_tag` apprend à remonter à
-   la racine d'un arbre lxml (`getroottree()`). Rupture : `settings_data`, à garder pour la 1.0.
+1. ~~**`settings.xml` et le contenu des graphiques.**~~ **Fait le 2026-10-17** (branche
+   `claude/lxml-step1`, partie de `claude/lxml-study` : le portage, les deux scripts de
+   vérification, la documentation). Rupture : `settings_data`, gardée pour la 1.0.
+
+   **Ce qui passe par lxml** : `settings_data`, un `etree._ElementTree` analysé au premier accès
+   et sérialisé par `xmltree.serialize`, sous la déclaration XML lue, seulement une fois touché ;
+   le contenu propre de chaque graphique (`Object N/content.xml`), lu par `_charts`, ses plages
+   réécrites par `_remap_drawing_references` et `_rename_drawing_references` par URI
+   (`_CHART_RANGE_ATTRS`, précalculés par `qn`). `_parts` garde l'arbre et les octets lus, pour
+   la déclaration. **Reste en bs4** : `<draw:object>` et `table:end-cell-address`, qui sont dans
+   `content.xml`, et `styles.xml` — l'étape 5. `_touched_tag` reconnaît les deux bibliothèques.
+   `MalformedDocumentError` existe (sous-classe de `ValueError`, exportée) : `meta.xml` lève à
+   l'ouverture, `settings.xml` au premier accès, un graphique à la première édition de
+   structure, **avant** qu'elle change quoi que ce soit (`ODSReader._read_objects`, en tête de
+   `insert_rows`, `insert_columns`, `delete_rows`, `delete_column`, `rename_sheet`).
+
+   **Ce que ça a coûté** : une session ; `reader.py` et `sheet.py` +163 −46 lignes ; 13 tests
+   ajoutés (17 cas), les 4 qui lisaient `settings_data` en bs4 réécrits ; deux scripts,
+   `benchmarks/edit_parts.py` (une édition de structure faite par deux versions, comparée
+   partie par partie : mêmes octets, même forme canonique, ou une différence) et
+   `benchmarks/mutate_flags.py` (16 garde-fous de `save()` cassés un à un, chacun attrapé).
+   `mutate_layers.py` attrape toujours ses 39 mutations.
+
+   **Mesuré**, contre `claude/lxml-study` : aucune fixture n'a de graphique ; sur les 8,
+   `settings.xml` touché revient en même forme canonique (6, plus 2 créés pour Excel), le reste à
+   l'octet. Corpus public de LibreOffice, 86 fichiers à objets : 507 éditions, 775 graphiques
+   réécrits, tous en même forme canonique (octets autres : `&apos;`, `<x/>`, déclaration du
+   fichier là où bs4 écrivait `encoding="utf-8"`), zéro différence. Vrais fichiers de l'auteur à
+   objets, 147 : 872 éditions, 2 549 graphiques réécrits, zéro différence. Balayage de 250 vrais
+   fichiers (écriture sur 150) : zéro partout — lecture, grille, écriture-relecture, parties
+   recopiées, erreurs nouvelles.
+
+   **Ce qu'elle apprend pour l'étape 5** :
+
+   - **`getroottree()` ne dit pas l'arbre d'un élément détaché** : un élément retiré de son arbre
+     reste dans le même document lxml, et `getroottree().getroot()` rend encore la racine de ce
+     document. `_touched_tag` remonte donc par `getparent()`, comme `parent` en bs4 (piège épinglé
+     dans `tests/test_xmltree.py`). À la bascule, sa branche bs4 disparaît.
+   - **Le cache de `_drawings` est fragile.** Rempli à la première édition de structure, après
+     elle ; lire les graphiques avant l'édition par lui l'aurait rempli d'éléments que l'édition
+     jette, d'où un `TypeError` (attrapé sur `ser_labels.ods`, d'où `_read_objects` lit les
+     objets dans la liste du paquet). Il cache **deux défauts de la 0.16.0**, sur `master`, hors
+     de cette étape et non corrigés : (a) supprimer une ligne qui porte un dessin ancré au-delà
+     des colonnes de la grille supprime le dessin avec elle (`_rescue_drawings` ne parcourt que
+     les colonnes de la grille ; `ser_labels.ods` de LibreOffice : un graphique en F2, la grille
+     en A:E), contrairement à l'issue #24 ; (b) deux éditions de structure de suite, dont la
+     seconde jette un dessin mis en cache par la première, lèvent `TypeError`
+     (`insert_columns(5)` puis `delete_rows([1])` sur le même fichier). À trancher contre
+     LibreOffice, à part.
+   - **`serialize` veut les octets lus** pour la déclaration : `self.content` et `self.styles`
+     serviront à l'étape 5, comme `self.settings` ici.
+   - **Préfixes** : bs4 ne reconnaissait même pas comme graphique une partie qui lie `office:`
+     autrement, et laissait ses plages telles quelles ; par URI, elle suit. `content.xml` aura le
+     même gain (le `xfail` du fichier `tab:`).
+   - **L'analyse stricte d'une partie lue à la demande** décide où l'erreur sort ; pour
+     `content.xml` et `styles.xml`, c'est l'ouverture, sans question.
+
+   **Laissé à décider** : un objet intégré qui n'est pas un graphique mais est mal formé (une
+   formule) refuse aussi l'édition de structure, comme une partie orpheline (qu'aucun
+   `<draw:object>` ne nomme), puisque `_read_objects` lit tout `*/content.xml` ; et un graphique
+   est réécrit à chaque édition de structure même si aucune de ses plages ne bouge, comme en
+   0.16.0 — ne le toucher que si une valeur change le laisserait recopié à l'octet.
 2. ~~**Préparation sur bs4, sans changer de bibliothèque.**~~ **Fait le 2026-10-17** (branche
    `claude/lxml-step2`, un commit par module : `xmlutils`, `styles`, `cell`, `sheet`, `reader`,
    puis `discard`).
