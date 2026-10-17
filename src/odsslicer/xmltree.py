@@ -51,6 +51,10 @@ __all__ = [
     "descendants",
     "following",
     "insert_after",
+    "insert_before",
+    "local_name",
+    "name_of",
+    "namespace_of",
     "new",
     "paragraph_text",
     "parse",
@@ -59,11 +63,13 @@ __all__ = [
     "prefixed",
     "qn",
     "remove",
+    "rename",
     "serialize",
     "set_paragraph_text",
     "set_text",
     "text",
     "unwrap",
+    "wrap_contents",
 ]
 
 # The prefixes the ODF specification writes, which are the ones odsslicer's
@@ -222,16 +228,23 @@ def set_text(element: etree._Element, value: str) -> None:
     element.text = value
 
 
-def new(name: str, attrs: "dict[str, str] | None" = None) -> etree._Element:
+def new(
+    name: str, attrs: "dict[str, str] | None" = None, *, near: "etree._Element | None" = None
+) -> etree._Element:
     """A new, detached element named `name`, its attributes named the same
     way (`{"table:name": "Sheet1"}`).
 
     bs4 could not do this without the namespace's URI at hand, hence the
-    copies of existing elements `xmlutils._blank_template` makes. lxml needs
+    copies of existing elements `xmlutils._blank_template` made. lxml needs
     nothing of the document: the element declares the specification's
     prefix for itself, and once inserted where the document already binds
     that namespace, lxml drops the declaration and takes the document's
-    prefix - `tab:table-row` under a document that says `tab:`."""
+    prefix - `tab:table-row` under a document that says `tab:`.
+
+    `near` is ignored: `xmlbs.new`, the bs4 counterpart, needs an element
+    of the document to decide whether the new one declares its namespace,
+    which lxml decides by itself on insertion. Accepted here so that the
+    same call works on both."""
     uri = NAMESPACES[name.split(":", 1)[0]]
     element = etree.Element(qn(name), nsmap={_PREFIXES[uri]: uri})
     for key, value in (attrs or {}).items():
@@ -286,6 +299,14 @@ def insert_after(reference: etree._Element, element: etree._Element) -> None:
     reference.addnext(element)
 
 
+def insert_before(reference: etree._Element, element: etree._Element) -> None:
+    """Put `element` right before `reference`, after the text that stood
+    before it - bs4's `insert_before`. lxml's `addprevious` does just that,
+    but carries `element`'s own tail along: `element` should have none, as
+    for `insert_after`."""
+    reference.addprevious(element)
+
+
 def unwrap(element: etree._Element) -> None:
     """Replace `element` by what it holds - text, children and the text
     after it, in order - bs4's `unwrap()`, which lxml has no counterpart
@@ -301,6 +322,44 @@ def unwrap(element: etree._Element) -> None:
         inner[-1].tail = (inner[-1].tail or "") + (element.tail or "")
         element.tail = None
     remove(element)
+
+
+def wrap_contents(element: etree._Element, wrapper: etree._Element) -> None:
+    """Move everything `element` holds - its text, its children and their
+    tails - into `wrapper`, in order, and make `wrapper` its only child:
+    what `cell.hyperlink = url` does to a paragraph. Moving the children
+    alone would leave the text before the first one out of `wrapper`: in
+    lxml it is no child, it is `element.text`."""
+    wrapper.text, element.text = element.text, None
+    for child in list(element):
+        wrapper.append(child)  # its tail along, as wanted
+    element.append(wrapper)
+
+
+def local_name(element: etree._Element) -> str:
+    """`element`'s name without its namespace - `"table-row"` - bs4's
+    `tag.name`."""
+    return cast(str, etree.QName(element).localname)
+
+
+def name_of(element: etree._Element) -> str:
+    """`element`'s name with the specification's prefix -
+    `"table:table-row"` - whatever prefix the document writes (see
+    `prefixed`)."""
+    return prefixed(cast(str, element.tag))
+
+
+def namespace_of(element: etree._Element) -> "str | None":
+    """The URI of `element`'s namespace, `None` if it has none - bs4's
+    `tag.namespace`."""
+    return cast("str | None", etree.QName(element).namespace)
+
+
+def rename(element: etree._Element, name: str) -> None:
+    """Give `element` the name `name` (`"table:covered-table-cell"`), its
+    attributes and content kept - bs4's `tag.name = ...`, which keeps the
+    prefix."""
+    element.tag = qn(name)
 
 
 _S, _TAB, _LINE_BREAK, _C = (qn(name) for name in ("text:s", "text:tab", "text:line-break", "text:c"))
@@ -319,7 +378,7 @@ def paragraph_text(paragraph: etree._Element) -> str:
     """The text of a `<text:p>` as a spreadsheet application shows it: `text`
     with the whitespace ODF writes as elements put back - `<text:s text:c="N"/>`
     as N spaces, `<text:tab/>` as a tab, `<text:line-break/>` as a newline.
-    `xmlutils._paragraph_text` on lxml: see it for why."""
+    `xmlbs.paragraph_text` on lxml: see it for why."""
     if len(paragraph) == 0:
         return paragraph.text or ""  # one text node, the common case
     parts: list[str] = []
@@ -347,7 +406,7 @@ def set_paragraph_text(paragraph: etree._Element, value: str) -> None:
     """Make `value` the whole content of `paragraph`, a run of spaces written
     as one space and `<text:s text:c="N-1"/>` (all of it as `<text:s/>` at the
     start), a tab as `<text:tab/>` - as LibreOffice writes them, and as
-    `xmlutils._set_paragraph_text` does on bs4. In lxml the text after each
+    `xmlbs.set_paragraph_text` does on bs4. In lxml the text after each
     element is that element's tail, which is where it goes."""
     set_text(paragraph, "")
     paragraph.text = None

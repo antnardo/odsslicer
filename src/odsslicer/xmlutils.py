@@ -1,13 +1,15 @@
-"""Low-level helpers for building/cloning namespace-qualified ODF XML elements,
-and for parsing a package part without losing anything it says."""
+"""Low-level XML helpers: parsing a package part without losing anything it
+says, reading the manifest, and the style helpers built on `xmlbs` - the
+operations whose bs4 and lxml forms differ, which live there."""
 
-import copy
 import io
 import re
 from typing import cast
 
-from bs4 import BeautifulSoup, CData, NavigableString, Tag
+from bs4 import BeautifulSoup, Tag
 from lxml import etree
+
+from .xmlbs import children, new, paragraph_text, set_paragraph_text
 
 # Standard OASIS namespace URIs, used as a last-resort fallback to build a
 # namespace-qualified tag from scratch when the document has no existing tag
@@ -101,37 +103,20 @@ def _new_qualified_tag(tag_name: str) -> Tag:
 
 
 def _blank_template(root: Tag, tag_name: str) -> Tag:
-    """A detached, blank copy of an existing `tag_name` tag reachable from
-    `root`, or a freshly built one (see `_new_qualified_tag`) if the document
-    has none to copy from.
-
-    Building a new tag from scratch (e.g. `BeautifulSoup("<table:table-row/>")`)
-    without its own `xmlns:` declaration loses the "table:"/"text:" namespace
-    prefix, since there is nothing in that isolated fragment for lxml/bs4 to
-    resolve it against - copying an existing tag from the live document (when
-    there is one) sidesteps having to hardcode the namespace URI at all.
-    """
-    template = (
-        root.find(tag_name)
-        or getattr(root, "find_previous", lambda *a: None)(tag_name)
-        or getattr(root, "find_next", lambda *a: None)(tag_name)
-    )
-    if template is None:
-        return _new_qualified_tag(tag_name)
-    new_tag = cast(Tag, copy.deepcopy(template))
-    new_tag.attrs.clear()
-    for child in list(new_tag.children):
-        child.extract()
-    return new_tag
+    """A new `tag_name` element for the document `root` stands in: `new`,
+    which used to be this, a blank copy of an existing element of the
+    document. Kept for `properties.py` alone, which the 1.0 branch ports to
+    lxml whole; everything else calls `new` itself."""
+    return new(tag_name, near=root)
 
 
 def _ensure_style_child(style_tag: Tag, tag_name: str) -> Tag:
     """The `tag_name` properties child of `style_tag` (e.g.
     `<style:table-cell-properties>` under a `<style:style>`), creating a
-    blank one (see `_blank_template`) if it isn't there yet."""
+    blank one (see `xmlbs.new`) if it isn't there yet."""
     child = style_tag.find(tag_name)
     if child is None:
-        new_child = _blank_template(style_tag, tag_name)
+        new_child = new(tag_name, near=style_tag)
         style_tag.append(new_child)
         return new_child
     return cast(Tag, child)
@@ -147,107 +132,12 @@ def _is_forked_style_name(name: "str | None", prefix: str) -> bool:
     return re.match(rf"^{re.escape(prefix)}\d+$", name) is not None
 
 
-# Builds the tags `_set_paragraph_text` inserts: `new_tag` only borrows the XML
-# builder from it (an empty element then serialises as `<text:s/>`), the tags
-# are never attached to it - and a factory spares a walk up to the document.
-_TAG_FACTORY = BeautifulSoup("", "xml")
-
-# A run of spaces, or a tab: what `_set_paragraph_text` cannot leave as is.
-_WHITESPACE_RUN = re.compile(r"( +|\t)")
+# Moved to `xmlbs`, under `xmltree`'s names: kept here until every module
+# calls them there.
+_paragraph_text = paragraph_text
+_set_paragraph_text = set_paragraph_text
 
 
 def _children_named(tag: Tag, name: str) -> list[Tag]:
-    """The children of `tag` named `name` ("text:p"), in order: what
-    `tag.find_all(name, recursive=False)` returns, without what it costs.
-
-    bs4 builds a filter object for every `find`/`find_all` call before
-    walking anything, and on the paths that run once per cell - reading a
-    cell's paragraphs, looking for its note - that construction outweighed
-    the walk: profiling a test suite that reads wide sheets put the filter
-    at the top, with two searches per cell. A cell has a handful of
-    children, so a plain loop is all it takes. The name matches as bs4
-    matches it: prefix and local name, or the whole name on an element whose
-    prefix the parser could not resolve."""
-    prefix, _, local = name.partition(":")
-    return [
-        child
-        for child in tag.contents
-        if isinstance(child, Tag) and (child.name == name or (child.name == local and child.prefix == prefix))
-    ]
-
-
-def _space_count(tag: Tag) -> int:
-    try:
-        return max(int(cast(str, tag.attrs.get("text:c", "1"))), 1)
-    except ValueError:
-        return 1
-
-
-def _paragraph_text(paragraph: Tag) -> str:
-    """The text of a `<text:p>` as a spreadsheet application shows it.
-
-    ODF lets a consumer collapse the whitespace a paragraph holds literally,
-    so a producer writes what has to survive as elements: `<text:s text:c="N"/>`
-    for N spaces, `<text:tab/>`, `<text:line-break/>`. LibreOffice does it for
-    every run of two spaces or more, every leading space, every tab and every
-    Shift+Enter. BeautifulSoup's `get_text()` concatenates the text nodes only,
-    which dropped all of them (issue #27): "a<text:s text:c="2"/>b" read "ab".
-
-    Literal whitespace is kept as written rather than collapsed: LibreOffice
-    shows it that way, which is what the reader of a cell expects to get."""
-    only = paragraph.string
-    if only is not None and type(only) is NavigableString:
-        # one text node and nothing else, the common case, decided without a walk
-        return str(only)
-    parts: list[str] = []
-    for node in paragraph.descendants:
-        if isinstance(node, Tag):
-            if node.prefix != "text":
-                continue
-            if node.name == "s":
-                parts.append(" " * _space_count(node))
-            elif node.name == "tab":
-                parts.append("\t")
-            elif node.name == "line-break":
-                parts.append("\n")
-        elif type(node) is NavigableString or isinstance(node, CData):
-            parts.append(str(node))
-    return "".join(parts)
-
-
-def _set_paragraph_text(paragraph: Tag, text: str) -> None:
-    """Make `text` the whole content of `paragraph`, a `<text:p>` or an element
-    inside one, encoding its whitespace the way LibreOffice does: a run of
-    spaces as one literal space followed by `<text:s text:c="N-1"/>`, all of it
-    as `<text:s/>` at the start of the paragraph, a tab as `<text:tab/>`.
-
-    Literal whitespace would read back the same in LibreOffice, but ODF lets
-    any consumer collapse it - an encoded run survives every one of them. A
-    newline is the caller's business: in a cell it starts a new paragraph."""
-    if "  " not in text and "\t" not in text and not text.startswith(" "):
-        paragraph.string = text
-        return
-    paragraph.clear()
-    pending = ""
-    for i, piece in enumerate(_WHITESPACE_RUN.split(text)):
-        if i % 2 == 0:
-            pending += piece
-            continue
-        if piece == "\t":
-            element = _TAG_FACTORY.new_tag("tab", namespace=_ODF_NAMESPACES["text"], nsprefix="text")
-        else:
-            at_start = i == 1 and not pending
-            spaces = len(piece) if at_start else len(piece) - 1
-            if not at_start:
-                pending += " "
-            if spaces == 0:
-                continue
-            element = _TAG_FACTORY.new_tag("s", namespace=_ODF_NAMESPACES["text"], nsprefix="text")
-            if spaces > 1:
-                element.attrs["text:c"] = str(spaces)
-        if pending:
-            paragraph.append(NavigableString(pending))
-            pending = ""
-        paragraph.append(element)
-    if pending:
-        paragraph.append(NavigableString(pending))
+    """`xmlbs.children`, as the list it used to be."""
+    return list(children(tag, name))

@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 from lxml import etree
 
 from conftest import FIXTURES_DIR, libreoffice_shows, ods_with_prefixes, requires_soffice
-from odsslicer import ODSReader
+from odsslicer import ODSReader, xmlbs
 from odsslicer.xmltree import (
     NAMESPACES,
     children,
@@ -36,7 +36,7 @@ from odsslicer.xmltree import (
     text,
     unwrap,
 )
-from odsslicer.xmlutils import _paragraph_text, _parse_xml, _set_paragraph_text
+from odsslicer.xmlutils import _parse_xml
 
 TABLE = NAMESPACES["table"]
 DECLARATIONS = " ".join(f'xmlns:{prefix}="{uri}"' for prefix, uri in NAMESPACES.items())
@@ -366,7 +366,7 @@ class TestText:
 
 class TestParagraphText:
     """What a cell says, ODF's whitespace elements included (0.14.3): the
-    lxml versions behave as the bs4 ones in `xmlutils`."""
+    lxml versions behave as the bs4 ones in `xmlbs`."""
 
     @pytest.mark.parametrize(
         "xml",
@@ -381,7 +381,7 @@ class TestParagraphText:
         ],
     )
     def test_paragraph_text_matches_bs4(self, xml):
-        assert paragraph_text(lxml_fragment(xml)) == _paragraph_text(bs4_fragment(xml))
+        assert paragraph_text(lxml_fragment(xml)) == xmlbs.paragraph_text(bs4_fragment(xml))
 
     def test_naive_text_drops_the_encoded_spaces(self):
         assert text(lxml_fragment('<text:p>a<text:s text:c="3"/>b</text:p>')) == "ab"
@@ -391,7 +391,7 @@ class TestParagraphText:
     )
     def test_set_paragraph_text_matches_bs4(self, value):
         soup_p, lxml_p = bs4_fragment(LINKED), lxml_fragment(LINKED)
-        _set_paragraph_text(soup_p, value)
+        xmlbs.set_paragraph_text(soup_p, value)
         set_paragraph_text(lxml_p, value)
         assert same(soup_p, lxml_p)
         assert paragraph_text(lxml_p) == value

@@ -630,30 +630,6 @@ class TestLoadingWideSheets:
         assert widths == {1002}
 
 
-@pytest.mark.parametrize(
-    "xml",
-    [
-        "<text:p>a</text:p><text:p>b</text:p>",
-        "<office:annotation><text:p>note</text:p></office:annotation><text:p>value</text:p>",
-        "",
-        "<text:span>x</text:span>",
-    ],
-)
-def test_children_named_finds_what_find_all_finds_among_children(xml):
-    from bs4 import BeautifulSoup
-
-    from odsslicer.xmlutils import _children_named
-
-    cell = BeautifulSoup(
-        '<table:table-cell xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
-        'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
-        f'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0">{xml}</table:table-cell>',
-        "xml",
-    ).find("table:table-cell")
-    for name in ("text:p", "office:annotation"):
-        assert _children_named(cell, name) == cell.find_all(name, recursive=False)
-
-
 class TestEncodedWhitespace:
     """Spaces, tabs and line breaks ODF writes as elements (issue #27)."""
 
