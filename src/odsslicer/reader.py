@@ -2,11 +2,11 @@
 
 import logging
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
-from bs4 import BeautifulSoup, Tag
 from lxml import etree
 
 from .dateformats import _default_format_code, _format_code_components
@@ -16,9 +16,23 @@ from .libreoffice import _recalculate_file
 from .properties import DocumentProperties
 from .sheet import Sheet
 from .styles import _NUMBER_STYLE_TAGS, NumberFormat
-from .xmlbs import discard, insert_after, insert_before, name_of, new, remove, text
-from .xmltree import parse, qn, serialize
-from .xmlutils import _encrypted_parts, _parse_xml
+from .xmltree import (
+    NAMESPACES,
+    child,
+    children,
+    elements,
+    insert_after,
+    insert_before,
+    name_of,
+    new,
+    parse,
+    prefix_of,
+    qn,
+    remove,
+    serialize,
+    text,
+)
+from .xmlutils import _encrypted_parts
 
 logger = logging.getLogger("odsslicer")
 
@@ -56,22 +70,23 @@ _BLANK_SETTINGS_XML = (
 )
 
 
-def _same_number_format(a: Tag, b: Tag) -> bool:
+_STYLE_NAME = qn("style:name")
+
+
+def _same_number_format(a: etree._Element, b: etree._Element) -> bool:
     """True for two number styles defining the same format, whatever their
     names."""
 
-    def definition(tag: Tag) -> object:
-        attrs = {k: v for k, v in tag.attrs.items() if k != "style:name"}
-        content = [
-            (name_of(child), child.attrs, text(child)) for child in tag.find_all(True, recursive=False)
-        ]
-        return name_of(tag), attrs, content
+    def definition(tag: etree._Element) -> object:
+        attrs = {k: v for k, v in tag.attrib.items() if k != _STYLE_NAME}
+        content = [(element.tag, dict(element.attrib), text(element)) for element in elements(tag)]
+        return tag.tag, attrs, content
 
     return definition(a) == definition(b)
 
 
 # A chart's attributes holding cell ranges, in its own content.xml, by
-# namespace URI (`xmltree.qn`): the chart's part is on lxml
+# namespace URI (`xmltree.qn`)
 _CHART_RANGE_ATTRS = tuple(
     qn(name)
     for name in (
@@ -83,6 +98,9 @@ _CHART_RANGE_ATTRS = tuple(
     )
 )
 _OFFICE_CHART = qn("office:chart")
+_END_CELL_ADDRESS = qn("table:end-cell-address")
+_NOTIFY_ON_UPDATE = qn("draw:notify-on-update-of-ranges")
+_OPENFORMULA = NAMESPACES["of"]
 
 
 def _carrying(chart: "etree._ElementTree", attr: str) -> "list[etree._Element]":
@@ -91,6 +109,15 @@ def _carrying(chart: "etree._ElementTree", attr: str) -> "list[etree._Element]":
     searched the whole document. Wherever a range sits in a chart, it
     follows the cells."""
     return [element for element in chart.getroot().iter(etree.Element) if attr in element.attrib]
+
+
+def _root_of(element: etree._Element) -> etree._Element:
+    """The topmost ancestor of `element`, itself if it has no parent - the
+    root of its part's tree, or of a detached subtree (see
+    `ODSReader._touched_tag` for why not `getroottree()`)."""
+    while (parent := element.getparent()) is not None:
+        element = parent
+    return element
 
 
 class EncryptedDocumentError(ValueError):
@@ -150,11 +177,11 @@ class ODSReader:
             self.meta = read_optional("meta.xml", _BLANK_META_XML)
             # Application-specific settings, such as the window size or printer information.
             self.settings = read_optional("settings.xml", _BLANK_SETTINGS_XML)
-        # parsed so that they serialise back to what they say, whitespace
-        # included - see `_parse_xml`
-        self.data = _parse_xml(self.content)
-        self.styles_data = _parse_xml(self.styles)
-        # on lxml alone, the feasibility study's prototype - see `properties`
+        # parsed as written, whitespace and attribute order kept, and
+        # strictly: a part that is not well-formed XML raises
+        # `MalformedDocumentError` here, rather than open repaired
+        self.data = _parse_part(self.file, "content.xml", self.content)
+        self.styles_data = _parse_part(self.file, "styles.xml", self.styles)
         self.meta_data = _parse_part(self.file, "meta.xml", self.meta)
         # `settings.xml` holds nothing a cell needs, so it is parsed only if
         # something asks for it - see `settings_data`
@@ -167,8 +194,8 @@ class ODSReader:
         # the sheets are the tables directly under office:spreadsheet: one
         # held in a cell's frame is no sheet, and LibreOffice shows none for it
         spreadsheet = self._spreadsheet()
-        self.tables = spreadsheet.find_all("table:table", recursive=False) if spreadsheet is not None else []
-        self.sheets_names = [table["table:name"] for table in self.tables]
+        self.tables = children(spreadsheet, "table:table") if spreadsheet is not None else []
+        self.sheets_names = [cast(str, table.attrib[qn("table:name")]) for table in self.tables]
         self._sheets: dict[str, Sheet | None] = dict.fromkeys(self.sheets_names)
         # the formats dates written into unformatted cells get, and the cell
         # styles carrying them, shared by every cell (see Cell.value)
@@ -179,7 +206,10 @@ class ODSReader:
         # the bytes it was read from; None for an embedded object that is no
         # chart
         self._parts: dict[str, tuple[etree._ElementTree, bytes] | None] = {}
-        self._drawing_tags: tuple[list[Tag], list[Tag]] | None = None  # see _drawings
+        # see _drawings
+        self._drawing_tags: tuple[list[etree._Element], list[etree._Element]] | None = None
+        # the prefix the document binds to OpenFormula, see _formula_prefix
+        self._openformula: str | None = None
         self._objects_read = False  # see _read_objects
         # number formats, by name: whether each counts time in full, [HH]:MM
         # (see Cell._counts_elapsed_time)
@@ -223,7 +253,7 @@ class ODSReader:
         its bytes through."""
         self._touched.add(name)
 
-    def _touched_tag(self, tag: "Tag | etree._Element") -> None:
+    def _touched_tag(self, tag: etree._Element) -> None:
         """Record a write to `tag`, wherever it lives: the part whose tree
         holds it is then serialised by `save()`. For a tag of `content.xml`
         or `meta.xml`, which are always regenerated, there is nothing to
@@ -231,49 +261,38 @@ class ODSReader:
         made - a number format of `styles.xml`, say - to say so without
         knowing which part it came from.
 
-        Until 1.0 the parts are on two libraries: `styles.xml` on bs4, whose
-        tag climbs to the BeautifulSoup object; `settings.xml` and the
-        charts on lxml, whose element climbs to its tree's root. Not by
-        `getroottree()`: an element taken out of its tree still belongs to
-        the same lxml document, and `getroottree()` answers that document's
-        root - a write to a detached element would count as one to the
-        part. Climbing, it is a root of its own, and belongs to no part."""
-        top: object
-        if isinstance(tag, etree._Element):
-            element = tag
-            while (parent := element.getparent()) is not None:
-                element = parent
-            top = element
-        else:
-            top = tag
-            while top.parent is not None:
-                top = top.parent  # up to the document itself, the BeautifulSoup object
+        The element climbs to its tree's root. Not by `getroottree()`: an
+        element taken out of its tree still belongs to the same lxml
+        document, and `getroottree()` answers that document's root - a
+        write to a detached element would count as one to the part.
+        Climbing, it is a root of its own, and belongs to no part."""
+        top = tag
+        while (parent := top.getparent()) is not None:
+            top = parent
         for name, part in self._lazy_parts().items():
-            root = part.getroot() if isinstance(part, etree._ElementTree) else part
-            if root is top:
+            if part.getroot() is top:
                 self._touched_part(name)
 
-    def _lazy_parts(self) -> "dict[str, BeautifulSoup | etree._ElementTree]":
+    def _lazy_parts(self) -> "dict[str, etree._ElementTree]":
         """The parsed parts `save()` writes back only once touched, by the
         name they have in the package. `settings.xml` is absent until
         something parses it; so is a chart's content (see `_charts`)."""
-        parts: dict[str, BeautifulSoup | etree._ElementTree] = {"styles.xml": self.styles_data}
+        parts: dict[str, etree._ElementTree] = {"styles.xml": self.styles_data}
         if self._settings_data is not None:
             parts["settings.xml"] = self._settings_data
         parts.update({name: part[0] for name, part in self._parts.items() if part is not None})
         return parts
 
-    def _serialized(self, name: str, part: "BeautifulSoup | etree._ElementTree") -> bytes:
-        """Parsed part `name` back to bytes: by bs4 for `styles.xml`, by
-        `xmltree.serialize` under the XML declaration it was read with for
-        the parts on lxml."""
-        if not isinstance(part, etree._ElementTree):
-            return part.encode("utf-8")
+    def _serialized(self, name: str, part: "etree._ElementTree") -> bytes:
+        """Parsed part `name` back to bytes, by `xmltree.serialize`, under
+        the XML declaration it was read with."""
+        if name == "styles.xml":
+            return serialize(part, self.styles)
         if name == "settings.xml":
             return serialize(part, self.settings)
         return serialize(part, cast("tuple[etree._ElementTree, bytes]", self._parts[name])[1])
 
-    def _find_style(self, name: "str | None", family: "str | None" = None) -> "Tag | None":
+    def _find_style(self, name: "str | None", family: "str | None" = None) -> "etree._Element | None":
         """A `<style:style>` by name (optionally constrained to a
         `style:family`, e.g. `"table-cell"`/`"table-row"`/`"table-column"`/
         `"table"` - names are conventionally unique per family in real
@@ -287,37 +306,51 @@ class ODSReader:
             attrs["style:family"] = family
         return self._find_in_styles("style:style", attrs)
 
-    def _find_number_style(self, name: "str | None") -> "Tag | None":
+    def _find_number_style(self, name: "str | None") -> "etree._Element | None":
         """A `<number:*-style>` by name, wherever it lives - like cell
         styles, a number format can be defined in either file."""
         if not name:
             return None
         return self._find_in_styles(_NUMBER_STYLE_TAGS, {"style:name": name})
 
-    def _find_in_styles(self, names: "str | list[str]", attrs: "dict[str, str]") -> "Tag | None":
+    def _find_in_styles(self, names: "str | list[str]", attrs: "dict[str, str]") -> "etree._Element | None":
         """The first element named `names` with `attrs` among the automatic
-        styles of `content.xml`, else in `styles.xml`. The only styles
-        `content.xml` holds are its automatic ones: searching the whole of it
-        for a style of `styles.xml` - its column's default, `Default`, for
-        most cells - cost a pass over every cell of every sheet, each time."""
-        automatic = cast("Tag | None", self._content_root().find("office:automatic-styles", recursive=False))
-        found = automatic.find(names, attrs=attrs, recursive=False) if automatic is not None else None
-        return cast("Tag | None", found or self.styles_data.find(names, attrs=attrs))
+        styles of `content.xml`, else in `styles.xml`, anywhere in it, its
+        root included. The only styles `content.xml` holds are its automatic
+        ones: searching the whole of it for a style of `styles.xml` - its
+        column's default, `Default`, for most cells - cost a pass over every
+        cell of every sheet, each time."""
+        tags = [qn(name) for name in ([names] if isinstance(names, str) else names)]
+        wanted = [(qn(key), value) for key, value in attrs.items()]
+
+        def first(candidates: "Iterator[etree._Element]") -> "etree._Element | None":
+            for element in candidates:
+                if all(element.get(key) == value for key, value in wanted):
+                    return element
+            return None
+
+        automatic = child(self._content_root(), "office:automatic-styles")
+        found = first(automatic.iterchildren(*tags)) if automatic is not None else None
+        # `is None`, not `or`: a style with no child element is false in lxml
+        return found if found is not None else first(self.styles_data.getroot().iter(*tags))
 
     def _document_locale(self) -> "tuple[str | None, str | None]":
         """The document's default language and country - `fo:language` and
         `fo:country` of its default cell style in `styles.xml`, where
         LibreOffice records them - `None` for either one it does not give."""
-        default = cast(
-            "Tag | None", self.styles_data.find("style:default-style", attrs={"style:family": "table-cell"})
+        family = qn("style:family")
+        default = next(
+            (
+                element
+                for element in self.styles_data.getroot().iter(qn("style:default-style"))
+                if element.get(family) == "table-cell"
+            ),
+            None,
         )
-        props = cast(
-            "Tag | None",
-            default.find("style:text-properties", recursive=False) if default is not None else None,
-        )
+        props = child(default, "style:text-properties") if default is not None else None
         if props is None:
             return None, None
-        language, country = props.get("fo:language"), props.get("fo:country")
+        language, country = props.get(qn("fo:language")), props.get(qn("fo:country"))
         return (
             None if language in (None, "", "none") else cast(str, language),
             None if country in (None, "", "none") else cast(str, country),
@@ -335,48 +368,84 @@ class ODSReader:
         family = "time" if kind in ("time", "duration") else "date"
         tag = NumberFormat.create(self, family, components=components)._tag
         if language is not None:
-            tag.attrs["number:language"] = language
-            tag.attrs["number:country"] = cast(str, country)
+            tag.set(qn("number:language"), language)
+            tag.set(qn("number:country"), cast(str, country))
         if elapsed:  # [HH]: hours in full, not around the clock
-            tag.attrs["number:truncate-on-overflow"] = "false"
-        name = cast(str, tag["style:name"])
+            tag.set(qn("number:truncate-on-overflow"), "false")
+        name = cast(str, tag.attrib[_STYLE_NAME])
         # a document odsslicer saved before has it already
-        qualified_name = name_of(tag)
-        for other in self._automatic_styles().find_all(qualified_name, recursive=False):
+        for other in children(self._automatic_styles(), name_of(tag)):
             if other is not tag and _same_number_format(other, tag):
-                discard(tag)
-                name = cast(str, other["style:name"])
+                remove(tag)
+                name = cast(str, other.attrib[_STYLE_NAME])
                 break
         self._default_date_formats[kind] = name
         return name
 
-    def _content_root(self) -> Tag:
+    def _content_root(self) -> etree._Element:
         """`<office:document-content>`, the root element of `content.xml`:
         the automatic styles and the body are its children."""
-        return cast(Tag, self.data.find("office:document-content", recursive=False))
+        return self.data.getroot()
 
-    def _spreadsheet(self) -> "Tag | None":
+    def _spreadsheet(self) -> "etree._Element | None":
         """`<office:spreadsheet>`, whose `<table:table>` children are the
         sheets - `None` in a document that has none."""
-        body = cast("Tag | None", self._content_root().find("office:body", recursive=False))
-        return (
-            cast("Tag | None", body.find("office:spreadsheet", recursive=False)) if body is not None else None
-        )
+        body = child(self._content_root(), "office:body")
+        return child(body, "office:spreadsheet") if body is not None else None
 
-    def _automatic_styles(self) -> Tag:
+    def _automatic_styles(self) -> etree._Element:
         """The `<office:automatic-styles>` element in `content.xml` - the
         only place a newly created style can go and still survive `save()`
         (styles already in `styles.xml` are copied through unchanged, see
         `save()`)."""
-        styles = cast("Tag | None", self._content_root().find("office:automatic-styles", recursive=False))
+        root = self._content_root()
+        styles = child(root, "office:automatic-styles")
         if styles is None:
-            styles = new("office:automatic-styles", near=self.data)  # declares its namespace
-            body = cast("Tag | None", self._content_root().find("office:body", recursive=False))
+            styles = new("office:automatic-styles")
+            body = child(root, "office:body")
             if body is not None:
                 insert_before(body, styles)
             else:
-                self.data.append(styles)
+                root.append(styles)
         return styles
+
+    def _formula_prefix(self) -> str:
+        """The prefix a formula odsslicer writes names OpenFormula with -
+        `of` in `of:=SUM([.A1:.A3])`: the one the document binds to its
+        namespace, which only the document's declarations resolve, since a
+        prefix inside a value is text to any XML parser. A document binding
+        none gets `of` declared on its root (see `_declare_on_root`): a
+        formula written `of:=` with no declaration says nothing a reader can
+        resolve, though LibreOffice takes it - and the corpus has files
+        written that way by another tool."""
+        if self._openformula is None:
+            root = self._content_root()
+            prefix = prefix_of(root, _OPENFORMULA)
+            if prefix is None:
+                prefix = "of"
+                if root.nsmap.get(prefix) is None:
+                    self._declare_on_root(prefix, _OPENFORMULA)
+            self._openformula = prefix
+        return self._openformula
+
+    def _declare_on_root(self, prefix: str, uri: str) -> None:
+        """Declare `prefix` for `uri` on the root of `content.xml`. lxml
+        cannot add a declaration to an existing element: the root is made
+        again, its name, attributes, declarations and content kept, and the
+        content moved under it - the elements, and every `Sheet` and `Cell`
+        holding one, stay the same objects. A pass over the document, paid
+        once, by a document that binds no prefix to OpenFormula and is given
+        a formula."""
+        old = self._content_root()
+        nsmap = cast("dict[str, str]", dict(old.nsmap))
+        nsmap[prefix] = uri
+        root = etree.Element(old.tag, nsmap=nsmap)
+        for key, value in old.attrib.items():
+            root.set(key, value)
+        root.text = old.text
+        for element in list(old):
+            root.append(element)  # its tail along
+        self.data._setroot(root)
 
     def _new_style_name(self, prefix: str) -> str:
         """A `style:name` not already used by any style in the document
@@ -384,14 +453,16 @@ class ODSReader:
         available `n`."""
         pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
         max_n = 0
+        namespaces = {"style": NAMESPACES["style"]}
         for doc in (self.data, self.styles_data):
-            for tag in doc.find_all(attrs={"style:name": True}):
-                m = pattern.match(tag.get("style:name") or "")
+            # every element's, the root's included, whatever the prefix
+            for name in cast("list[str]", doc.xpath("//@style:name", namespaces=namespaces)):
+                m = pattern.match(name)
                 if m:
                     max_n = max(max_n, int(m.group(1)))
         return f"{prefix}{max_n + 1}"
 
-    def _new_style_tag(self, family: str, prefix: str) -> Tag:
+    def _new_style_tag(self, family: str, prefix: str) -> etree._Element:
         """A brand new, empty `<style:style style:family=family>` with a
         fresh unique name, already inserted into `content.xml`'s automatic
         styles.
@@ -399,9 +470,7 @@ class ODSReader:
         Deliberately parentless: callers fill it in themselves (see
         `Cell._copy_resolved_style_into`), because `style:parent-style-name`
         only means anything when it names a style from `styles.xml`."""
-        tag = new("style:style", near=self.data)
-        tag.attrs["style:name"] = self._new_style_name(prefix)
-        tag.attrs["style:family"] = family
+        tag = new("style:style", {"style:name": self._new_style_name(prefix), "style:family": family})
         self._automatic_styles().append(tag)
         return tag
 
@@ -422,7 +491,7 @@ class ODSReader:
         reader = cls(cls._TEMPLATE_PATH, verbose=verbose)
         reader._from_template = True
         if sheet_name != "Sheet1":
-            reader.tables[0]["table:name"] = sheet_name
+            reader.tables[0].set(qn("table:name"), sheet_name)
             reader.sheets_names[0] = sheet_name
             reader._sheets = {sheet_name: reader._sheets.pop("Sheet1")}
         return reader
@@ -454,7 +523,7 @@ class ODSReader:
         becomes `'`. (It used to lose something too: a run of spaces in a
         text node was squeezed to one, which for `<number:text>   </number:text>`
         in a number format cost it its padding - every part is now parsed so
-        that whitespace comes back as written, see `_parse_xml`.) A part
+        that whitespace comes back as written, as lxml keeps it.) A part
         nothing touched never goes through any of it.
 
         The file is written under a temporary name in the same folder, then
@@ -488,7 +557,7 @@ class ODSReader:
                 )
             path = self.file
         regenerated = {
-            "content.xml": self.data.encode("utf-8"),
+            "content.xml": serialize(self.data, self.content),
             "meta.xml": serialize(self.meta_data, self.meta),
         }
         regenerated.update(
@@ -514,30 +583,35 @@ class ODSReader:
             # the parameter shadows the module function
             _recalculate_file(path, timeout=timeout, update_links=update_links)
 
-    def _drawings(self) -> "tuple[list[Tag], list[Tag]]":
+    def _drawings(self) -> "tuple[list[etree._Element], list[etree._Element]]":
         """The elements of `content.xml` recording the cell they end in,
         `table:end-cell-address`, and the embedded objects, `<draw:object>`,
         looked for once: a structural edit would otherwise scan the whole
         document for them, which took a dozen times longer than the edit on
         a 10,000-row sheet. odsslicer never creates any, and one deleted
         with its row is only left detached. A document holding neither, as
-        its raw text shows, skips the scan."""
+        its raw text shows, skips the scan - whatever the prefix, which a
+        document may bind otherwise: the search itself goes by namespace."""
         if self._drawing_tags is None:
-            if b"table:end-cell-address" in self.content or b"draw:object" in self.content:
+            if b":end-cell-address" in self.content or b":object" in self.content:
+                root = self._content_root()
                 self._drawing_tags = (
-                    self.data.find_all(attrs={"table:end-cell-address": True}),
-                    self.data.find_all("draw:object"),
+                    [element for element in root.iter(etree.Element) if _END_CELL_ADDRESS in element.attrib],
+                    list(root.iter(qn("draw:object"))),
                 )
             else:
                 self._drawing_tags = ([], [])
-        # an element discarded with its row or column since is gone for good
-        # (bs4 empties it): remapping it would fail, and there is nothing left
-        # to remap - a drawing moved elsewhere is moved, not discarded
+        # an element deleted with its row or column since is out of the
+        # document: there is nothing left to remap, and its chart is no
+        # longer drawn there - a drawing moved elsewhere is moved, not
+        # deleted. lxml keeps a detached element readable, where bs4 emptied
+        # it: it has to be told apart, by the root it climbs to
         ended, objects = self._drawing_tags
-        if any(tag.decomposed for tag in ended) or any(tag.decomposed for tag in objects):
+        root = self._content_root()
+        if not all(_root_of(tag) is root for tag in (*ended, *objects)):
             self._drawing_tags = (
-                [tag for tag in ended if not tag.decomposed],
-                [tag for tag in objects if not tag.decomposed],
+                [tag for tag in ended if _root_of(tag) is root],
+                [tag for tag in objects if _root_of(tag) is root],
             )
         return self._drawing_tags
 
@@ -549,14 +623,12 @@ class ODSReader:
         editing it, so a caller about to rewrite its ranges has to say so
         (`_touched_part`) for save() to write the tree back.
 
-        `<draw:object>` itself is in `content.xml`, still on bs4 until 1.0;
-        only the chart's own part is on lxml, which nothing else reads.
         Its elements are found by namespace, whatever prefixes it binds.
         An object's part that is not well-formed XML raises
         `MalformedDocumentError` - before the edit, see `_read_objects`."""
         wanted = []
         for tag in self._drawings()[1]:
-            href = cast(str, tag.get("xlink:href", "")).removeprefix("./").rstrip("/")
+            href = tag.get(qn("xlink:href"), "").removeprefix("./").rstrip("/")
             if href:
                 wanted.append(f"{href}/content.xml")
         missing = [name for name in wanted if name not in self._parts]
@@ -592,7 +664,7 @@ class ODSReader:
         `_drawings`."""
         if self._objects_read:
             return
-        if b"draw:object" in self.content:
+        if b":object" in self.content:
             with ZipFile(self.file) as package:
                 for name in package.namelist():
                     if name.endswith("/content.xml") and name not in self._parts:
@@ -610,14 +682,14 @@ class ODSReader:
         of it, and the chart shrank by a row."""
         ended, objects = self._drawings()
         for tag in ended:
-            ends = cast(str, tag["table:end-cell-address"])
+            ends = cast(str, tag.attrib[_END_CELL_ADDRESS])
             # deleted, the end keeps its address - the cell taking its place -
             # as LibreOffice keeps it: that of a range's first cell
-            tag["table:end-cell-address"] = _remap_range_list(ends, target_sheet, remap, "start")
+            tag.set(_END_CELL_ADDRESS, _remap_range_list(ends, target_sheet, remap, "start"))
         for tag in objects:
-            if "draw:notify-on-update-of-ranges" in tag.attrs:
-                ranges = cast(str, tag["draw:notify-on-update-of-ranges"])
-                tag["draw:notify-on-update-of-ranges"] = _remap_range_list(ranges, target_sheet, remap)
+            if _NOTIFY_ON_UPDATE in tag.attrib:
+                ranges = cast(str, tag.attrib[_NOTIFY_ON_UPDATE])
+                tag.set(_NOTIFY_ON_UPDATE, _remap_range_list(ranges, target_sheet, remap))
         for name, chart in self._charts():
             self._touched_part(name)
             for attr in _CHART_RANGE_ATTRS:
@@ -628,12 +700,12 @@ class ODSReader:
         """`_remap_drawing_references`' counterpart for a sheet renamed."""
         ended, objects = self._drawings()
         for tag in ended:
-            ends = cast(str, tag["table:end-cell-address"])
-            tag["table:end-cell-address"] = _rename_range_list(ends, old_name, new_name)
+            ends = cast(str, tag.attrib[_END_CELL_ADDRESS])
+            tag.set(_END_CELL_ADDRESS, _rename_range_list(ends, old_name, new_name))
         for tag in objects:
-            if "draw:notify-on-update-of-ranges" in tag.attrs:
-                ranges = cast(str, tag["draw:notify-on-update-of-ranges"])
-                tag["draw:notify-on-update-of-ranges"] = _rename_range_list(ranges, old_name, new_name)
+            if _NOTIFY_ON_UPDATE in tag.attrib:
+                ranges = cast(str, tag.attrib[_NOTIFY_ON_UPDATE])
+                tag.set(_NOTIFY_ON_UPDATE, _rename_range_list(ranges, old_name, new_name))
         for name, chart in self._charts():
             self._touched_part(name)
             for attr in _CHART_RANGE_ATTRS:
@@ -641,10 +713,14 @@ class ODSReader:
                     element.set(attr, _rename_range_list(cast(str, element.get(attr)), old_name, new_name))
 
     def export_content_xml(self, pretty: bool = True) -> None:
+        """Write `content.xml` next to the document, as `<name>.xml`: the
+        in-memory tree indented by lxml with `pretty=True` - where an element
+        holds text, lxml leaves its content as it is - else the part's bytes
+        as read."""
         target = self.file.with_suffix(".xml")
         if pretty:
-            with target.open("w", encoding="utf8") as f:
-                f.write(self.data.prettify())
+            with target.open("wb") as f:
+                f.write(etree.tostring(self.data, encoding="UTF-8", xml_declaration=True, pretty_print=True))
         else:
             with target.open("wb") as f:
                 f.write(self.content)
@@ -676,11 +752,10 @@ class ODSReader:
         if name in self.sheets_names:
             raise ValueError(f"a sheet named {name!r} already exists")
 
-        table = new("table:table", near=self.data)
-        table.attrs["table:name"] = name
-        table.append(new("table:table-column", near=self.data))
-        row = new("table:table-row", near=self.data)
-        row.append(new("table:table-cell", near=self.data))
+        table = new("table:table", {"table:name": name})
+        table.append(new("table:table-column"))
+        row = new("table:table-row")
+        row.append(new("table:table-cell"))
         table.append(row)
 
         insert_after(self.tables[-1], table)
@@ -696,14 +771,14 @@ class ODSReader:
         Raises `KeyError` for an unknown name, and `ValueError` for the
         document's last remaining sheet (an ODF spreadsheet needs at least
         one). Any `Sheet`/`Cell` object obtained before the call that
-        pointed into this sheet is now backed by a decomposed, detached
-        XML element - stop using it."""
+        pointed into this sheet is now backed by a detached XML element,
+        which save() no longer writes - stop using it."""
         if name not in self.sheets_names:
             raise KeyError(f"No sheet named {name}")
         if len(self.sheets_names) <= 1:
             raise ValueError("cannot delete the only remaining sheet in the document")
         idx = self.sheets_names.index(name)
-        discard(self.tables[idx])
+        remove(self.tables[idx])
         del self.tables[idx]
         del self.sheets_names[idx]
         del self._sheets[name]
@@ -729,7 +804,7 @@ class ODSReader:
         self._read_objects()  # a malformed chart raises before anything is renamed
 
         idx = self.sheets_names.index(old_name)
-        self.tables[idx].attrs["table:name"] = new_name
+        self.tables[idx].set(qn("table:name"), new_name)
         self.sheets_names[idx] = new_name
         sheet_obj = self._sheets.pop(old_name, None)
         if sheet_obj is not None:

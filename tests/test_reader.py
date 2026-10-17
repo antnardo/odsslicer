@@ -18,6 +18,8 @@ import pathlib
 import random
 import re
 import stat
+import subprocess
+import sys
 import zipfile
 
 import pytest
@@ -25,8 +27,8 @@ from lxml import etree
 
 from conftest import FIXTURES_DIR, rebind_prefix
 from odsslicer import EncryptedDocumentError, MalformedDocumentError, ODSReader
-from odsslicer.xmltree import new, qn
-from odsslicer.xmlutils import _encrypted_parts, _parse_xml, _root_local_name
+from odsslicer.xmltree import new, parse, qn, serialize, text
+from odsslicer.xmlutils import _encrypted_parts
 
 
 def _edited(path):
@@ -194,7 +196,7 @@ FIXTURES = [
 ]
 
 # a number format padded with a run of spaces, which a round trip through
-# BeautifulSoup shortens to one
+# BeautifulSoup shortened to one
 PADDED_NUMBER_TEXT = re.compile(rb"<number:text[^>]*>[ \t]{2,}</number:text>")
 
 # how many each fixture holds, in `styles.xml`, counted on the files
@@ -284,8 +286,7 @@ def test_a_touched_settings_part_is_written_back(workbook, tmp_path):
 
 
 def test_a_write_into_the_settings_said_of_its_element_is_written_back(workbook, tmp_path):
-    # `_touched_tag` finds the part an lxml element belongs to by its tree's
-    # root, as it finds a bs4 tag's by climbing to the document
+    # `_touched_tag` finds the part an element belongs to by its tree's root
     book = ODSReader(workbook)
     item = _config_item(book.settings_data, "VisibleAreaTop")
     item.text = "4242"
@@ -350,9 +351,9 @@ def test_a_settings_part_with_other_prefixes_is_read_and_written_with_its_own(wo
 
 def test_a_touched_styles_part_is_written_back(workbook, tmp_path):
     book = ODSReader(workbook)
-    style = book.styles_data.find("style:style", attrs={"style:name": "Default"})
+    style = book._find_style("Default")
     assert style is not None, "TEST.ods is expected to carry a Default cell style"
-    style["style:display-name"] = "touched by the test"
+    style.set(qn("style:display-name"), "touched by the test")
     book._touched_part("styles.xml")
 
     after = _saved(book, tmp_path)
@@ -385,13 +386,13 @@ def test_a_touched_settings_part_is_created_for_a_file_that_had_none(tmp_path):
 # the shape of an empty element are allowed to change; nothing else is, so
 # the canonical form (C14N) of a part has to come back identical.
 #
-# BeautifulSoup squeezes a text node made of whitespace only to one character
-# while parsing, unless an element it was told to preserve is open:
-# `_parse_xml` names the document element, so everything under it is kept.
-# The accounting formats of three fixtures, `<number:text>   </number:text>`,
-# are the real-world case; the same loss reached `content.xml` on every save
-# of every version before this, for a padded format that happened to live
-# in its automatic styles.
+# BeautifulSoup squeezed a text node made of whitespace only to one character
+# while parsing, unless an element it was told to preserve was open: from
+# 0.14.2 to 1.0, odsslicer named the document element, so that everything
+# under it was kept; lxml keeps it as written. The accounting formats of
+# three fixtures, `<number:text>   </number:text>`, are the real-world case;
+# the same loss reached `content.xml` on every save of every version before
+# 0.14.2, for a padded format that happened to live in its automatic styles.
 
 
 def _c14n(data):
@@ -432,7 +433,8 @@ def test_a_padded_number_format_in_content_xml_keeps_its_padding_through_a_save(
 
     assert len(PADDED_NUMBER_TEXT.findall(after["content.xml"])) == 2
     reread = ODSReader(tmp_path / "saved.ods")
-    assert [t.get_text() for t in reread._find_number_style("NPAD").find_all("number:text")] == ["   ", "   "]
+    texts = reread._find_number_style("NPAD").iter(qn("number:text"))
+    assert [text(element) for element in texts] == ["   ", "   "]
 
 
 @pytest.mark.parametrize("name, expected", sorted(PADDED_NUMBER_TEXT_COUNTS.items()))
@@ -475,19 +477,11 @@ def test_parsing_keeps_every_run_of_whitespace_whatever_the_element():
         b"<!-- a comment before the document element, as XML allows -->\n"
         b'<a:root xmlns:a="urn:a"><a:x>   </a:x><a:y><a:z>\t\n </a:z></a:y><a:w> </a:w></a:root>'
     )
-    assert _root_local_name(markup) == "root"
-
-    out = _parse_xml(markup).encode("utf-8")
+    out = serialize(parse(markup), markup)
 
     assert b"<a:x>   </a:x>" in out
     assert b"<a:z>\t\n </a:z>" in out
     assert b"<a:w> </a:w>" in out
-
-
-def test_parsing_something_that_is_not_xml_still_gives_a_tree():
-    assert _root_local_name(b"") is None
-    assert _root_local_name(b"no markup at all") is None
-    assert _parse_xml(b"").find(True) is None
 
 
 # ---------------------------------------------------------------------------
@@ -508,7 +502,8 @@ def test_a_condition_added_to_a_number_format_of_styles_xml_is_written_back(work
     book = ODSReader(workbook)
     sheet = book.sheet("Sheet1")
     fmt, target = sheet["A7"].style.number_format, sheet["A8"].style.number_format
-    assert fmt._tag.find_parent("office:document-styles") is not None, "expected a format of styles.xml"
+    styles = next(fmt._tag.iterancestors(qn("office:document-styles")), None)
+    assert styles is not None, "expected a format of styles.xml"
     assert fmt.conditions == []
 
     fmt.add_condition("value()<0", target)
@@ -538,7 +533,7 @@ def test_a_style_of_styles_xml_bearing_a_fork_s_name_is_forked_rather_than_writt
     before = _members(path)
     book = ODSReader(path)
     sheet = book.sheet("Sheet1")
-    sheet.rows[0][0].cell.parent["table:style-name"] = "ors1"
+    sheet.rows[0][0].cell.getparent().set(qn("table:style-name"), "ors1")
     assert sheet.row_style(0).height == "1cm"
 
     sheet.row_style(0).height = "2cm"
@@ -549,17 +544,30 @@ def test_a_style_of_styles_xml_bearing_a_fork_s_name_is_forked_rather_than_writt
 
 
 # ---------------------------------------------------------------------------
-# A malformed part on lxml is refused, not read repaired
+# A malformed part is refused, not read repaired
 # ---------------------------------------------------------------------------
 #
-# The parts on lxml - `meta.xml`, `settings.xml` and a chart's own content
-# (test_odsslicer.py) - are parsed strictly: a truncated one raises
+# Every part is parsed strictly: a truncated one raises
 # `MalformedDocumentError`, naming the part, where bs4 completed it with a
-# guess that `save()` wrote back. `content.xml` and `styles.xml` move at 1.0.
+# guess that `save()` wrote back - a truncated `content.xml` read with cells
+# missing, and saved that way. `content.xml`, `styles.xml` and `meta.xml`
+# raise when the document is opened, `settings.xml` when something reads it,
+# a chart's own content at the first structural edit (test_odsslicer.py).
 
 
 def _truncated(data):
     return data[: len(data) // 2]
+
+
+@pytest.mark.parametrize("part", ["content.xml", "styles.xml"])
+def test_a_malformed_content_or_styles_part_is_refused_when_the_document_is_opened(part, workbook, tmp_path):
+    path = _with_part_edited(workbook, tmp_path, part, _truncated)
+    before = path.read_bytes()
+
+    with pytest.raises(MalformedDocumentError, match=re.escape(part)):
+        ODSReader(path)
+
+    assert path.read_bytes() == before
 
 
 def test_a_malformed_meta_part_is_refused_when_the_document_is_opened(workbook, tmp_path):
@@ -589,7 +597,7 @@ def test_a_malformed_document_error_is_a_value_error():
 # A password-protected package is refused, not read as empty
 # ---------------------------------------------------------------------------
 #
-# Its parts are ciphertext, which `_parse_xml` recovers from as from any broken
+# Its parts are ciphertext, which bs4 recovered from as from any broken
 # markup: the document read as one with no sheets, and `save()` - over the
 # source file, by default - wrote a `content.xml` holding the XML declaration
 # alone in place of the encrypted one. LibreOffice's own test files
@@ -662,3 +670,35 @@ def test_a_manifest_declares_encrypted_only_the_entries_carrying_encryption_data
 
     entry = CONTENT_ENTRY[:-2] + b">" + ENCRYPTION_DATA + b"</manifest:file-entry>"
     assert _encrypted_parts(manifest.replace(CONTENT_ENTRY, entry)) == {"content.xml"}
+
+
+# ---------------------------------------------------------------------------
+# BeautifulSoup is gone from the package
+# ---------------------------------------------------------------------------
+
+
+def test_the_package_never_imports_beautifulsoup(workbook, tmp_path):
+    # 1.0 reads and writes with lxml alone, and no longer depends on bs4: an
+    # import of it left anywhere would fail where it is not installed. The
+    # tests have it, to inspect saved files: a fresh interpreter tells
+    script = (
+        "import sys\n"
+        "from odsslicer import ODSReader\n"
+        f"book = ODSReader({str(workbook)!r})\n"
+        "for sheet in book.sheets:\n"
+        "    sheet.to_list()\n"
+        "sheet = book.sheet('Sheet1')\n"
+        "sheet['A1'].value = 'x'\n"
+        "sheet['A1'].comment = 'note'\n"
+        "sheet['A1'].hyperlink = 'https://example.com'\n"
+        "sheet['A1'].style.bold = True\n"
+        "sheet.insert_rows(1, 2)\n"
+        f"book.save({str(tmp_path / 'out.ods')!r})\n"
+        "print(sorted(name for name in sys.modules if name.split('.')[0] == 'bs4'))\n"
+    )
+    # this checkout's package, whatever the environment's path says
+    env = {**os.environ, "PYTHONPATH": str(pathlib.Path(__file__).resolve().parents[1] / "src")}
+    done = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True, env=env, cwd=tmp_path
+    )
+    assert done.stdout.strip() == "[]"

@@ -1,8 +1,8 @@
 # mypy: disable-error-code="union-attr"
-# (bs4 Tag/NavigableString/None unions are narrowed dynamically all over this
-# module, guarded by runtime checks mypy can't see through - silencing that
-# one error class here beats dozens of value-free asserts/casts. Every other
-# error class, and all signatures, remain fully checked.)
+# (`Element | None` unions are narrowed dynamically all over this module,
+# guarded by runtime checks mypy can't see through - silencing that one error
+# class here beats dozens of value-free asserts/casts. Every other error
+# class, and all signatures, remain fully checked.)
 """ArrayValues (multi-cell selections), Comment (cell notes) and Cell itself."""
 
 import datetime as dt
@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
-from bs4 import Tag
+from lxml import etree
 
 from .addresses import string_address
 from .constants import EMPTY_CELL_BS, FORMATS, TAG_CELL
@@ -35,27 +35,52 @@ from .formulas import (
     _shift_odf_formula,
 )
 from .styles import CellStyle, _render_date_time_from_format, _render_number_from_format
-from .xmlbs import (
+from .xmltree import (
+    child,
     children,
     clone,
-    discard,
+    descendants,
+    elements,
+    following,
     insert_before,
     local_name,
     name_of,
     new,
     paragraph_text,
+    preceding,
+    qn,
+    remove,
     set_paragraph_text,
     set_text,
     text,
+    unset,
     unwrap,
     wrap_contents,
 )
-from .xmlutils import _ODF_NAMESPACES, _ensure_style_child
+from .xmlutils import _ensure_style_child
 
 if TYPE_CHECKING:
     from .reader import ODSReader
     from .sheet import Sheet
     from .styles import NumberFormat
+
+# The attributes a cell is read from, by namespace URI: `Cell.__init__` runs
+# once per cell of a sheet being loaded, where `qn`'s lookup would add up
+_VALUE_TYPE = qn("office:value-type")
+_VALUE = qn("office:value")
+_DATE_VALUE = qn("office:date-value")
+_TIME_VALUE = qn("office:time-value")
+_BOOLEAN_VALUE = qn("office:boolean-value")
+_FORMULA = qn("table:formula")
+_STYLE_NAME = qn("table:style-name")
+_CALCEXT_VALUE_TYPE = qn("calcext:value-type")
+_COLUMNS_REPEATED = qn("table:number-columns-repeated")
+_COLUMNS_SPANNED = qn("table:number-columns-spanned")
+_ROWS_SPANNED = qn("table:number-rows-spanned")
+_DATA_STYLE_NAME = qn("style:data-style-name")
+_TEXT_P = qn("text:p")
+_TABLE_CELL = qn("table:table-cell")
+_CELL_TAGS = tuple(qn(name) for name in TAG_CELL)
 
 
 def _data_style_name(reader: "ODSReader", name: "str | None") -> "str | None":
@@ -67,9 +92,9 @@ def _data_style_name(reader: "ODSReader", name: "str | None") -> "str | None":
         style = reader._find_style(name, family="table-cell")
         if style is None:
             return None
-        if "style:data-style-name" in style.attrs:
-            return cast(str, style["style:data-style-name"])
-        name = cast("str | None", style.get("style:parent-style-name"))
+        if _DATA_STYLE_NAME in style.attrib:
+            return cast(str, style.get(_DATA_STYLE_NAME))
+        name = style.get(qn("style:parent-style-name"))
     return None
 
 
@@ -127,6 +152,25 @@ def _plain_value(value: object) -> object:
             raise ValueError(f"a cell cannot hold an infinite number: {value!r}")
         return number
     return value
+
+
+def _only_string(element: etree._Element) -> "str | None":
+    """The text of `element` when it is all one text node, at any depth -
+    bs4's `tag.string`, which odsslicer learnt a cell's displayed text by
+    example from: `<text:p>1,5 €</text:p>` and `<text:p><text:span>1,5
+    €</text:span></text:p>` say "1,5 €", an empty paragraph or one of
+    several nodes nothing. A lone comment is a text node in bs4."""
+    while True:
+        if len(element) == 0:
+            return element.text
+        if element.text or len(element) > 1:
+            return None
+        only = element[0]
+        if only.tail:
+            return None
+        if not isinstance(only.tag, str):  # a comment, or a processing instruction
+            return only.text
+        element = only
 
 
 class ArrayValues:
@@ -246,7 +290,7 @@ class ArrayValues:
 
 
 # what a note holds as its text, after its author and date
-_NOTE_TEXT = frozenset({"text:p", "text:list"})
+_NOTE_TEXT = frozenset({qn("text:p"), qn("text:list")})
 
 
 class Comment:
@@ -258,58 +302,58 @@ class Comment:
     to update it in place, once the comment itself exists (see
     `Cell.comment`'s setter to create one)."""
 
-    def __init__(self, tag: Tag) -> None:
+    def __init__(self, tag: etree._Element) -> None:
         self._tag = tag
 
-    def _insert_before_text(self, child: Tag) -> None:
+    def _insert_before_text(self, element: etree._Element) -> None:
         # keeps dc:creator/dc:date ahead of the note's text, as ODF orders
         # them, whichever property gets set first: before its first
         # paragraph or list - a paragraph searched among all descendants
         # could be one inside a list, and put the author inside it
-        first = next((c for c in self._tag.contents if isinstance(c, Tag) and name_of(c) in _NOTE_TEXT), None)
+        first = next((c for c in self._tag.iterchildren(*_NOTE_TEXT)), None)
         if first is not None:
-            insert_before(first, child)
+            insert_before(first, element)
         else:
-            self._tag.append(child)
+            self._tag.append(element)
 
     @property
     def text(self) -> "str | None":
         # every paragraph, descendants: a note set as a bulleted list keeps
         # its paragraphs in text:list, and LibreOffice shows them as its text
-        paragraphs = [paragraph_text(p) for p in self._tag.find_all("text:p")]
+        paragraphs = [paragraph_text(p) for p in descendants(self._tag, "text:p")]
         return "\n".join(paragraphs) if paragraphs else None
 
     @text.setter
     def text(self, value: "str | None") -> None:
-        # the whole text goes, a list with it: discarding its paragraphs only
+        # the whole text goes, a list with it: removing its paragraphs only
         # left the list behind, empty items and all
-        for element in [c for c in self._tag.contents if isinstance(c, Tag) and name_of(c) in _NOTE_TEXT]:
-            discard(element)
+        for element in list(self._tag.iterchildren(*_NOTE_TEXT)):
+            remove(element)
         for line in (value or "").split("\n"):
-            p = new("text:p", near=self._tag)
+            p = new("text:p")
             set_paragraph_text(p, line)
             self._tag.append(p)
 
     @property
     def author(self) -> "str | None":
-        tag = cast("Tag | None", self._tag.find("dc:creator", recursive=False))
+        tag = child(self._tag, "dc:creator")
         return text(tag) if tag is not None else None
 
     @author.setter
     def author(self, value: "str | None") -> None:
-        tag = cast("Tag | None", self._tag.find("dc:creator", recursive=False))
+        tag = child(self._tag, "dc:creator")
         if value is None:
             if tag is not None:
-                discard(tag)
+                remove(tag)
             return
         if tag is None:
-            tag = new("dc:creator", near=self._tag)
+            tag = new("dc:creator")
             self._insert_before_text(tag)
         set_text(tag, value)
 
     @property
     def date(self) -> "dt.datetime | None":
-        tag = cast("Tag | None", self._tag.find("dc:date", recursive=False))
+        tag = child(self._tag, "dc:date")
         if tag is None:
             return None
         try:
@@ -319,25 +363,25 @@ class Comment:
 
     @date.setter
     def date(self, value: "dt.datetime | None") -> None:
-        tag = cast("Tag | None", self._tag.find("dc:date", recursive=False))
+        tag = child(self._tag, "dc:date")
         if value is None:
             if tag is not None:
-                discard(tag)
+                remove(tag)
             return
         if not isinstance(value, dt.datetime):
             raise TypeError(f"Comment.date must be a datetime.datetime or None, got {type(value)!r}")
         if tag is None:
-            tag = new("dc:date", near=self._tag)
+            tag = new("dc:date")
             self._insert_before_text(tag)
         set_text(tag, value.isoformat())
 
     @property
     def visible(self) -> bool:
-        return self._tag.get("office:display") == "true"
+        return self._tag.get(qn("office:display")) == "true"
 
     @visible.setter
     def visible(self, value: bool) -> None:
-        self._tag.attrs["office:display"] = "true" if value else "false"
+        self._tag.set(qn("office:display"), "true" if value else "false")
 
     def __repr__(self) -> str:
         return f"Comment(author={self.author!r}, text={self.text!r})"
@@ -345,35 +389,31 @@ class Comment:
 
 class Cell:
     #: attributes touched when a value is written to a cell
-    _VALUE_ATTRS = (
-        "office:value",
-        "office:date-value",
-        "office:time-value",
-        "office:boolean-value",
-    )
+    _VALUE_ATTRS = (_VALUE, _DATE_VALUE, _TIME_VALUE, _BOOLEAN_VALUE)
 
-    def __init__(self, cell: Tag, row: int = 0, col: int = 0, sheet: "Sheet | None" = None) -> None:
+    def __init__(
+        self, cell: etree._Element, row: int = 0, col: int = 0, sheet: "Sheet | None" = None
+    ) -> None:
         self.row = row
         self.col = col
-        self.cell: Tag = cell
+        self.cell: etree._Element = cell
         self.sheet = sheet
-        self.attrs: dict[str, str] = self.cell.attrs
-        self.format = self.attrs.get("office:value-type", None)
+        self.format = cell.get(_VALUE_TYPE)
         if self.format == "date":
-            self.raw_value = self.attrs.get("office:date-value")
+            self.raw_value = cell.get(_DATE_VALUE)
         elif self.format == "time":
-            self.raw_value = self.attrs.get("office:time-value")
+            self.raw_value = cell.get(_TIME_VALUE)
         elif self.format == "boolean":
-            self.raw_value = self.attrs.get("office:boolean-value")
+            self.raw_value = cell.get(_BOOLEAN_VALUE)
         else:
-            self.raw_value = self.attrs.get("office:value", None)
+            self.raw_value = cell.get(_VALUE)
         # ODF has no newline inside a paragraph: a multi-line cell is one
         # <text:p> per line (what applications write when you type
         # Ctrl+Enter), so every paragraph counts, joined back with "\n".
         # recursive=False: a cell's own value paragraphs are always direct
         # children - an unscoped find_all() would also match those nested
         # inside an office:annotation (a cell comment, see Cell.comment).
-        paragraphs = children(self.cell, "text:p")
+        paragraphs = list(cell.iterchildren(_TEXT_P))
         # `paragraph_text`, not `p.string` - None both for a genuinely empty
         # <text:p/> (a formula whose cached result is "") and for one with
         # several children (spans...) - nor `get_text()`, which drops the
@@ -398,7 +438,7 @@ class Cell:
                 if isinstance(value, dt.time) and self._counts_elapsed_time():
                     value = _as_timedelta(value)
                 self._value = value
-        self._formula = self.attrs.get("table:formula", None)
+        self._formula = cell.get(_FORMULA)
 
         self.is_formula = self._formula is not None
         self.is_empty = self._compute_is_empty()
@@ -420,8 +460,8 @@ class Cell:
         tag = self.cell
 
         for attr in self._VALUE_ATTRS:
-            tag.attrs.pop(attr, None)
-        tag.attrs.pop("table:formula", None)
+            unset(tag, attr)
+        unset(tag, _FORMULA)
 
         # `self.format`/`self.raw_value`/`self.text` still hold the pre-write state here
         # (they're only reassigned further down) - used below as one of the display-text
@@ -430,14 +470,14 @@ class Cell:
             fmt, text = None, None
         elif isinstance(new_value, bool):
             fmt = "boolean"
-            tag.attrs["office:boolean-value"] = "true" if new_value else "false"
+            tag.set(_BOOLEAN_VALUE, "true" if new_value else "false")
             text = self._infer_boolean_display(new_value) or ("true" if new_value else "false")
         elif isinstance(new_value, str):
             fmt, text = "string", new_value
         elif isinstance(new_value, (int, float)):
             # keep the existing display format (float/percentage/currency) if there was one
             fmt = self.format if self.format in ("float", "percentage", "currency") else "float"
-            tag.attrs["office:value"] = str(new_value)
+            tag.set(_VALUE, str(new_value))
             text = (
                 self._infer_number_display(fmt, new_value)
                 or self._render_display_from_number_format(new_value)
@@ -445,9 +485,9 @@ class Cell:
             )
         elif isinstance(new_value, dt.date):  # a datetime.datetime too
             fmt = "date"
-            tag.attrs["office:date-value"] = _format_date_value(new_value)
+            tag.set(_DATE_VALUE, _format_date_value(new_value))
             # as reading it back gives it: an aware datetime turns naive, in UTC
-            new_value = _parse_date_value(tag.attrs["office:date-value"])
+            new_value = _parse_date_value(cast(str, tag.get(_DATE_VALUE)))
             kind = "datetime" if isinstance(new_value, dt.datetime) else "date"
             self._format_if_unformatted(kind, new_value)
             # the cell's own format first - a date one now, unless it had one
@@ -464,10 +504,10 @@ class Cell:
             # duration shows as one, 07:30:00, where the format of a time of
             # day showed 07:30:00 AM in an en-US document (issue #16)
             kind = "duration" if isinstance(new_value, dt.timedelta) else "time"
-            tag.attrs["office:time-value"] = _format_time_value(new_value)
+            tag.set(_TIME_VALUE, _format_time_value(new_value))
             # as reading it back gives it: a time if it fits in a day, else a
             # timedelta - and a timedelta in a format counting elapsed time
-            new_value = _parse_time_value(tag.attrs["office:time-value"])
+            new_value = _parse_time_value(cast(str, tag.get(_TIME_VALUE)))
             self._format_if_unformatted(kind, new_value)
             if isinstance(new_value, dt.time) and self._counts_elapsed_time():
                 new_value = _as_timedelta(new_value)
@@ -485,22 +525,19 @@ class Cell:
             raise TypeError(f"unsupported value type for a Cell: {type(new_value)}")
 
         if fmt is None:
-            tag.attrs.pop("office:value-type", None)
+            unset(tag, _VALUE_TYPE)
         else:
-            tag.attrs["office:value-type"] = fmt
-        if "calcext:value-type" in tag.attrs:
+            tag.set(_VALUE_TYPE, fmt)
+        if _CALCEXT_VALUE_TYPE in tag.attrib:
             if fmt is None:
-                del tag.attrs["calcext:value-type"]
+                unset(tag, _CALCEXT_VALUE_TYPE)
             else:
-                tag.attrs["calcext:value-type"] = fmt
+                tag.set(_CALCEXT_VALUE_TYPE, fmt)
 
         self._set_text(text)
         self.format = fmt
         self.raw_value = (
-            tag.attrs.get("office:value")
-            or tag.attrs.get("office:date-value")
-            or tag.attrs.get("office:time-value")
-            or tag.attrs.get("office:boolean-value")
+            tag.get(_VALUE) or tag.get(_DATE_VALUE) or tag.get(_TIME_VALUE) or tag.get(_BOOLEAN_VALUE)
         )
         self._formula = None
         self.is_formula = False
@@ -517,6 +554,10 @@ class Cell:
         if new_formula is not None:
             expanded, restore_escapes = _expand_formula_template(new_formula, self.row, self.col)
             new_formula = restore_escapes(_normalize_odf_formula(expanded))
+            if new_formula.startswith("of:=") and self.sheet is not None and self.sheet.reader is not None:
+                # `of:` only means OpenFormula where the document says so: the
+                # prefix it binds to it, or `of` declared (DOCS.md, 1.0)
+                new_formula = self.sheet.reader._formula_prefix() + new_formula[2:]
         self._write_formula(new_formula)
 
     def _write_formula(self, formula: "str | None") -> None:
@@ -529,15 +570,15 @@ class Cell:
         tag = self.cell
 
         for attr in self._VALUE_ATTRS:
-            tag.attrs.pop(attr, None)
-        tag.attrs.pop("office:value-type", None)
-        tag.attrs.pop("calcext:value-type", None)
+            unset(tag, attr)
+        unset(tag, _VALUE_TYPE)
+        unset(tag, _CALCEXT_VALUE_TYPE)
         self._set_text(None)  # any previously cached/displayed value would now be stale
 
         if formula is None:
-            tag.attrs.pop("table:formula", None)
+            unset(tag, _FORMULA)
         else:
-            tag.attrs["table:formula"] = formula
+            tag.set(_FORMULA, formula)
         self._formula = formula
 
         self.is_formula = self._formula is not None
@@ -659,7 +700,7 @@ class Cell:
             return False
         if name not in reader._elapsed_formats:
             tag = reader._find_number_style(name)
-            elapsed = tag is not None and tag.get("number:truncate-on-overflow") == "false"
+            elapsed = tag is not None and tag.get(qn("number:truncate-on-overflow")) == "false"
             reader._elapsed_formats[name] = elapsed
         return reader._elapsed_formats[name]
 
@@ -674,25 +715,25 @@ class Cell:
             value = _as_timedelta(value)
         self._value = value
 
-    def _number_format_at(self, tag: Tag) -> "str | None":
+    def _number_format_at(self, tag: etree._Element) -> "str | None":
         """The name of the number format the cell element `tag` shows with:
         its own style's, else its column's default cell style's, following
         the styles' parents."""
         reader = self.sheet.reader
-        name = cast("str | None", tag.get("table:style-name"))
+        name = tag.get(_STYLE_NAME)
         if name is None:
-            table = tag.find_parent("table:table")
+            table = next(tag.iterancestors(qn("table:table")), None)
             if table is None:
                 return None
             col = sum(
-                int(cast(Tag, cell).attrs.get("table:number-columns-repeated", "1"))
-                for cell in tag.find_previous_siblings(TAG_CELL)
+                int(cell.get(_COLUMNS_REPEATED, "1"))
+                for cell in tag.itersiblings(*_CELL_TAGS, preceding=True)
             )
             seen = 0
             for definition in self.sheet._column_definitions(table):
-                seen += int(definition.attrs.get("table:number-columns-repeated", "1"))
+                seen += int(definition.get(_COLUMNS_REPEATED, "1"))
                 if col < seen:
-                    name = cast("str | None", definition.get("table:default-cell-style-name"))
+                    name = definition.get(qn("table:default-cell-style-name"))
                     break
         return _data_style_name(cast("ODSReader", reader), name)
 
@@ -703,8 +744,8 @@ class Cell:
         first, then the rest of the document) to learn a display pattern from,
         as (raw attribute value, displayed text) pairs.
 
-        A *lazy* generator, and that matters a lot: each `find_previous`/
-        `find_next` probe traverses the document until it hits a matching
+        A *lazy* generator, and that matters a lot: each `preceding`/
+        `following` probe traverses the document until it hits a matching
         cell - which means a full document scan when there is none in that
         direction. Consumers stop at the first candidate whose pattern
         checks out (usually the cell's own prior state, or a neighbour
@@ -720,28 +761,25 @@ class Cell:
         if self.format == fmt and self.raw_value is not None and self.text is not None:
             yield (self.raw_value, self.text)
         wanted = self._number_format_at(self.cell) if same_format else None
+        raw = qn(raw_attr)
 
-        def matches(tag: Any) -> bool:
-            return (
-                getattr(tag, "name", None) == "table-cell"
-                and tag.attrs.get("office:value-type") == fmt
-                and tag.attrs.get(raw_attr)
-                and tag is not self.cell
-            )
+        def matches(tag: etree._Element) -> bool:
+            return tag.get(_VALUE_TYPE) == fmt and bool(tag.get(raw)) and tag is not self.cell
 
-        for elements in (self.cell.previous_elements, self.cell.next_elements):
+        for found in (preceding(self.cell, "table:table-cell"), following(self.cell, "table:table-cell")):
             skipped = 0
-            for match in elements:
+            for match in found:
                 if not matches(match):
                     continue
-                if wanted is not None and self._number_format_at(cast(Tag, match)) != wanted:
+                if wanted is not None and self._number_format_at(match) != wanted:
                     skipped += 1
                     if skipped == 50:
                         break
                     continue
-                p = cast("Tag | None", cast(Tag, match).find("text:p", recursive=False))
-                if p is not None and p.string is not None:
-                    yield (cast(str, cast(Tag, match).attrs.get(raw_attr)), str(p.string))
+                p = next(match.iterchildren(_TEXT_P), None)
+                only = _only_string(p) if p is not None else None
+                if only is not None:
+                    yield (cast(str, match.get(raw)), only)
                 break
 
     def _infer_number_display(self, fmt: str, new_value: float) -> "str | None":
@@ -869,9 +907,9 @@ class Cell:
         if name is None:
             tag = reader._new_style_tag("table-cell", self._OWN_STYLE_PREFIX)
             self._copy_resolved_style_into(tag, source)
-            tag.attrs["style:data-style-name"] = key[1]
-            name = reader._date_formatted_styles[key] = cast(str, tag["style:name"])
-        self.attrs["table:style-name"] = name
+            tag.set(_DATA_STYLE_NAME, key[1])
+            name = reader._date_formatted_styles[key] = cast(str, tag.get(qn("style:name")))
+        self.cell.set(_STYLE_NAME, name)
         self._own_style_name = None
 
     def _render_display_from_number_format(self, new_value: object) -> "str | None":
@@ -894,33 +932,35 @@ class Cell:
         return None
 
     def _set_text(self, text: "str | None") -> None:
-        paragraphs = self.cell.find_all("text:p", recursive=False)  # see __init__'s note on scoping
+        paragraphs = children(self.cell, "text:p")  # see __init__'s note on scoping
         if text is None:
             for p in paragraphs:
-                discard(p)
+                remove(p)
             self.text = None
             return
         # one paragraph per line, the only way ODF represents a multi-line
         # cell (a literal "\n" inside a paragraph is just whitespace there)
         lines = text.split("\n")
         for extra in paragraphs[len(lines) :]:
-            discard(extra)
+            remove(extra)
         for i, line in enumerate(lines):
             p = paragraphs[i] if i < len(paragraphs) else self._new_text_paragraph()
             set_paragraph_text(p, line)
         self.text = text
 
-    def _new_text_paragraph(self) -> Tag:
+    def _new_text_paragraph(self) -> etree._Element:
         """A fresh, empty `<text:p>` appended to this cell.
 
         An existing text:p elsewhere in the document is preferred as a
-        template (keeps whatever incidental formatting bs4/lxml would
-        otherwise not know how to reproduce), falling back to building one
-        from scratch (see `xmlbs.new`) if there is none."""
-        template = cast("Tag | None", self.cell.find_previous("text:p") or self.cell.find_next("text:p"))
+        template (keeps whatever incidental formatting lxml would otherwise
+        not know how to reproduce), falling back to building one from
+        scratch (see `xmltree.new`) if there is none."""
+        # `is None`, not `or`: a paragraph with no child element is false
+        template = next(preceding(self.cell, "text:p"), None)
         if template is None:
-            # no paragraph anywhere: `new` declares the namespace, as it did
-            p = new("text:p", near=self.cell)
+            template = next(following(self.cell, "text:p"), None)
+        if template is None:
+            p = new("text:p")
         else:
             p = clone(template)
             set_text(p, "")
@@ -1023,38 +1063,38 @@ class Cell:
         elif isinstance(other, CellStyle):
             name = other.name
         elif isinstance(other, Cell):
-            name = other.attrs.get("table:style-name")
+            name = other.style_name
         elif isinstance(other, str):
             name = other
         else:
             raise TypeError(f"cell.style must be a CellStyle, Cell, str, or None, got {type(other)!r}")
         if name is None:
-            self.attrs.pop("table:style-name", None)
+            unset(self.cell, _STYLE_NAME)
         else:
-            self.attrs["table:style-name"] = name
+            self.cell.set(_STYLE_NAME, name)
         self._read_by_format()
 
     @property
     def style_name(self) -> "str | None":
         """The name of this cell's own style - its `table:style-name`, `"ce9"`
         say - or `None` for a cell that has none and shows with its column's
-        default cell style. What `cell.attrs.get("table:style-name")` read,
-        which goes in 1.0 with `attrs` itself (DOCS.md, "What changes in
-        1.0"); `cell.style` gives the style itself, resolved."""
-        return cast("str | None", self.attrs.get("table:style-name"))
+        default cell style. What `cell.attrs.get("table:style-name")` read
+        before 1.0 removed `attrs` (DOCS.md, "What changes in 1.0");
+        `cell.style` gives the style itself, resolved."""
+        return self.cell.get(_STYLE_NAME)
 
     def _style_name(self) -> "str | None":
         """The name of the style this cell shows with: its own
         `table:style-name`, else its column's default cell style, where
         LibreOffice keeps the format of a column formatted as a whole."""
-        own = self.attrs.get("table:style-name")
+        own = self.cell.get(_STYLE_NAME)
         if own is not None or self.sheet is None:
             return own
         return self.sheet._column_default_cell_style(self.col)
 
     _OWN_STYLE_PREFIX = "ocs"
 
-    def _ensure_own_style(self) -> Tag:
+    def _ensure_own_style(self) -> etree._Element:
         """This cell's own, uniquely-owned automatic style tag - safe to
         mutate in place without affecting any other cell, even one that
         currently points at the very same style name (e.g. right after
@@ -1074,7 +1114,7 @@ class Cell:
         reader = self.sheet.reader
         if reader is None:
             raise RuntimeError(f"cell {self.address} has no owning ODSReader and cannot be styled")
-        current_name = self.attrs.get("table:style-name")
+        current_name = self.cell.get(_STYLE_NAME)
         if self._own_style_name is not None and current_name == self._own_style_name:
             tag = reader._find_style(current_name, family="table-cell")
             if tag is not None:
@@ -1083,8 +1123,8 @@ class Cell:
         # a cell with no style of its own shows with its column's: the fork
         # has to carry that one, or the cell would lose the column's format
         self._copy_resolved_style_into(tag, self._style_name())
-        new_name = cast(str, tag["style:name"])
-        self.attrs["table:style-name"] = new_name
+        new_name = cast(str, tag.get(qn("style:name")))
+        self.cell.set(_STYLE_NAME, new_name)
         self._own_style_name = new_name
         return tag
 
@@ -1092,13 +1132,12 @@ class Cell:
     # chain (a nearer style overriding one attribute must not drop the
     # others); any other child - `style:map`, carrying conditional formats -
     # is taken whole from the nearest style that has one.
-    _STYLE_PROPERTY_TAGS = (
-        "style:text-properties",
-        "style:table-cell-properties",
-        "style:paragraph-properties",
+    _STYLE_PROPERTY_TAGS = frozenset(
+        qn(name)
+        for name in ("style:text-properties", "style:table-cell-properties", "style:paragraph-properties")
     )
 
-    def _copy_resolved_style_into(self, tag: Tag, current_name: "str | None") -> None:
+    def _copy_resolved_style_into(self, tag: etree._Element, current_name: "str | None") -> None:
         """Fill a freshly forked style tag with everything `current_name`
         currently resolves to.
 
@@ -1114,43 +1153,41 @@ class Cell:
         style wins, exactly as `CellStyle` resolves them on read.
         """
         reader = self.sheet.reader
-        automatic: list[Tag] = []
+        automatic: list[etree._Element] = []
         seen: set[str | None] = set()
         current = reader._find_style(current_name, family="table-cell")
         while current is not None:
-            name = cast("str | None", current.get("style:name"))
+            name = current.get(qn("style:name"))
             if name in seen:
                 break  # a malformed file could cycle; resolve what we have
             seen.add(name)
-            if current.find_parent("office:styles") is not None:
+            if next(current.iterancestors(qn("office:styles")), None) is not None:
                 # a named style: a parent link to it does hold, and keeping
                 # the link (rather than copying) preserves its own updates
-                tag.attrs["style:parent-style-name"] = cast(str, name)
+                tag.set(qn("style:parent-style-name"), cast(str, name))
                 break
             automatic.append(current)
-            parent = cast("str | None", current.get("style:parent-style-name"))
+            parent = current.get(qn("style:parent-style-name"))
             current = reader._find_style(parent, family="table-cell") if parent else None
         for source in reversed(automatic):
-            if "style:data-style-name" in source.attrs:  # the number format
-                tag.attrs["style:data-style-name"] = source.attrs["style:data-style-name"]
-            for child in source.find_all(True, recursive=False):
-                child_name = name_of(child)
-                if child_name in self._STYLE_PROPERTY_TAGS:
-                    _ensure_style_child(tag, child_name).attrs.update(child.attrs)
+            if _DATA_STYLE_NAME in source.attrib:  # the number format
+                tag.set(_DATA_STYLE_NAME, cast(str, source.get(_DATA_STYLE_NAME)))
+            for element in elements(source):
+                if element.tag in self._STYLE_PROPERTY_TAGS:
+                    properties = _ensure_style_child(tag, name_of(element))
+                    for key, value in element.attrib.items():
+                        properties.set(key, value)
                 else:
-                    for previous in tag.find_all(child_name, recursive=False):
-                        discard(previous)  # this nearer style replaces them
-                    tag.append(clone(child))
+                    for previous in list(tag.iterchildren(element.tag)):
+                        remove(previous)  # this nearer style replaces them
+                    tag.append(clone(element))
 
     @property
     def is_merge_master(self) -> bool:
         """True if this cell is the top-left cell of a merged range (it
         carries `table:number-rows-spanned`/`table:number-columns-spanned`
         greater than 1)."""
-        return (
-            self.attrs.get("table:number-columns-spanned", "1") != "1"
-            or self.attrs.get("table:number-rows-spanned", "1") != "1"
-        )
+        return self.cell.get(_COLUMNS_SPANNED, "1") != "1" or self.cell.get(_ROWS_SPANNED, "1") != "1"
 
     @property
     def is_covered(self) -> bool:
@@ -1185,8 +1222,8 @@ class Cell:
         if master is None:
             return None
         return (
-            int(master.attrs.get("table:number-rows-spanned", "1")),
-            int(master.attrs.get("table:number-columns-spanned", "1")),
+            int(master.cell.get(_ROWS_SPANNED, "1")),
+            int(master.cell.get(_COLUMNS_SPANNED, "1")),
         )
 
     @property
@@ -1214,22 +1251,22 @@ class Cell:
         it entirely. Once a comment exists, set its other properties
         directly - `cell.comment.author = "Jane"`, `.date = datetime.now()`,
         `.visible = True`."""
-        tag = cast("Tag | None", self.cell.find("office:annotation", recursive=False))
+        tag = child(self.cell, "office:annotation")
         return Comment(tag) if tag is not None else None
 
     @comment.setter
     def comment(self, value: "str | None") -> None:
         self._prepare_for_write()
-        tag = cast("Tag | None", self.cell.find("office:annotation", recursive=False))
+        tag = child(self.cell, "office:annotation")
         if value is None:
             if tag is not None:
-                discard(tag)
+                remove(tag)
             return
         if not isinstance(value, str):
             raise TypeError(f"cell.comment must be a str or None, got {type(value)!r}")
         if tag is None:
-            tag = new("office:annotation", near=self.cell)
-            # bs4 puts it before any text the cell starts with, lxml after:
+            tag = new("office:annotation")
+            # after any text the cell starts with, where bs4 put it before:
             # indentation at most, in a cell
             self.cell.insert(0, tag)
         Comment(tag).text = value
@@ -1247,19 +1284,19 @@ class Cell:
         Writing a new `.value` afterwards replaces the cell's text (link
         included) same as it always does - the link isn't carried over,
         since it was tied to that specific text."""
-        p = cast("Tag | None", self.cell.find("text:p", recursive=False))
+        p = child(self.cell, "text:p")
         if p is None:
             return None
-        a = cast("Tag | None", p.find("text:a", recursive=False))
-        return cast("str | None", a.get("xlink:href")) if a is not None else None
+        a = child(p, "text:a")
+        return a.get(qn("xlink:href")) if a is not None else None
 
     @hyperlink.setter
     def hyperlink(self, url: "str | None") -> None:
         self._prepare_for_write()
-        p = cast("Tag | None", self.cell.find("text:p", recursive=False))
+        p = child(self.cell, "text:p")
         if url is None:
             if p is not None:
-                a = cast("Tag | None", p.find("text:a", recursive=False))
+                a = child(p, "text:a")
                 if a is not None:
                     unwrap(a)
             return
@@ -1267,12 +1304,14 @@ class Cell:
             raise TypeError(f"cell.hyperlink must be a str or None, got {type(url)!r}")
         if p is None:
             self._set_text(self.text or "")
-            p = cast(Tag, self.cell.find("text:p", recursive=False))
-        a = cast("Tag | None", p.find("text:a", recursive=False))
+            p = cast(etree._Element, child(self.cell, "text:p"))
+        a = child(p, "text:a")
         if a is None:
-            a = new("text:a", near=self.cell)
-            a.attrs["xmlns:xlink"] = _ODF_NAMESPACES["xlink"]
+            # the link given at creation, so that `new` declares `xlink`,
+            # which a document that has no link yet may not bind
+            a = new("text:a", {"xlink:href": url})
             # the paragraph's content moves into the link as it is - spans and
             # encoded spaces included - rather than flattened to its text
             wrap_contents(p, a)
-        a.attrs["xlink:href"] = url
+        else:
+            a.set(qn("xlink:href"), url)

@@ -18,11 +18,9 @@ import warnings
 import zipfile
 from decimal import Decimal
 from fractions import Fraction
-from typing import ClassVar
 
 import numpy as np
 import pytest
-from bs4 import Tag
 from lxml import etree
 
 from conftest import (
@@ -38,6 +36,8 @@ from conftest import (
     document_in,
     empty_cells,
     encoded_whitespace_ods,
+    every,
+    first,
     formula_cell,
     list_note_cell,
     note_cell,
@@ -45,16 +45,25 @@ from conftest import (
     ods_with_prefixes,
     ods_with_sheet,
     rebind_prefix,
+    requires_soffice,
     saved_table,
     shape_cell,
     table_row,
     text_cell,
     with_chart,
 )
-from odsslicer import MalformedDocumentError, ODSReader
+from odsslicer import MalformedDocumentError, ODSReader, xmltree
 from odsslicer.classes import ArrayValues, Border, Cell, CellStyle, NumberFormat, Sheet
 from odsslicer.constants import TAG_CELL
-from odsslicer.sheet import _repeat
+from odsslicer.xmltree import qn
+
+
+def _repeat(tag, attr):
+    """A `table:number-*-repeated` attribute of `tag`: 1 when absent - of
+    an element of the library's tree (lxml), or of a saved file's, as
+    `saved_table` parses it (bs4)."""
+    return int(tag.get(qn(attr) if isinstance(tag, etree._Element) else attr, "1"))
+
 
 # ---------------------------------------------------------------------------
 # Sheet.address : conversion "A1" / "A1:B3" / "A:B" / "1:2" -> index/slice
@@ -373,13 +382,15 @@ def test_empty_col_with_slice(sheet1):
 # ---------------------------------------------------------------------------
 
 
-class _FakeTag(dict):
-    """Minimal stand-in for the BeautifulSoup tag Sheet.__init__ expects."""
+def _fake_table():
+    """A bare `<table:table>`, all Sheet.__init__ reads once `load` is
+    stubbed out."""
+    return etree.fromstring(
+        f'<table:table xmlns:table="{TABLE_NS}" table:name="Fake" table:style-name="st"/>'
+    )
 
-    attrs: ClassVar[dict] = {}
 
-    def __getitem__(self, key):
-        return {"table:name": "Fake", "table:style-name": "st"}[key]
+TABLE_NS = "urn:oasis:names:tc:opendocument:xmlns:table:1.0"
 
 
 def test_ragged_rows_trigger_warning(monkeypatch, caplog):
@@ -390,14 +401,14 @@ def test_ragged_rows_trigger_warning(monkeypatch, caplog):
 
     monkeypatch.setattr(Sheet, "load", lambda self, table_bs: [[1, 2, 3], [1, 2]])
     with caplog.at_level(logging.WARNING, logger="odsslicer"):
-        sheet = Sheet(_FakeTag())
+        sheet = Sheet(_fake_table())
     assert sheet.size == (2, 3)
     assert any("same length" in r.message for r in caplog.records)
 
 
 def test_uniform_rows_do_not_trigger_warning(monkeypatch, capsys):
     monkeypatch.setattr(Sheet, "load", lambda self, table_bs: [[1, 2], [3, 4]])
-    sheet = Sheet(_FakeTag())
+    sheet = Sheet(_fake_table())
     assert sheet.size == (2, 2)
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
@@ -484,9 +495,7 @@ def test_reading_a_boolean_cell_does_not_use_office_value():
         "<text:p>FAUX</text:p></table:table-cell>"
         "</root>"
     )
-    from bs4 import BeautifulSoup
-
-    tags = BeautifulSoup(xml, "xml").find_all("table:table-cell")
+    tags = every(xml, "table:table-cell")
     true_cell, false_cell = Cell(tags[0]), Cell(tags[1])
     assert true_cell.value is True
     assert false_cell.value is False
@@ -503,9 +512,7 @@ def test_empty_text_p_reads_as_empty_string_not_the_word_none():
         "<table:table-cell><text:p/></table:table-cell>"
         "</root>"
     )
-    from bs4 import BeautifulSoup
-
-    tag = BeautifulSoup(xml, "xml").find("table:table-cell")
+    tag = first(xml, "table:table-cell")
     cell = Cell(tag)
     assert cell.text == ""
     assert str(cell) == ""
@@ -549,9 +556,7 @@ def test_multi_paragraph_cell_reads_every_line():
         "<text:p>ligne 1</text:p><text:p>ligne 2</text:p><text:p>ligne 3</text:p>"
         "</table:table-cell></root>"
     )
-    from bs4 import BeautifulSoup
-
-    tag = BeautifulSoup(xml, "xml").find("table:table-cell")
+    tag = first(xml, "table:table-cell")
     cell = Cell(tag)
     assert cell.text == "ligne 1\nligne 2\nligne 3"
     assert cell.value == "ligne 1\nligne 2\nligne 3"
@@ -569,9 +574,7 @@ def test_a_comments_paragraphs_are_not_read_as_the_cells_text():
         "<text:p>valeur</text:p>"
         "</table:table-cell></root>"
     )
-    from bs4 import BeautifulSoup
-
-    tag = BeautifulSoup(xml, "xml").find("table:table-cell")
+    tag = first(xml, "table:table-cell")
     assert Cell(tag).text == "valeur"
 
 
@@ -581,7 +584,7 @@ def test_writing_a_multi_line_value_writes_one_paragraph_per_line(writable_reade
     assert s["A1"].text == "ligne 1\nligne 2\nligne 3"
     # ODF has no newline *inside* a paragraph (it is plain whitespace there),
     # so each line must be its own <text:p>, the way applications write it
-    assert [p.get_text() for p in s["A1"].cell.find_all("text:p", recursive=False)] == [
+    assert [xmltree.text(p) for p in xmltree.children(s["A1"].cell, "text:p")] == [
         "ligne 1",
         "ligne 2",
         "ligne 3",
@@ -597,7 +600,7 @@ class TestStyleName:
             '<table:table-cell table:style-name="ce9" office:value-type="float" office:value="1"/>'
         )
         sheet = ODSReader(ods_with_sheet(tmp_path / "styled.ods", xml)).sheet("Sheet1")
-        assert sheet["A1"].style_name == sheet["A1"].attrs.get("table:style-name") == "ce9"
+        assert sheet["A1"].style_name == sheet["A1"].cell.get(qn("table:style-name")) == "ce9"
 
     def test_a_cell_without_one_gives_none(self, tmp_path):
         sheet = ODSReader(ods_with_sheet(tmp_path / "plain.ods", table_row(number_cell(1)))).sheet("Sheet1")
@@ -606,7 +609,7 @@ class TestStyleName:
     def test_a_formatted_cell_gives_the_style_it_was_forked(self, writable_reader):
         cell = writable_reader.sheet("Sheet1")["A1"]
         cell.style.bold = True
-        assert cell.style_name == cell.attrs.get("table:style-name")
+        assert cell.style_name == cell.cell.get(qn("table:style-name"))
         assert cell.style_name is not None
 
 
@@ -773,7 +776,7 @@ def test_rewriting_a_cell_leaves_no_stale_paragraph(writable_reader, first, seco
     s["A1"].value = first
     s["A1"].value = second
     assert s["A1"].value == second
-    assert len(s["A1"].cell.find_all("text:p", recursive=False)) == len(second.split("\n"))
+    assert len(xmltree.children(s["A1"].cell, "text:p")) == len(second.split("\n"))
 
 
 def test_rich_text_with_a_span_reads_correctly_instead_of_none():
@@ -790,9 +793,7 @@ def test_rich_text_with_a_span_reads_correctly_instead_of_none():
         '<text:p>1<text:span text:style-name="T1">er</text:span> / 20</text:p>'
         "</table:table-cell></root>"
     )
-    from bs4 import BeautifulSoup
-
-    tag = BeautifulSoup(xml, "xml").find("table:table-cell")
+    tag = first(xml, "table:table-cell")
     cell = Cell(tag)
     assert cell.text == "1er / 20"
     assert cell.value == "1er / 20"
@@ -993,9 +994,7 @@ def test_growing_the_only_sheet_of_a_document_with_nothing_to_copy_from():
     #    minimal (a single bare <table:table-cell/>, no text:p anywhere at
     #    all) has none anywhere in the document either.
     # Both now fall back to building a correctly-namespaced tag from scratch
-    # (`xmlbs.new`, declaring its namespace) instead of raising NotImplementedError.
-    from bs4 import BeautifulSoup
-
+    # (`xmltree.new`, declaring its namespace) instead of raising NotImplementedError.
     xml = (
         '<root xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
         'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
@@ -1004,7 +1003,7 @@ def test_growing_the_only_sheet_of_a_document_with_nothing_to_copy_from():
         "<table:table-column/><table:table-row><table:table-cell/></table:table-row>"
         "</table:table></root>"
     )
-    table = BeautifulSoup(xml, "xml").find("table:table")
+    table = first(xml, "table:table")
     sheet = Sheet(table)
     assert sheet.size == (0, 0)
 
@@ -1106,7 +1105,7 @@ def test_write_covered_cell_unmerges_the_whole_range(writable_reader):
     s["C1"].value = "valeur cachee"
     assert s["C1"].value == "valeur cachee"
     assert s["A1"].value == "1 (hidden 2, 3)"  # master keeps its own value, now standalone
-    assert s["A1"].attrs.get("table:number-columns-spanned") is None
+    assert s["A1"].cell.get(qn("table:number-columns-spanned")) is None
     assert s["B1"].value == 2.0  # other covered sibling reveals its residual value
     assert s.size == (9, 4)
 
@@ -1116,7 +1115,7 @@ def test_write_vertical_merge_covered_cell(writable_reader):
     s["A5"].value = "bas de fusion verticale"
     assert s["A5"].value == "bas de fusion verticale"
     assert s["A3"].value == "hidden as col, 5, 6"
-    assert s["A3"].attrs.get("table:number-rows-spanned") is None
+    assert s["A3"].cell.get(qn("table:number-rows-spanned")) is None
     assert s["A4"].value == 5.0
 
 
@@ -1125,7 +1124,7 @@ def test_write_rectangular_merge_covered_cell(writable_reader):
     s["C7"].value = "coin de fusion rectangulaire"
     assert s["C7"].value == "coin de fusion rectangulaire"
     assert s["A6"].value == "Hidden empty"
-    assert s["A6"].attrs.get("table:number-rows-spanned") is None
+    assert s["A6"].cell.get(qn("table:number-rows-spanned")) is None
     for addr in ("B6", "C6", "D6", "A7", "B7", "D7"):
         assert s[addr].value is None
     assert s.size == (9, 4)
@@ -1140,7 +1139,7 @@ def test_write_covered_cell_that_is_also_column_repeated(writable_reader):
     assert s["C9"].value == "triple resolution"
     assert s["A9"].value == 1.0 and s["B9"].value == 1.0 and s["D9"].value == 1.0
     assert s["A8"].value == "Hidden empty with repetition"
-    assert s["A8"].attrs.get("table:number-rows-spanned") is None
+    assert s["A8"].cell.get(qn("table:number-rows-spanned")) is None
     assert s.size == (9, 4)
 
 
@@ -1216,9 +1215,9 @@ def test_growing_a_run_of_repeated_rows_widens_its_element_once(repeated_run_ods
     # the shared element used to get the new cells once per row of the run
     s = ODSReader(repeated_run_ods).sheet("Sheet1")
     s.grow_to(0, 4)
-    run = s.rows[1][0].cell.parent
-    assert run.attrs["table:number-rows-repeated"] == "5"
-    cells = run.find_all(TAG_CELL)
+    run = s.rows[1][0].cell.getparent()
+    assert run.get(qn("table:number-rows-repeated")) == "5"
+    cells = [cell for name in TAG_CELL for cell in every(run, name)]
     assert sum(_repeat(c, "table:number-columns-repeated") for c in cells) == 5
     # one new cell for the whole run, as load() would have it
     assert all(s.rows[r][4].cell is s.rows[1][4].cell for r in range(2, 6))
@@ -1398,9 +1397,9 @@ def _logical_cells_styled(path, style_name):
     table = ODSReader(path).tables[0]
     return sum(
         _repeat(r, "table:number-rows-repeated") * _repeat(cell, "table:number-columns-repeated")
-        for r in table.find_all("table:table-row")
-        for cell in r.find_all(TAG_CELL, recursive=False)
-        if cell.get("table:style-name") == style_name
+        for r in every(table, "table:table-row")
+        for cell in r
+        if cell.tag in {qn(name) for name in TAG_CELL} and cell.get(qn("table:style-name")) == style_name
     )
 
 
@@ -1544,6 +1543,33 @@ def test_a_chart_deleted_with_every_row_does_not_break_the_edit_after(tmp_path):
     sheet.insert_columns(0)
     r.save()
     assert addresses_holding(saved_table(path), _is_chart) == []
+
+
+def test_a_chart_deleted_with_its_cells_stops_following_the_edits(tmp_path):
+    # its frame is out of the document, its content an orphan of the package:
+    # nothing draws it, and the edits after leave its ranges as they were -
+    # as with bs4, which emptied a deleted element. lxml keeps a detached one
+    # readable, and the drawings an earlier edit cached would have followed
+    path = with_chart(
+        _drawing_past_the_grid(
+            tmp_path,
+            f"<table:table-cell>{chart_frame('Sheet1.B1:Sheet1.B3', 'Sheet1.T9')}</table:table-cell>",
+        ),
+        plot="Sheet1.A1:Sheet1.B3",
+        categories="Sheet1.A1:Sheet1.A3",
+        values="Sheet1.B1:Sheet1.B3",
+        label="Sheet1.B1:Sheet1.B1",
+    )
+    r = ODSReader(path)
+    sheet = r.sheet("Sheet1")
+    sheet.insert_columns(1)  # caches the drawings, and moves the chart's ranges right
+    sheet.delete_rows([0, 1, 2])  # the chart goes with the last row
+    sheet.insert_columns(0)
+    r.save()
+    with zipfile.ZipFile(path) as package:
+        chart = etree.fromstring(package.read("Object 1/content.xml"))
+    plot = first(chart, "chart:plot-area")
+    assert plot.get(qn("table:cell-range-address")) == "Sheet1.A1:Sheet1.C3"
 
 
 _WHOLE_ROW_YELLOW = (
@@ -1720,78 +1746,94 @@ def test_writing_past_the_data_keeps_what_follows_the_rows_after_them(tmp_path):
     assert cells_with_content(ODSReader(path).sheet("Sheet1")) == {"A1": "a", "A3": "c", "A4": "d"}
 
 
-def _count_index_lookups(monkeypatch, name):
-    """The elements named `name` looked up with bs4's `Tag.index`, a scan
-    from the parent's first child, from now on."""
-    scanned = []
-    index = Tag.index
+@pytest.fixture()
+def positional(monkeypatch):
+    """The elements of the documents opened from now on that something
+    looks up or inserts by position among their siblings - `index()` and
+    `insert()`, which walk the parent's children up to that position in
+    lxml, as bs4's `insert_after` did: a loop of them down a long sheet is
+    quadratic. Elements are recorded by local name; clear the list before
+    the edit to watch. lxml's own methods cannot be patched: the documents
+    are parsed, and new elements made, as a subclass of its element that
+    records the calls."""
+    recorded = []
 
-    def counting_index(self, element):
-        if getattr(element, "name", None) == name:
-            scanned.append(element)
-        return index(self, element)
+    class Recording(etree.ElementBase):
+        def index(self, child, start=None, stop=None):
+            recorded.append(etree.QName(child).localname)
+            return super().index(child, start, stop)
 
-    monkeypatch.setattr(Tag, "index", counting_index)
-    return scanned
+        def insert(self, index, element):
+            recorded.append(etree.QName(element).localname)
+            return super().insert(index, element)
+
+    parser = etree.XMLParser(resolve_entities=False, no_network=True)
+    parser.set_element_class_lookup(etree.ElementDefaultClassLookup(element=Recording))
+    monkeypatch.setattr(
+        "odsslicer.reader.parse", lambda markup: etree.ElementTree(etree.fromstring(markup, parser))
+    )
+    etree.set_default_parser(parser)  # what `etree.Element`, and so `xmltree.new`, makes
+    yield recorded
+    etree.set_default_parser(None)
 
 
-def test_writing_a_column_past_the_data_never_scans_the_table_for_a_row(monkeypatch):
+def test_writing_a_column_past_the_data_never_places_a_row_by_position(positional):
     # regression (0.14.0 to 0.14.3): each new row went in with bs4's
     # insert_after, whose parent.index() scans the table from its first row,
     # and writing a column past the data grows the sheet one row per cell -
     # quadratic: generate+save of benchmarks/bench.py took 246 s at 100,000 rows, not 32 s
-    scanned = _count_index_lookups(monkeypatch, "table-row")
     sheet = ODSReader.new().sheet("Sheet1")
     sheet[0:200, 0].value = [[float(i)] for i in range(200)]
     assert sheet.size == (200, 1)
-    assert scanned == []
+    assert "table-row" not in positional
 
 
 @pytest.mark.parametrize("row", [0, 100, 200])
-def test_inserting_rows_scans_the_table_for_a_row_at_most_once(monkeypatch, row):
+def test_inserting_rows_never_places_a_row_by_position(positional, row):
     # regression: each new row went in with bs4's insert_before or
     # insert_after, whose parent.index() scans the table from its first row -
-    # insert_rows(n, n) on n rows took 8.2 s at 20,000 rows, not 0.25 s
+    # insert_rows(n, n) on n rows took 8.2 s at 20,000 rows, not 0.25 s; 0.15.0
+    # inserted them by an index found once, which lxml's insert() walks to
     sheet = ODSReader.new().sheet("Sheet1")
     sheet[0:200, 0].value = [[float(i)] for i in range(200)]
-    scanned = _count_index_lookups(monkeypatch, "table-row")
+    positional.clear()
     sheet.insert_rows(row, 200)
-    assert len(scanned) <= 1
+    assert "table-row" not in positional
     values = [float(i) for i in range(200)]
     assert sheet.to_list() == [[v] for v in values[:row] + [None] * 200 + values[row:]]
 
 
 @pytest.mark.parametrize("col", [0, 50, 100])
-def test_inserting_columns_scans_each_row_for_a_cell_at_most_once(monkeypatch, col):
+def test_inserting_columns_never_places_a_cell_by_position(positional, col):
     # same within each row, one scan per new cell: insert_columns(1000, 1000)
     # on 200 rows of 1,000 columns took 6.7 s, not 2.9 s
     sheet = ODSReader.new().sheet("Sheet1")
     sheet[0:20, 0:100].value = [[float(c) for c in range(100)] for _ in range(20)]
-    scanned = _count_index_lookups(monkeypatch, "table-cell")
+    positional.clear()
     sheet.insert_columns(col, 100)
-    assert len(scanned) <= 20
+    assert "table-cell" not in positional
     values = [float(c) for c in range(100)]
     assert sheet.to_list() == [values[:col] + [None] * 100 + values[col:]] * 20
 
 
-# Splitting a repeated element looks it up once, wherever it lies and however
-# many times it repeats. Regression: each copy went in with insert_after, a
-# scan from the first child up to the copy before.
+# Splitting a repeated element places its copies next to it, wherever it lies
+# and however many times it repeats. Regression: each copy went in with
+# insert_after, a scan from the first child up to the copy before.
 
 
-def test_writing_into_repeated_rows_scans_the_table_for_a_row_at_most_once(tmp_path, monkeypatch):
+def test_writing_into_repeated_rows_never_places_a_row_by_position(tmp_path, positional):
     # writing one cell in a run of 20,000 repeated rows below 50,000 took 23 s, not 0.36 s
     xml = "".join(table_row(number_cell(i)) for i in range(100)) + table_row(text_cell("x"), repeat=200)
     sheet = ODSReader(ods_with_sheet(tmp_path / "rows.ods", xml)).sheet("Sheet1")
-    scanned = _count_index_lookups(monkeypatch, "table-row")
+    positional.clear()
     sheet[200, 0].value = "y"
-    assert len(scanned) <= 1
+    assert "table-row" not in positional
     expected = [[float(i)] for i in range(100)] + [["x"]] * 200
     expected[200] = ["y"]
     assert sheet.to_list() == expected
 
 
-def test_writing_into_repeated_cells_scans_the_row_for_a_cell_at_most_once(tmp_path, monkeypatch):
+def test_writing_into_repeated_cells_never_places_a_cell_by_position(tmp_path, positional):
     # in a cell repeated 16,384 times: 1.7 s, not 0.14 s
     repeated = (
         '<table:table-cell table:number-columns-repeated="200" office:value-type="string">'
@@ -1799,22 +1841,22 @@ def test_writing_into_repeated_cells_scans_the_row_for_a_cell_at_most_once(tmp_p
     )
     xml = table_row(*(number_cell(c) for c in range(100)), repeated)
     sheet = ODSReader(ods_with_sheet(tmp_path / "cells.ods", xml)).sheet("Sheet1")
-    scanned = _count_index_lookups(monkeypatch, "table-cell")
+    positional.clear()
     sheet[0, 200].value = "y"
-    assert len(scanned) <= 1
+    assert "table-cell" not in positional
     expected = [float(c) for c in range(100)] + ["x"] * 200
     expected[200] = "y"
     assert sheet.to_list() == [expected]
 
 
-def test_styling_a_repeated_column_scans_the_definitions_at_most_once(tmp_path, monkeypatch):
+def test_styling_a_repeated_column_never_places_a_definition_by_position(tmp_path, positional):
     # in a definition repeated 16,384 times, as LibreOffice pads a sheet: 1.6 s, not 0.04 s
     xml = '<table:table-column table:number-columns-repeated="200"/>' + table_row(text_cell("a"))
     sheet = ODSReader(ods_with_sheet(tmp_path / "columns.ods", xml)).sheet("Sheet1")
-    scanned = _count_index_lookups(monkeypatch, "table-column")
+    positional.clear()
     sheet.column_style(100).width = "3cm"
-    assert len(scanned) <= 1
-    assert len(sheet.table.find_all("table:table-column")) == 200
+    assert "table-column" not in positional
+    assert len(every(sheet.table, "table:table-column")) == 200
     assert [sheet.column_style(c).width for c in (99, 100, 101)] == [None, "3cm", None]
 
 
@@ -2278,18 +2320,18 @@ def test_an_embedded_object_that_is_no_chart_is_copied_through_a_structural_edit
     ids=["insert_rows", "insert_columns", "delete_rows", "delete_column", "rename_sheet"],
 )
 def test_a_structural_edit_refuses_a_malformed_chart_before_changing_anything(tmp_path, edit):
-    # strict parsing, as for every part on lxml: bs4 recovered a truncated
+    # strict parsing, as for every part: bs4 recovered a truncated
     # chart and save() wrote the guess back; the edit now raises, the sheet
     # left as it was rather than edited but for its chart
     path = _chart_part_edited(_chart_workbook(tmp_path), lambda data: data[: len(data) // 2])
     r = ODSReader(path)
-    before = r.data.encode("utf-8")
+    before = etree.tostring(r.data)
 
     for _ in range(2):  # and again: a refusal is not forgotten
         with pytest.raises(MalformedDocumentError, match=r"Object 1/content\.xml"):
             edit(r)
 
-    assert r.data.encode("utf-8") == before
+    assert etree.tostring(r.data) == before
     assert r.sheets_names == ["Sheet1"]
 
 
@@ -2438,7 +2480,7 @@ def test_boolean_display_text_falls_back_without_a_template(writable_reader):
 def test_boolean_display_text_learned_from_another_cell_of_the_same_polarity(writable_reader):
     s = writable_reader.sheet("Sheet1")
     s["C1"].value = True
-    s["C1"].cell.find("text:p").string = "VRAI"  # simulate a French-locale boolean cell
+    xmltree.set_text(first(s["C1"].cell, "text:p"), "VRAI")  # simulate a French-locale boolean cell
     s["C2"].value = True
     assert s["C2"].text == "VRAI"
     s["C3"].value = False  # opposite polarity has no template: falls back to default
@@ -2454,7 +2496,7 @@ def test_number_inference_falls_through_to_the_real_format_when_it_cannot_reprod
     # below) renders it correctly instead of giving up to a bare str() conversion
     s = writable_reader.sheet("Sheet1")
     cell = s["A6"]
-    cell.cell.find("text:p").string = "deux cents"  # not a model our regex can parse
+    xmltree.set_text(first(cell.cell, "text:p"), "deux cents")  # not a model our regex can parse
     cell.__init__(cell.cell, row=cell.row, col=cell.col, sheet=cell.sheet)  # refresh the cache
     cell.value = 0.75
     assert cell.text == "75.00 %"
@@ -2563,8 +2605,8 @@ def _saved_with_raw_values(tmp_path, cells):
     for row, (value_type, raw, text) in enumerate(cells, start=1):
         cell = s[row, 0]
         cell.value = text
-        cell.attrs["office:value-type"] = value_type
-        cell.attrs[_RAW_VALUE_ATTRS.get(value_type, "office:value")] = raw
+        cell.cell.set(qn("office:value-type"), value_type)
+        cell.cell.set(qn(_RAW_VALUE_ATTRS.get(value_type, "office:value")), raw)
     path = tmp_path / "raw.ods"
     r.save(path)
     return path
@@ -2814,7 +2856,7 @@ def test_duration_display_follows_the_real_format_like_libreoffice(elapsed, valu
     s = r.sheet("Sheet1")
     fmt = NumberFormat.create(r, "time", components=_HMS)
     if elapsed:  # NumberFormat.create has no switch for it
-        fmt._tag.attrs["number:truncate-on-overflow"] = "false"
+        fmt._tag.set(qn("number:truncate-on-overflow"), "false")
     s["A1"].style.number_format = fmt
     s["A1"].value = value
     assert s["A1"].text == text
@@ -2824,7 +2866,7 @@ def test_an_elapsed_minutes_format_counts_the_hours_in_the_minutes():
     r = _blank_document()
     s = r.sheet("Sheet1")
     fmt = NumberFormat.create(r, "time", components=[("minutes", "long"), ("text", ":"), ("seconds", "long")])
-    fmt._tag.attrs["number:truncate-on-overflow"] = "false"
+    fmt._tag.set(qn("number:truncate-on-overflow"), "false")
     s["A1"].style.number_format = fmt
     # within a day, so it reads back as a time of day
     s["A1"].value = dt.timedelta(hours=2, minutes=5, seconds=3)
@@ -2978,22 +3020,22 @@ def test_a_date_or_time_written_into_an_unformatted_cell_gets_the_locale_format(
     formats = [reread[row, 2].style.number_format for row in range(5)]
     assert [f.family for f in formats] == ["date", "date", "time", "time", "time"]
     # [HH]:MM:SS counts the hours in full
-    assert formats[3]._tag.get("number:truncate-on-overflow") == "false"
+    assert formats[3]._tag.get(qn("number:truncate-on-overflow")) == "false"
 
 
 def test_one_format_and_one_style_serve_every_unformatted_cell(tmp_path):
     r = _blank_document()
     s = r.sheet("Sheet1")
     s["A1:A3"].value = [[dt.date(2022, 3, day)] for day in (7, 8, 9)]
-    assert len({s[row, 0].attrs["table:style-name"] for row in range(3)}) == 1
+    assert len({s[row, 0].style_name for row in range(3)}) == 1
     out = tmp_path / "out.ods"
     r.save(out)
     # nor does the next session add a second format
     r2 = ODSReader(out)
-    formats = len(r2.data.find_all("number:date-style"))
+    formats = len(every(r2.data, "number:date-style"))
     s2 = r2.sheet("Sheet1")
     s2["A4"].value = dt.date(2022, 3, 10)
-    assert len(r2.data.find_all("number:date-style")) == formats
+    assert len(every(r2.data, "number:date-style")) == formats
     assert s2["A4"].style.number_format.name == s2["A1"].style.number_format.name
 
 
@@ -3044,7 +3086,7 @@ def formatted_columns(tmp_path):
 
 def test_a_cell_reads_its_columns_default_cell_style(formatted_columns):
     s = formatted_columns.sheet("Sheet1")
-    assert s["A2"].attrs.get("table:style-name") is None
+    assert s["A2"].style_name is None
     assert s["A2"].style.background_color == "#fff2cc"
     assert s["B2"].style.number_format.name == "Ndmy"
 
@@ -3054,7 +3096,7 @@ def test_a_date_written_into_a_column_formatted_for_dates_keeps_its_format(
 ):
     s = formatted_columns.sheet("Sheet1")
     s["B2"].value = dt.date(2022, 3, 7)
-    assert s["B2"].attrs.get("table:style-name") is None  # still the column's
+    assert s["B2"].style_name is None  # still the column's
     assert s["B2"].text == "07/03/2022"
     formatted_columns.save()
     reread = ODSReader(formatted_columns.file).sheet("Sheet1")
@@ -3090,7 +3132,7 @@ def test_sorting_a_formatted_column_gives_its_cells_no_style_of_their_own(
     s["B2:B4"].value = [[dt.date(2022, 3, day)] for day in (9, 7, 8)]
     s.sort("B2:B4", by=1)
     assert s["B2:B4"].to_list() == [[dt.date(2022, 3, day)] for day in (7, 8, 9)]
-    assert all(s[r, 1].attrs.get("table:style-name") is None for r in (1, 2, 3))
+    assert all(s[r, 1].style_name is None for r in (1, 2, 3))
 
 
 def test_setting_a_style_property_keeps_the_columns_formatting(formatted_columns):
@@ -3357,7 +3399,7 @@ def test_a_duration_under_a_day_shows_as_a_duration(value, text):
     cell = r.sheet("Sheet1")["A1"]
     cell.value = value
     assert cell.text == text
-    assert cell.style.number_format._tag.get("number:truncate-on-overflow") == "false"
+    assert cell.style.number_format._tag.get(qn("number:truncate-on-overflow")) == "false"
 
 
 # ---------------------------------------------------------------------------
@@ -3454,6 +3496,87 @@ def test_save_round_trip_growing_from_empty(writable_reader, tmp_path):
 # ---------------------------------------------------------------------------
 # Écriture : formules (Cell.formula)
 # ---------------------------------------------------------------------------
+
+
+OPENFORMULA = "urn:oasis:names:tc:opendocument:xmlns:of:1.2"
+
+
+class TestOpenFormulaPrefix:
+    """`of:` in `of:=SUM(...)` names OpenFormula only where the document
+    says so: no XML parser resolves a prefix inside a value. A formula is
+    written with the prefix the document binds to it, or with `of` declared
+    on the root of `content.xml` (DOCS.md, "What changes in 1.0")."""
+
+    @staticmethod
+    def without_openformula(tmp_path):
+        """TEST.ods with no declaration of OpenFormula at all - as 5 files of
+        the corpus another tool rewrote - and no formula left to need one."""
+
+        def drop(markup):
+            markup = markup.replace(f' xmlns:of="{OPENFORMULA}"'.encode(), b"")
+            return markup.replace(b"of:=", b"oooc:=")
+
+        path = tmp_path / "unbound.ods"
+        with zipfile.ZipFile(FIXTURES_DIR / "TEST.ods") as src, zipfile.ZipFile(path, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                dst.writestr(item, drop(data) if item.filename == "content.xml" else data)
+        return path
+
+    def test_a_document_binding_of_gets_of(self, writable_reader, tmp_path):
+        writable_reader.sheet("Sheet1")["C1"].formula = "=A2+A3"
+        writable_reader.save(tmp_path / "out.ods")
+        assert ODSReader(tmp_path / "out.ods").sheet("Sheet1")["C1"].formula == "of:=[.A2]+[.A3]"
+
+    def test_a_document_binding_another_prefix_gets_that_prefix(self, tmp_path):
+        path = ods_with_prefixes(
+            FIXTURES_DIR / "TEST.ods", tmp_path / "TEST.ods", {OPENFORMULA: "openformula"}
+        )
+        reader = ODSReader(path)
+        cell = reader.sheet("Sheet1")["C1"]
+        cell.formula = "=A2+A3"
+        assert cell.formula == "openformula:=[.A2]+[.A3]"
+        assert cell.formula_friendly == "=A2+A3"
+        reader.save()
+        content = zipfile.ZipFile(path).read("content.xml")
+        assert b'table:formula="openformula:=[.A2]+[.A3]"' in content
+        assert b"xmlns:of=" not in content
+
+    def test_a_document_binding_none_gets_of_declared_on_its_root(self, tmp_path):
+        path = self.without_openformula(tmp_path)
+        reader = ODSReader(path)
+        sheet = reader.sheet("Sheet1")
+        cell = sheet["C1"]
+        cell.formula = "=A2+A3"
+        assert cell.formula == "of:=[.A2]+[.A3]"
+        # the root is made again: what the sheet and its cells hold stays theirs
+        sheet["C2"].value = 7
+        assert sheet.table.getparent() is not None
+        reader.save()
+        content = zipfile.ZipFile(path).read("content.xml")
+        root = etree.fromstring(content)
+        assert root.nsmap["of"] == OPENFORMULA
+        assert content.count(f'xmlns:of="{OPENFORMULA}"'.encode()) == 1
+        reread = ODSReader(path).sheet("Sheet1")
+        assert (reread["C1"].formula, reread["C2"].value) == ("of:=[.A2]+[.A3]", 7)
+        assert [s.to_list() for s in ODSReader(path).sheets][1:] == [
+            s.to_list() for s in ODSReader(FIXTURES_DIR / "TEST.ods").sheets
+        ][1:]
+
+    def test_a_document_binding_none_declares_of_once(self, tmp_path):
+        reader = ODSReader(self.without_openformula(tmp_path))
+        reader.sheet("Sheet1")["C1"].formula = "=A2"
+        root = reader.data.getroot()
+        reader.sheet("Sheet1")["C2"].formula = "=A3"
+        assert reader.data.getroot() is root
+
+    @requires_soffice
+    def test_libreoffice_computes_a_formula_written_where_of_was_bound_by_no_one(self, tmp_path):
+        path = self.without_openformula(tmp_path)
+        reader = ODSReader(path)
+        reader.sheet("Sheet1")["C1"].formula = "=A2+A3"
+        reader.save(recalculate=True)
+        assert ODSReader(path).sheet("Sheet1")["C1"].value == 6.4
 
 
 def test_write_formula_normalizes_the_of_prefix(writable_reader):
@@ -3719,7 +3842,7 @@ def test_clearing_a_formula_with_none(writable_reader):
     s["A2"].formula = None
     assert s["A2"].formula is None
     assert not s["A2"].is_formula
-    assert "table:formula" not in s["A2"].attrs
+    assert qn("table:formula") not in s["A2"].cell.attrib
 
 
 def test_write_empty_formula_raises(writable_reader):
@@ -3753,7 +3876,7 @@ def test_save_round_trip_after_writing_a_formula(writable_reader, tmp_path):
     reread = ODSReader(out).sheet("Sheet1")
     assert reread["C1"].formula == "of:=[.A2]+[.A3]"
     assert reread["C1"].is_formula
-    assert reread["C1"].attrs == {"table:formula": "of:=[.A2]+[.A3]"}
+    assert xmltree.attributes(reread["C1"].cell) == {"table:formula": "of:=[.A2]+[.A3]"}
 
 
 # ---------------------------------------------------------------------------
@@ -3805,8 +3928,6 @@ def test_formula_friendly_on_a_real_complex_formula():
     # a real formula from bareme/examples/root_init/DS1/Notes.ods (MPX4!I3):
     # of:=IF(OFFSET([$Notes.$C$3];[.I$1];[.$A3]+[.$A$1])=0;"";
     #        OFFSET([$Notes.$C$3];[.I$1];[.$A3]+[.$A$1]))
-    from bs4 import BeautifulSoup
-
     xml = (
         '<root xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
         'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
@@ -3815,7 +3936,7 @@ def test_formula_friendly_on_a_real_complex_formula():
         '[.$A3]+[.$A$1])=0;"";OFFSET([$Notes.$C$3];[.I$1];[.$A3]+[.$A$1]))\'>'
         "<text:p/></table:table-cell></root>"
     )
-    tag = BeautifulSoup(xml, "xml").find("table:table-cell")
+    tag = first(xml, "table:table-cell")
     cell = Cell(tag)
     assert cell.formula_friendly == (
         '=IF(OFFSET($Notes.$C$3,I$1,$A3+$A$1)=0,"",OFFSET($Notes.$C$3,I$1,$A3+$A$1))'
@@ -3981,7 +4102,7 @@ def test_cell_with_no_style_name_has_a_blank_writable_style(reader):
     # writing to it (see the styles-write tests below) needs a real object
     # to fork a style onto, so every property just resolves to None/False
     s = reader.sheet("Sheet1")
-    assert s["A1"].attrs.get("table:style-name") is None
+    assert s["A1"].style_name is None
     style = s["A1"].style
     assert style is not None
     assert style.bold is False
@@ -4032,9 +4153,34 @@ def test_style_resolves_alignment_and_raw_properties(reader):
     assert style.text_properties == {}
 
 
-def test_cell_style_walks_parent_inheritance_chain():
-    from bs4 import BeautifulSoup
+def test_raw_properties_keep_the_specifications_prefixes_whatever_the_files(tmp_path):
+    # keyed as the specification writes them (DOCS.md, "What changes in 1.0"),
+    # not with the prefix a file binds - which bs4 handed over as written
+    style_uri = "urn:oasis:names:tc:opendocument:xmlns:style:1.0"
+    path = ods_with_prefixes(FIXTURES_DIR / "TEST.ods", tmp_path / "TEST.ods", {style_uri: "st"})
+    style = ODSReader(path).sheet("SheetFusion")["A1"].style
+    assert style.cell_properties["style:vertical-align"] == "middle"
+    assert style.vertical_align == "middle"
+    assert (
+        style.cell_properties
+        == ODSReader(FIXTURES_DIR / "TEST.ods").sheet("SheetFusion")["A1"].style.cell_properties
+    )
 
+
+def test_raw_properties_of_a_namespace_the_specification_does_not_name_keep_the_files_prefix(tmp_path):
+    # LibreOffice's own extensions, `officeooo:rsid` say: no prefix of the
+    # specification's to give them, so the file's, as bs4 gave it
+    xml = table_row('<table:table-cell table:style-name="x" office:value-type="float" office:value="1"/>')
+    styles = (
+        '<style:style style:name="x" style:family="table-cell">'
+        '<style:text-properties xmlns:officeooo="http://openoffice.org/2009/office"'
+        ' officeooo:rsid="0012" fo:color="#ff0000"/></style:style>'
+    )
+    style = ODSReader(ods_with_sheet(tmp_path / "ext.ods", xml, styles)).sheet("Sheet1")["A1"].style
+    assert style.text_properties == {"officeooo:rsid": "0012", "fo:color": "#ff0000"}
+
+
+def test_cell_style_walks_parent_inheritance_chain():
     from odsslicer.classes import CellStyle
 
     xml = (
@@ -4053,11 +4199,11 @@ def test_cell_style_walks_parent_inheritance_chain():
         "</style:style>"
         "</root>"
     )
-    soup = BeautifulSoup(xml, "xml")
+    soup = etree.fromstring(xml)
 
     class StubReader:
         def _find_style(self, name, family=None):
-            return soup.find("style:style", attrs={"style:name": name}) if name else None
+            return first(soup, "style:style", style_name=name) if name else None
 
         def _find_number_style(self, name):
             return None
@@ -4070,8 +4216,6 @@ def test_cell_style_walks_parent_inheritance_chain():
 
 
 def test_cell_style_nearest_ancestor_wins_on_conflicting_property():
-    from bs4 import BeautifulSoup
-
     from odsslicer.classes import CellStyle
 
     xml = (
@@ -4086,11 +4230,11 @@ def test_cell_style_nearest_ancestor_wins_on_conflicting_property():
         "</style:style>"
         "</root>"
     )
-    soup = BeautifulSoup(xml, "xml")
+    soup = etree.fromstring(xml)
 
     class StubReader:
         def _find_style(self, name, family=None):
-            return soup.find("style:style", attrs={"style:name": name}) if name else None
+            return first(soup, "style:style", style_name=name) if name else None
 
         def _find_number_style(self, name):
             return None
@@ -4103,8 +4247,6 @@ def test_cell_style_font_underline_strikethrough_and_rotation():
     # real attribute names/values taken from tests/TEST.ods's styles.xml
     # (style:font-name="Liberation Sans") and the ODF spec for the rest,
     # since none of our fixture files happen to apply these to a real cell.
-    from bs4 import BeautifulSoup
-
     from odsslicer.classes import CellStyle
 
     xml = (
@@ -4116,11 +4258,11 @@ def test_cell_style_font_underline_strikethrough_and_rotation():
         'style:text-underline-style="solid" style:text-line-through-style="solid"/>'
         "</style:style></root>"
     )
-    soup = BeautifulSoup(xml, "xml")
+    soup = etree.fromstring(xml)
 
     class StubReader:
         def _find_style(self, name, family=None):
-            return soup.find("style:style", attrs={"style:name": name}) if name else None
+            return first(soup, "style:style", style_name=name) if name else None
 
         def _find_number_style(self, name):
             return None
@@ -4135,8 +4277,6 @@ def test_cell_style_font_underline_strikethrough_and_rotation():
 def test_cell_style_border_shorthand_applies_to_every_side():
     # real value taken from tests/TEST.ods's styles.xml (the unused "Note"
     # built-in style: fo:border="0.74pt solid #808080")
-    from bs4 import BeautifulSoup
-
     from odsslicer.classes import CellStyle
 
     xml = (
@@ -4146,11 +4286,11 @@ def test_cell_style_border_shorthand_applies_to_every_side():
         '<style:table-cell-properties fo:border="0.74pt solid #808080"/>'
         "</style:style></root>"
     )
-    soup = BeautifulSoup(xml, "xml")
+    soup = etree.fromstring(xml)
 
     class StubReader:
         def _find_style(self, name, family=None):
-            return soup.find("style:style", attrs={"style:name": name}) if name else None
+            return first(soup, "style:style", style_name=name) if name else None
 
         def _find_number_style(self, name):
             return None
@@ -4163,8 +4303,6 @@ def test_cell_style_border_shorthand_applies_to_every_side():
 
 
 def test_cell_style_border_specific_side_overrides_shorthand():
-    from bs4 import BeautifulSoup
-
     from odsslicer.classes import Border, CellStyle
 
     xml = (
@@ -4175,11 +4313,11 @@ def test_cell_style_border_specific_side_overrides_shorthand():
         'fo:border-top="2.49pt solid #000000"/>'
         "</style:style></root>"
     )
-    soup = BeautifulSoup(xml, "xml")
+    soup = etree.fromstring(xml)
 
     class StubReader:
         def _find_style(self, name, family=None):
-            return soup.find("style:style", attrs={"style:name": name}) if name else None
+            return first(soup, "style:style", style_name=name) if name else None
 
         def _find_number_style(self, name):
             return None
@@ -4207,8 +4345,6 @@ def test_cell_style_diagonal_none_is_not_a_border(reader):
 
 
 def test_cell_style_wrap_shrink_protection_and_text_position():
-    from bs4 import BeautifulSoup
-
     xml = (
         '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
         'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
@@ -4218,11 +4354,11 @@ def test_cell_style_wrap_shrink_protection_and_text_position():
         '<style:text-properties style:text-position="super 58%"/>'
         "</style:style></root>"
     )
-    soup = BeautifulSoup(xml, "xml")
+    soup = etree.fromstring(xml)
 
     class StubReader:
         def _find_style(self, name, family=None):
-            return soup.find("style:style", attrs={"style:name": name}) if name else None
+            return first(soup, "style:style", style_name=name) if name else None
 
         def _find_number_style(self, name):
             return None
@@ -4238,8 +4374,6 @@ def test_cell_style_wrap_shrink_protection_and_text_position():
 
 
 def test_cell_style_diagonal_border_parses_like_a_regular_border():
-    from bs4 import BeautifulSoup
-
     xml = (
         '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
         'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
@@ -4247,11 +4381,11 @@ def test_cell_style_diagonal_border_parses_like_a_regular_border():
         '<style:table-cell-properties style:diagonal-tl-br="1pt solid #ff0000"/>'
         "</style:style></root>"
     )
-    soup = BeautifulSoup(xml, "xml")
+    soup = etree.fromstring(xml)
 
     class StubReader:
         def _find_style(self, name, family=None):
-            return soup.find("style:style", attrs={"style:name": name}) if name else None
+            return first(soup, "style:style", style_name=name) if name else None
 
         def _find_number_style(self, name):
             return None
@@ -4336,15 +4470,13 @@ def test_row_column_sheet_style_out_of_range_is_none(reader):
 def test_row_style_no_reader_is_none():
     # a Sheet built without an owning ODSReader (e.g. constructed directly
     # in a test, as elsewhere in this suite) can't resolve styles at all
-    from bs4 import BeautifulSoup
-
     xml = (
         '<root xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0">'
         '<table:table table:name="T">'
         '<table:table-column/><table:table-row table:style-name="ro1">'
         "<table:table-cell/></table:table-row></table:table></root>"
     )
-    table = BeautifulSoup(xml, "xml").find("table:table")
+    table = first(xml, "table:table")
     sheet = Sheet(table)
     assert sheet.row_style(0) is None
     assert sheet.column_style(0) is None
@@ -4488,15 +4620,15 @@ def test_save_round_trip_after_merge(writable_reader, tmp_path):
 def test_setting_bold_forks_a_private_style(writable_reader):
     s = writable_reader.sheet("Sheet1")
     c = s["A1"]
-    assert c.attrs.get("table:style-name") is None
+    assert c.style_name is None
     c.style.bold = True
-    forked_name = c.attrs.get("table:style-name")
+    forked_name = c.style_name
     assert forked_name is not None
     assert c.style.bold is True
 
     # a second property set on the same cell reuses the same forked style
     c.style.italic = True
-    assert c.attrs.get("table:style-name") == forked_name
+    assert c.style_name == forked_name
     assert c.style.bold is True and c.style.italic is True
 
 
@@ -4770,7 +4902,7 @@ def test_assigning_another_cells_style_points_at_the_same_style(writable_reader)
     s = writable_reader.sheet("Sheet1")
     s["A1"].style.bold = True
     s["B1"].style = s["A1"].style
-    assert s["B1"].attrs.get("table:style-name") == s["A1"].attrs.get("table:style-name")
+    assert s["B1"].style_name == s["A1"].style_name
     assert s["B1"].style.bold is True
 
 
@@ -4783,16 +4915,16 @@ def test_assigning_a_cell_directly_also_works(writable_reader):
 
 def test_assigning_a_bare_style_name_also_works(writable_reader):
     s = writable_reader.sheet("Sheet1")
-    name = s["A7"].attrs.get("table:style-name")  # ce2, has a real named style
+    name = s["A7"].style_name  # ce2, has a real named style
     s["B1"].style = name
-    assert s["B1"].attrs.get("table:style-name") == name
+    assert s["B1"].style_name == name
 
 
 def test_assigning_none_clears_the_style(writable_reader):
     s = writable_reader.sheet("Sheet1")
     s["A1"].style.bold = True
     s["A1"].style = None
-    assert s["A1"].attrs.get("table:style-name") is None
+    assert s["A1"].style_name is None
 
 
 def test_forking_after_a_style_copy_does_not_affect_the_source_cell(writable_reader):
@@ -4802,28 +4934,28 @@ def test_forking_after_a_style_copy_does_not_affect_the_source_cell(writable_rea
     s = writable_reader.sheet("Sheet1")
     s["A1"].style.bold = True
     s["B1"].style = s["A1"].style
-    assert s["A1"].attrs.get("table:style-name") == s["B1"].attrs.get("table:style-name")
+    assert s["A1"].style_name == s["B1"].style_name
 
     s["B1"].style.italic = True
     assert s["A1"].style.italic is False
     assert s["B1"].style.italic is True
     assert s["B1"].style.bold is True  # still carried over from the shared parent
-    assert s["A1"].attrs.get("table:style-name") != s["B1"].attrs.get("table:style-name")
+    assert s["A1"].style_name != s["B1"].style_name
 
 
 def _own_style_tag(reader, cell):
     """The cell's own <style:style> element, exactly as save() will
     serialise it."""
-    return reader._find_style(cell.attrs.get("table:style-name"), family="table-cell")
+    return reader._find_style(cell.style_name, family="table-cell")
 
 
 def _assert_parent_is_usable(reader, tag):
     """A style:parent-style-name is only honoured when it names a style from
     styles.xml: LibreOffice ignores an automatic one (content.xml) and falls
     back to Default, dropping everything the fork meant to inherit."""
-    parent = tag.get("style:parent-style-name")
+    parent = tag.get(qn("style:parent-style-name"))
     if parent is not None:
-        assert reader.data.find("style:style", attrs={"style:name": parent}) is None, (
+        assert first(reader.data, "style:style", style_name=parent) is None, (
             f"style:parent-style-name={parent!r} points at an automatic style"
         )
 
@@ -4844,15 +4976,13 @@ def test_forking_off_an_automatic_style_writes_its_properties_into_the_fork(writ
 
     tag = _own_style_tag(writable_reader, b)
     _assert_parent_is_usable(writable_reader, tag)
-    assert tag.find("style:text-properties")["fo:font-weight"] == "bold"
-    cell_props = tag.find("style:table-cell-properties")
-    assert cell_props["fo:border-left"] == "2pt solid #000000"
-    assert cell_props["fo:background-color"] == "#ffff00"
+    assert first(tag, "style:text-properties").get(qn("fo:font-weight")) == "bold"
+    cell_props = first(tag, "style:table-cell-properties")
+    assert cell_props.get(qn("fo:border-left")) == "2pt solid #000000"
+    assert cell_props.get(qn("fo:background-color")) == "#ffff00"
     # and the source cell keeps its own, untouched by the fork
-    assert (
-        _own_style_tag(writable_reader, a).find("style:table-cell-properties").get("fo:background-color")
-        is None
-    )
+    source = _own_style_tag(writable_reader, a)
+    assert first(source, "style:table-cell-properties").get(qn("fo:background-color")) is None
 
 
 def test_forking_off_a_named_style_keeps_it_as_the_parent(writable_reader):
@@ -4860,19 +4990,19 @@ def test_forking_off_a_named_style_keeps_it_as_the_parent(writable_reader):
     # fork links to it rather than copying it (later edits to it still apply)
     s = writable_reader.sheet("Sheet1")
     c = s["A1"]
-    c.attrs["table:style-name"] = "Default"
+    c.cell.set(qn("table:style-name"), "Default")
     c.style.italic = True
-    assert _own_style_tag(writable_reader, c)["style:parent-style-name"] == "Default"
+    assert _own_style_tag(writable_reader, c).get(qn("style:parent-style-name")) == "Default"
 
 
 def test_forking_carries_the_number_format_over(writable_reader):
     # style:data-style-name used to come along through the parent link too
     s = writable_reader.sheet("Sheet1")
     c = s["A7"]  # currency cell: its automatic style carries a data style
-    data_style = _own_style_tag(writable_reader, c)["style:data-style-name"]
+    data_style = _own_style_tag(writable_reader, c).get(qn("style:data-style-name"))
     displayed_before = c.text
     c.style.bold = True
-    assert _own_style_tag(writable_reader, c)["style:data-style-name"] == data_style
+    assert _own_style_tag(writable_reader, c).get(qn("style:data-style-name")) == data_style
     assert c.text == displayed_before
 
 
@@ -4886,10 +5016,10 @@ def test_repeated_forks_keep_accumulating_properties(writable_reader):
         c._own_style_name = None  # force the next write to fork again
     tag = _own_style_tag(writable_reader, c)
     _assert_parent_is_usable(writable_reader, tag)
-    text_props = tag.find("style:text-properties")
-    assert text_props["fo:font-weight"] == "bold"
-    assert text_props["fo:font-style"] == "italic"
-    assert tag.find("style:table-cell-properties")["fo:background-color"] == "#ffff00"
+    text_props = first(tag, "style:text-properties")
+    assert text_props.get(qn("fo:font-weight")) == "bold"
+    assert text_props.get(qn("fo:font-style")) == "italic"
+    assert first(tag, "style:table-cell-properties").get(qn("fo:background-color")) == "#ffff00"
 
 
 def test_assigning_an_invalid_style_value_raises(writable_reader):
@@ -5507,11 +5637,9 @@ def test_an_edit_leaves_the_braces_of_a_formula_as_they_are(tmp_path, edit, cell
 def _defined_extent(sheet):
     """(rows, columns) declared by the sheet's XML, repeats included - what
     a spreadsheet application counts against its maximum grid size."""
-    rows = sum(int(t.get("table:number-rows-repeated", "1")) for t in sheet.table.find_all("table:table-row"))
-    cols = sum(
-        int(t.get("table:number-columns-repeated", "1"))
-        for t in sheet.table.find_all("table:table-column", recursive=False)
-    )
+    rows = sum(_repeat(t, "table:number-rows-repeated") for t in every(sheet.table, "table:table-row"))
+    definitions = xmltree.children(sheet.table, "table:table-column")
+    cols = sum(_repeat(t, "table:number-columns-repeated") for t in definitions)
     return rows, cols
 
 
@@ -6419,9 +6547,8 @@ def test_removing_a_hyperlink_keeps_the_text(writable_reader):
 
 
 def test_removing_a_link_on_part_of_the_text_keeps_the_text_around_it(tmp_path):
-    # bs4's unwrap() keeps the text after the link; lxml has no unwrap, and
-    # the obvious stand-in drops that text (see tests/test_xmltree.py) - a
-    # port of cell.py has to keep this passing
+    # bs4's unwrap() kept the text after the link; lxml has no unwrap, and
+    # the obvious stand-in drops that text (see tests/test_xmltree.py)
     path = ods_with_sheet(
         tmp_path / "linked.ods",
         table_row(
@@ -6433,7 +6560,7 @@ def test_removing_a_link_on_part_of_the_text_keeps_the_text_around_it(tmp_path):
     assert cell.hyperlink == "https://example.com"
     cell.hyperlink = None
     assert cell.hyperlink is None
-    assert cell.cell.find("text:p").get_text() == "Voir ici pour le détail"
+    assert xmltree.text(first(cell.cell, "text:p")) == "Voir ici pour le détail"
 
 
 def test_overwriting_the_value_clears_the_hyperlink(writable_reader):
@@ -6497,8 +6624,8 @@ def _fill_pivot_source(s):
 
 
 def _find_pivot_table(reader, name):
-    tables = reader.data.find("table:data-pilot-tables")
-    return tables.find("table:data-pilot-table", attrs={"table:name": name}) if tables is not None else None
+    tables = first(reader.data, "table:data-pilot-tables")
+    return first(tables, "table:data-pilot-table", table_name=name) if tables is not None else None
 
 
 def test_create_pivot_table_writes_the_definition(writable_reader):
@@ -6511,16 +6638,16 @@ def test_create_pivot_table_writes_the_definition(writable_reader):
 
     tag = _find_pivot_table(r, "MyPivot")
     assert tag is not None
-    assert tag.get("table:target-range-address") == "SheetEmpty.E1"
-    source = tag.find("table:source-cell-range")
-    assert source.get("table:cell-range-address") == "SheetEmpty.A1:C5"
+    assert tag.get(qn("table:target-range-address")) == "SheetEmpty.E1"
+    source = first(tag, "table:source-cell-range")
+    assert source.get(qn("table:cell-range-address")) == "SheetEmpty.A1:C5"
 
-    fields = tag.find_all("table:data-pilot-field")
-    by_name = {f.get("table:source-field-name"): f for f in fields}
-    assert by_name["Category"].get("table:orientation") == "row"
-    assert by_name["Region"].get("table:orientation") == "column"
-    assert by_name["Amount"].get("table:orientation") == "data"
-    assert by_name["Amount"].get("table:function") == "sum"
+    fields = every(tag, "table:data-pilot-field")
+    by_name = {f.get(qn("table:source-field-name")): f for f in fields}
+    assert by_name["Category"].get(qn("table:orientation")) == "row"
+    assert by_name["Region"].get(qn("table:orientation")) == "column"
+    assert by_name["Amount"].get(qn("table:orientation")) == "data"
+    assert by_name["Amount"].get(qn("table:function")) == "sum"
 
 
 def test_create_pivot_table_no_computed_result_is_written(writable_reader):
@@ -6572,8 +6699,8 @@ def test_create_pivot_table_cross_sheet_source(writable_reader):
         "SheetEmpty.A1:C5", "E1", rows=["Category"], values={"Amount": "sum"}, name="CrossSheetPivot"
     )
     tag = _find_pivot_table(r, "CrossSheetPivot")
-    assert tag.get("table:target-range-address") == "Sheet1.E1"
-    assert tag.find("table:source-cell-range").get("table:cell-range-address") == "SheetEmpty.A1:C5"
+    assert tag.get(qn("table:target-range-address")) == "Sheet1.E1"
+    assert first(tag, "table:source-cell-range").get(qn("table:cell-range-address")) == "SheetEmpty.A1:C5"
 
 
 def test_save_round_trip_after_create_pivot_table(writable_reader, tmp_path):
@@ -6588,7 +6715,7 @@ def test_save_round_trip_after_create_pivot_table(writable_reader, tmp_path):
     reread = ODSReader(out)
     tag = _find_pivot_table(reread, "MyPivot")
     assert tag is not None
-    assert tag.get("table:target-range-address") == "SheetEmpty.E1"
+    assert tag.get(qn("table:target-range-address")) == "SheetEmpty.E1"
     # source data survived untouched
     assert reread.sheet("SheetEmpty")["A2"].value == "A"
 

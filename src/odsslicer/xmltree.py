@@ -1,8 +1,10 @@
-"""The operations odsslicer needs from an XML tree, on lxml alone - the
-prototype of the access layer that is to replace BeautifulSoup at 1.0 (see
-`ROADMAP.md`, and `benchmarks/LXML_STUDY.md` for the inventory behind it).
+"""The operations odsslicer needs from an XML tree, on lxml - the access
+layer that replaced BeautifulSoup at 1.0 (see `ROADMAP.md`, and
+`benchmarks/LXML_STUDY.md` for the inventory behind it). Every part of the
+package goes through it: `content.xml`, `styles.xml`, `meta.xml`,
+`settings.xml` and the charts' own content.
 
-This is not a façade over lxml: code keeps using lxml elements directly -
+This is not a façade over lxml: code uses lxml elements directly -
 `el.get(name)`, `el.set(name, value)`, `el.getparent()`, `el.iterchildren()`.
 What lives here is only what lxml does differently enough from bs4 that a
 hand translation gets it wrong:
@@ -29,7 +31,9 @@ hand translation gets it wrong:
 - **Search.** bs4's `find_all` searches descendants unless told
   `recursive=False`, and never returns the element it starts from; lxml's
   `el.iter(name)` includes `el` itself, `el.findall(name)` looks at children
-  only. `children()` and `descendants()` say which they mean. A search in
+  only, and iterating an element yields its comments too, whose `tag` is
+  no name. `children()`, `child()`, `elements()` and `descendants()` say
+  which they mean. A search in
   document order from an element, which bs4 offers as `previous_elements`
   and lxml not at all, is `preceding()`/`following()`.
 - **Parsing.** bs4 drives lxml with `recover=True`, which repairs anything:
@@ -46,10 +50,12 @@ from lxml import etree
 
 __all__ = [
     "NAMESPACES",
+    "attributes",
+    "child",
     "children",
     "clone",
     "descendants",
-    "discard",
+    "elements",
     "following",
     "insert_after",
     "insert_before",
@@ -69,6 +75,7 @@ __all__ = [
     "set_paragraph_text",
     "set_text",
     "text",
+    "unset",
     "unwrap",
     "wrap_contents",
 ]
@@ -173,9 +180,46 @@ def children(element: etree._Element, name: str) -> "list[etree._Element]":
     the descendants took them for the cell's value once.
 
     A list, as `find_all` returns, rather than lxml's iterator: the code
-    tests the result for emptiness once per cell, and `xmlbs.children`, its
-    bs4 counterpart, cost a tenth of `Sheet.load` as a generator."""
+    tests the result for emptiness once per cell, and its bs4 version cost
+    a tenth of `Sheet.load` as a generator."""
     return list(element.iterchildren(qn(name)))
+
+
+def child(element: etree._Element, name: str) -> "etree._Element | None":
+    """The first child of `element` named `name`, `None` if it has none -
+    bs4's `find(name, recursive=False)`. Compared with `is None`, never by
+    truth: an lxml element with no children is false."""
+    return next(element.iterchildren(qn(name)), None)
+
+
+def elements(element: etree._Element) -> "list[etree._Element]":
+    """The child elements of `element`, in order, its comments and
+    processing instructions left out - bs4's `find_all(True,
+    recursive=False)`. Iterating an lxml element yields its comments too,
+    whose `tag` is a function: asking one its name raises."""
+    return list(element.iterchildren(etree.Element))
+
+
+def attributes(element: etree._Element) -> "dict[str, str]":
+    """`element`'s attributes, in the order the file writes them, keyed by
+    prefixed name - `"fo:background-color"` - with the specification's
+    prefix whatever the document's (see `prefixed`), and the document's own
+    for a namespace the specification does not name (LibreOffice's
+    `officeooo:rsid`, say), as bs4 keyed them. What a caller handed a
+    dictionary of attributes gets: `CellStyle.cell_properties`."""
+    found: dict[str, str] = {}
+    nsmap: dict[str | None, str] | None = None
+    for name, value in element.attrib.items():
+        key = prefixed(cast(str, name))
+        if key.startswith("{"):
+            if nsmap is None:
+                nsmap = cast("dict[str | None, str]", element.nsmap)
+            uri, local = key[1:].split("}", 1)
+            prefix = next((p for p, bound in nsmap.items() if bound == uri and p is not None), None)
+            if prefix is not None:
+                key = f"{prefix}:{local}"
+        found[key] = cast(str, value)
+    return found
 
 
 def descendants(element: etree._Element, *names: str) -> "Iterator[etree._Element]":
@@ -233,9 +277,7 @@ def set_text(element: etree._Element, value: str) -> None:
     element.text = value
 
 
-def new(
-    name: str, attrs: "dict[str, str] | None" = None, *, near: "etree._Element | None" = None
-) -> etree._Element:
+def new(name: str, attrs: "dict[str, str] | None" = None) -> etree._Element:
     """A new, detached element named `name`, its attributes named the same
     way (`{"table:name": "Sheet1"}`).
 
@@ -246,12 +288,15 @@ def new(
     that namespace, lxml drops the declaration and takes the document's
     prefix - `tab:table-row` under a document that says `tab:`.
 
-    `near` is ignored: `xmlbs.new`, the bs4 counterpart, needs an element
-    of the document to decide whether the new one declares its namespace,
-    which lxml decides by itself on insertion. Accepted here so that the
-    same call works on both."""
-    uri = NAMESPACES[name.split(":", 1)[0]]
-    element = etree.Element(qn(name), nsmap={_PREFIXES[uri]: uri})
+    The namespaces of `attrs` are declared the same way: an attribute set on
+    a detached element in a namespace it does not declare gets a prefix of
+    lxml's making, `ns0:href`, which stays wherever the document does not
+    bind that namespace - a link's `xlink:href` is best given here."""
+    nsmap = {}
+    for qualified in (name, *(attrs or ())):
+        prefix = qualified.split(":", 1)[0]
+        nsmap[prefix] = NAMESPACES[prefix]
+    element = etree.Element(qn(name), nsmap=nsmap)
     for key, value in (attrs or {}).items():
         element.set(qn(key), value)
     return element
@@ -273,7 +318,9 @@ def _say_before(element: etree._Element, value: "str | None") -> None:
 def remove(element: etree._Element) -> etree._Element:
     """Take `element` out of its tree, leaving the text that followed it in
     place, and return it detached - bs4's `extract()`, and its
-    `decompose()` once nothing holds the element any more.
+    `decompose()`: lxml frees an element once nothing holds it, so the one
+    operation serves an element put elsewhere and one dropped. A detached
+    element stays readable, where bs4's `decompose()` emptied it.
 
     `parent.remove(element)` alone would take that text out too: removing
     the span of `Total<text:span>:</text:span> 42 €` leaves `Total`."""
@@ -284,13 +331,6 @@ def remove(element: etree._Element) -> etree._Element:
     element.tail = None
     parent.remove(element)
     return element
-
-
-def discard(element: etree._Element) -> None:
-    """Take `element` out of its tree for good - bs4's `decompose()`:
-    `remove`, the element left to go, which lxml frees once nothing holds
-    it. bs4 needs the distinction, lxml not."""
-    remove(element)
 
 
 def clone(element: etree._Element) -> etree._Element:
@@ -348,6 +388,13 @@ def wrap_contents(element: etree._Element, wrapper: etree._Element) -> None:
     element.append(wrapper)
 
 
+def unset(element: etree._Element, name: str) -> None:
+    """Remove attribute `name` (by namespace URI, as `qn` spells it) from
+    `element` if it has it - bs4's `tag.attrs.pop(name, None)`."""
+    if name in element.attrib:
+        del element.attrib[name]
+
+
 def local_name(element: etree._Element) -> str:
     """`element`'s name without its namespace - `"table-row"` - bs4's
     `tag.name`."""
@@ -390,7 +437,15 @@ def paragraph_text(paragraph: etree._Element) -> str:
     """The text of a `<text:p>` as a spreadsheet application shows it: `text`
     with the whitespace ODF writes as elements put back - `<text:s text:c="N"/>`
     as N spaces, `<text:tab/>` as a tab, `<text:line-break/>` as a newline.
-    `xmlbs.paragraph_text` on lxml: see it for why."""
+
+    ODF lets a consumer collapse the whitespace a paragraph holds literally,
+    so a producer writes what has to survive as elements: LibreOffice does it
+    for every run of two spaces or more, every leading space, every tab and
+    every Shift+Enter. BeautifulSoup's `get_text()`, which odsslicer read a
+    paragraph with before 0.14.3, concatenated the text nodes only and
+    dropped all of them (issue #27): "a<text:s text:c="2"/>b" read "ab".
+    Literal whitespace is kept as written rather than collapsed: LibreOffice
+    shows it that way, which is what the reader of a cell expects to get."""
     if len(paragraph) == 0:
         return paragraph.text or ""  # one text node, the common case
     parts: list[str] = []
@@ -415,11 +470,14 @@ def paragraph_text(paragraph: etree._Element) -> str:
 
 
 def set_paragraph_text(paragraph: etree._Element, value: str) -> None:
-    """Make `value` the whole content of `paragraph`, a run of spaces written
-    as one space and `<text:s text:c="N-1"/>` (all of it as `<text:s/>` at the
-    start), a tab as `<text:tab/>` - as LibreOffice writes them, and as
-    `xmlbs.set_paragraph_text` does on bs4. In lxml the text after each
-    element is that element's tail, which is where it goes."""
+    """Make `value` the whole content of `paragraph`, a `<text:p>` or an
+    element inside one, a run of spaces written as one space and
+    `<text:s text:c="N-1"/>` (all of it as `<text:s/>` at the start), a tab as
+    `<text:tab/>` - as LibreOffice writes them. Literal whitespace would read
+    back the same in LibreOffice, but ODF lets any consumer collapse it - an
+    encoded run survives every one of them. A newline is the caller's
+    business: in a cell it starts a new paragraph. In lxml the text after
+    each element is that element's tail, which is where it goes."""
     set_text(paragraph, "")
     paragraph.text = None
     if "  " not in value and "\t" not in value and not value.startswith(" "):

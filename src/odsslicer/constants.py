@@ -5,7 +5,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .datetimes import _parse_date_value, _parse_time_value
-from .xmlbs import new
+from .xmltree import new
 
 RE_STRING_CELL = re.compile(r"([A-Z]+)?([0-9]+)?(:)?([A-Z]+)?([0-9]+)?")
 TAG_CELL = ["table:table-cell", "table:covered-table-cell"]

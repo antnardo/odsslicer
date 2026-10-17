@@ -1,8 +1,8 @@
 # mypy: disable-error-code="union-attr"
-# (bs4 Tag/NavigableString/None unions are narrowed dynamically all over this
-# module, guarded by runtime checks mypy can't see through - silencing that
-# one error class here beats dozens of value-free asserts/casts. Every other
-# error class, and all signatures, remain fully checked.)
+# (`Element | None` unions are narrowed dynamically all over this module,
+# guarded by runtime checks mypy can't see through - silencing that one error
+# class here beats dozens of value-free asserts/casts. Every other error
+# class, and all signatures, remain fully checked.)
 """Resolved ODF styles: NumberFormat (incl. creation and conditional formats),
 Border, CellStyle, RowStyle, ColumnStyle, TableStyle."""
 
@@ -11,12 +11,12 @@ import re
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from bs4 import Tag
+from lxml import etree
 
 from .dateformats import _STANDARD_FORMATS
 from .datenames import _date_names
 from .datetimes import _ONE_DAY, _as_datetime, _as_timedelta, _clock_parts
-from .xmlbs import insert_before, local_name, new, set_text, text
+from .xmltree import attributes, child, elements, insert_before, local_name, new, qn, set_text, text, unset
 from .xmlutils import _ensure_style_child
 
 if TYPE_CHECKING:
@@ -49,6 +49,7 @@ _DATE_TIME_COMPONENT_NAMES = (
     "text",
 )
 _TIME_OF_DAY_COMPONENT_NAMES = frozenset({"hours", "minutes", "seconds", "am-pm"})
+_STYLE_NAME = qn("style:name")
 
 # The text around the sign of LibreOffice's standard percentage format, by
 # locale, where it is not a bare "%" after the number: a space in French, a
@@ -139,45 +140,50 @@ class NumberFormat:
     }
 
     def __init__(
-        self, tag: Tag, reader: "ODSReader | None" = None, _seen: "set[str | None] | None" = None
+        self, tag: etree._Element, reader: "ODSReader | None" = None, _seen: "set[str | None] | None" = None
     ) -> None:
         self._tag = tag
         self._reader = reader
-        self.name = cast("str | None", tag.get("style:name"))
+        self.name = tag.get(qn("style:name"))
         name = local_name(tag)
         self.family = name[: -len("-style")] if name.endswith("-style") else name
-        number_tag = tag.find("number:number", recursive=False) or tag.find("number:boolean", recursive=False)
+        # `is None`, not `or`: an element with no children is false in lxml
+        number_tag = child(tag, "number:number")
+        if number_tag is None:
+            number_tag = child(tag, "number:boolean")
         self.decimal_places = None
         self.grouping = None
         if number_tag is not None:
-            places = number_tag.attrs.get("number:decimal-places")
+            places = number_tag.get(qn("number:decimal-places"))
             self.decimal_places = int(places) if places is not None else None
-            self.grouping = number_tag.attrs.get("number:grouping") == "true"
-        symbol = tag.find("number:currency-symbol", recursive=False)
-        self.currency_symbol = text(cast(Tag, symbol)) if symbol is not None else None
-        text_props = tag.find("style:text-properties", recursive=False)
-        self.font_color = text_props.attrs.get("fo:color") if text_props is not None else None
+            self.grouping = number_tag.get(qn("number:grouping")) == "true"
+        symbol = child(tag, "number:currency-symbol")
+        self.currency_symbol = text(symbol) if symbol is not None else None
+        text_props = child(tag, "style:text-properties")
+        self.font_color = text_props.get(qn("fo:color")) if text_props is not None else None
         # for date/time styles: the ordered sequence of components/literal
         # text making up the layout, e.g. [("day", "long"), ("text", "/"), ...]
         self.components = None
         # a time counted in full, [HH]:MM, rather than around the clock
-        self.elapsed = tag.get("number:truncate-on-overflow") == "false"
+        self.elapsed = tag.get(qn("number:truncate-on-overflow")) == "false"
         if self.family in ("date", "time"):
             self.components = [
                 (
-                    local_name(child),
-                    text(child) if local_name(child) == "text" else child.attrs.get("number:style", "short"),
+                    local_name(component),
+                    text(component)
+                    if local_name(component) == "text"
+                    else component.get(qn("number:style"), "short"),
                 )
-                for child in tag.find_all(True, recursive=False)
-                if local_name(child) in _DATE_TIME_COMPONENT_NAMES
+                for component in elements(tag)
+                if local_name(component) in _DATE_TIME_COMPONENT_NAMES
             ]
 
         _seen = _seen or set()
         _seen.add(self.name)
         self.conditions = []
-        for style_map in tag.find_all("style:map", recursive=False):
-            condition = style_map.attrs.get("style:condition")
-            apply_name = style_map.attrs.get("style:apply-style-name")
+        for style_map in tag.iterchildren(qn("style:map")):
+            condition = style_map.get(qn("style:condition"))
+            apply_name = style_map.get(qn("style:apply-style-name"))
             target = None
             if reader is not None and apply_name and apply_name not in _seen:
                 target_tag = reader._find_number_style(apply_name)
@@ -246,27 +252,27 @@ class NumberFormat:
         if elapsed and family != "time":
             raise ValueError(f"elapsed=True applies to family='time', not {family!r}")
 
-        tag = new(cls._FAMILY_TAGS[family], near=reader.data)
-        tag.attrs["style:name"] = reader._new_style_name("N")
+        # its name given here, where the element is made: an attribute of
+        # another namespace set on a detached element gets a prefix of
+        # lxml's own (see `xmltree.new`)
+        tag = new(cls._FAMILY_TAGS[family], {"style:name": reader._new_style_name("N")})
         if font_color is not None:
-            text_props = new("style:text-properties", near=reader.data)
-            text_props.attrs["fo:color"] = font_color
-            tag.append(text_props)
+            tag.append(new("style:text-properties", {"fo:color": font_color}))
 
         if family in ("number", "percentage", "currency"):
-            number_child = new("number:number", near=reader.data)
+            number_child = new("number:number")
             if decimal_places is not None:
-                number_child.attrs["number:decimal-places"] = str(decimal_places)
-                number_child.attrs["number:min-decimal-places"] = str(decimal_places)
-            number_child.attrs["number:min-integer-digits"] = str(min_integer_digits)
+                number_child.set(qn("number:decimal-places"), str(decimal_places))
+                number_child.set(qn("number:min-decimal-places"), str(decimal_places))
+            number_child.set(qn("number:min-integer-digits"), str(min_integer_digits))
             if grouping:
-                number_child.attrs["number:grouping"] = "true"
+                number_child.set(qn("number:grouping"), "true")
             tag.append(number_child)
             if family == "percentage":
                 # a space before the sign always, where en-US has none
                 for affix, before in zip(_percent_affixes(reader), (True, False), strict=True):
                     if affix:
-                        text_child = new("number:text", near=reader.data)
+                        text_child = new("number:text")
                         set_text(text_child, affix)
                         if before:
                             insert_before(number_child, text_child)
@@ -274,26 +280,26 @@ class NumberFormat:
                             tag.append(text_child)
             elif family == "currency":
                 assert currency_symbol is not None  # validated above
-                separator = new("number:text", near=reader.data)
+                separator = new("number:text")
                 set_text(separator, " ")
                 tag.append(separator)
-                symbol_child = new("number:currency-symbol", near=reader.data)
+                symbol_child = new("number:currency-symbol")
                 set_text(symbol_child, currency_symbol)
                 tag.append(symbol_child)
         elif family == "boolean":
-            tag.append(new("number:boolean", near=reader.data))
+            tag.append(new("number:boolean"))
         else:  # date / time
             if elapsed:
-                tag.attrs["number:truncate-on-overflow"] = "false"
+                tag.set(qn("number:truncate-on-overflow"), "false")
             for kind, value in components:
                 if kind == "text":
-                    child = new("number:text", near=reader.data)
-                    set_text(child, value)
+                    component = new("number:text")
+                    set_text(component, value)
                 else:
-                    child = new(f"number:{kind}", near=reader.data)
+                    component = new(f"number:{kind}")
                     if value:
-                        child.attrs["number:style"] = value
-                tag.append(child)
+                        component.set(qn("number:style"), value)
+                tag.append(component)
 
         reader._automatic_styles().append(tag)
         return cls(tag, reader=reader)
@@ -308,9 +314,9 @@ class NumberFormat:
             raise RuntimeError(f"number format {self.name!r} has no underlying tag and cannot be written to")
         if not isinstance(target, NumberFormat):
             raise TypeError(f"target must be a NumberFormat, got {type(target)!r}")
-        style_map = new("style:map", near=self._reader.data)
-        style_map.attrs["style:condition"] = condition
-        style_map.attrs["style:apply-style-name"] = target.name
+        style_map = new(
+            "style:map", {"style:condition": condition, "style:apply-style-name": cast(str, target.name)}
+        )
         self._tag.append(style_map)
         # a format a named cell style uses lives in `styles.xml`, which
         # save() copies through unless told something wrote to it
@@ -359,11 +365,11 @@ def _render_number_from_format(number_format: "NumberFormat | None", value: floa
     decimals = number_format.decimal_places or 0
     rendered = f"{value * scale:,.{decimals}f}" if number_format.grouping else f"{value * scale:.{decimals}f}"
     parts = []
-    for child in number_format._tag.find_all(True, recursive=False):
-        if local_name(child) == "number":
+    for component in elements(number_format._tag):
+        if local_name(component) == "number":
             parts.append(rendered)
-        elif local_name(child) in ("text", "currency-symbol"):
-            parts.append(text(child))
+        elif local_name(component) in ("text", "currency-symbol"):
+            parts.append(text(component))
     return "".join(parts) if rendered in parts else rendered
 
 
@@ -407,32 +413,30 @@ def _render_date_time_from_format(
     # `number:format-source="language"`: LibreOffice shows the system's own
     # short date or date-time instead, whatever the elements - on macOS, the
     # one set in its regional settings. Nothing here can render that.
-    if tag.get("number:format-source") == "language":
+    if tag.get(qn("number:format-source")) == "language":
         return None
     children = [
-        child
-        for child in tag.find_all(True, recursive=False)
-        if local_name(child) in _DATE_TIME_COMPONENT_NAMES
+        component for component in elements(tag) if local_name(component) in _DATE_TIME_COMPONENT_NAMES
     ]
-    kinds = {local_name(child) for child in children}
+    kinds = {local_name(component) for component in children}
     named = any(
-        local_name(child) == "day-of-week"
-        or (local_name(child) == "month" and child.get("number:textual") == "true")
-        for child in children
+        local_name(component) == "day-of-week"
+        or (local_name(component) == "month" and component.get(qn("number:textual")) == "true")
+        for component in children
     )
     decimals = max(
         (
-            int(child.get("number:decimal-places", "0"))
-            for child in children
-            if local_name(child) == "seconds"
+            int(component.get(qn("number:decimal-places"), "0"))
+            for component in children
+            if local_name(component) == "seconds"
         ),
         default=0,
     )
     names = None
     if named or decimals:
-        language = tag.get("number:language")
+        language = tag.get(qn("number:language"))
         locale = (
-            (language, tag.get("number:country"))
+            (language, tag.get(qn("number:country")))
             if language
             else number_format._reader._document_locale()
             if number_format._reader is not None
@@ -445,7 +449,7 @@ def _render_date_time_from_format(
     if isinstance(value, (dt.time, dt.timedelta)):
         # a time of day too: an elapsed [MM]:SS format shows 02:05:03 as 125:03
         delta = _as_timedelta(value)
-        if tag.get("number:truncate-on-overflow") == "false":
+        if tag.get(qn("number:truncate-on-overflow")) == "false":
             if decimals:
                 delta = _rounded(delta, decimals)
             sign, fields = _elapsed_fields(delta, kinds)
@@ -457,10 +461,10 @@ def _render_date_time_from_format(
         fields = _as_datetime(value)
         fraction = fields.microsecond
     parts = []
-    for child in children:
-        kind, style = local_name(child), child.get("number:style", "short")
+    for component in children:
+        kind, style = local_name(component), component.get(qn("number:style"), "short")
         if kind == "text":
-            parts.append(text(child))
+            parts.append(text(component))
         elif kind == "am-pm":
             parts.append("PM" if fields.hour >= 12 else "AM")
         elif kind == "hours" and "am-pm" in kinds:  # 13:45 shows as 01:45 PM
@@ -470,7 +474,7 @@ def _render_date_time_from_format(
             assert names is not None  # checked above, for a date
             days = names.days if style == "long" else names.short_days
             parts.append(days[(fields.weekday() + 1) % 7])  # Sunday first
-        elif kind == "month" and child.get("number:textual") == "true":
+        elif kind == "month" and component.get(qn("number:textual")) == "true":
             assert names is not None
             if "day" in kinds:  # declined next to a day, in some languages
                 months = names.months_with_day if style == "long" else names.short_months_with_day
@@ -480,7 +484,7 @@ def _render_date_time_from_format(
         elif kind in _DATE_TIME_RENDER_LONG:
             renderer = _DATE_TIME_RENDER_LONG if style == "long" else _DATE_TIME_RENDER_SHORT
             parts.append(renderer[kind](fields))
-            places = int(child.get("number:decimal-places", "0")) if kind == "seconds" else 0
+            places = int(component.get(qn("number:decimal-places"), "0")) if kind == "seconds" else 0
             if places:
                 separator = names.decimal if names is not None else "."
                 parts.append(separator + _fraction_digits(fraction, places))
@@ -606,17 +610,18 @@ class CellStyle:
         chain = []
         seen = set()
         current = reader._find_style(name, family="table-cell")
-        while current is not None and current.get("style:name") not in seen:
-            seen.add(current.get("style:name"))
+        while current is not None and current.get(_STYLE_NAME) not in seen:
+            seen.add(current.get(_STYLE_NAME))
             chain.append(current)
-            parent = cast("str | None", current.get("style:parent-style-name"))
+            parent = current.get(qn("style:parent-style-name"))
             current = reader._find_style(parent, family="table-cell") if parent else None
 
         def prop(tag_name: str, attr: str) -> "str | None":
+            qualified = qn(attr)
             for style in chain:
-                child = style.find(tag_name, recursive=False)
-                if child is not None and attr in child.attrs:
-                    return child.attrs[attr]
+                props = child(style, tag_name)
+                if props is not None and qualified in props.attrib:
+                    return cast(str, props.get(qualified))
             return None
 
         self._bold = prop("style:text-properties", "fo:font-weight") == "bold"
@@ -649,33 +654,32 @@ class CellStyle:
         # itself resolves it within a single style declaration.
         self._border_top = self._border_bottom = self._border_left = self._border_right = None
         for style in chain:
-            cell_props = style.find("style:table-cell-properties", recursive=False)
-            if cell_props is None or not any(a in cell_props.attrs for a in self._BORDER_ATTRS):
+            cell_props = child(style, "style:table-cell-properties")
+            if cell_props is None or not any(qn(a) in cell_props.attrib for a in self._BORDER_ATTRS):
                 continue
-            attrs = cell_props.attrs
-            shorthand = attrs.get("fo:border")
-            self._border_top = _make_border(attrs.get("fo:border-top", shorthand))
-            self._border_bottom = _make_border(attrs.get("fo:border-bottom", shorthand))
-            self._border_left = _make_border(attrs.get("fo:border-left", shorthand))
-            self._border_right = _make_border(attrs.get("fo:border-right", shorthand))
+            shorthand = cell_props.get(qn("fo:border"))
+            self._border_top = _make_border(cell_props.get(qn("fo:border-top"), shorthand))
+            self._border_bottom = _make_border(cell_props.get(qn("fo:border-bottom"), shorthand))
+            self._border_left = _make_border(cell_props.get(qn("fo:border-left"), shorthand))
+            self._border_right = _make_border(cell_props.get(qn("fo:border-right"), shorthand))
             break
 
         # raw, flattened property dicts as an escape hatch for anything not
-        # surfaced above - base style first, so a nearer style overrides it
+        # surfaced above - base style first, so a nearer style overrides it.
+        # Keyed with the specification's prefixes, whatever the file binds
+        # (`xmltree.attributes`)
         self.cell_properties: dict[str, str] = {}
         self.text_properties: dict[str, str] = {}
         for style in reversed(chain):
-            cell_props = style.find("style:table-cell-properties", recursive=False)
+            cell_props = child(style, "style:table-cell-properties")
             if cell_props is not None:
-                self.cell_properties.update(cell_props.attrs)
-            text_props = style.find("style:text-properties", recursive=False)
+                self.cell_properties.update(attributes(cell_props))
+            text_props = child(style, "style:text-properties")
             if text_props is not None:
-                self.text_properties.update(text_props.attrs)
+                self.text_properties.update(attributes(text_props))
 
-        data_style_name = cast(
-            "str | None",
-            next((s.get("style:data-style-name") for s in chain if s.get("style:data-style-name")), None),
-        )
+        data_style = qn("style:data-style-name")
+        data_style_name = next((s.get(data_style) for s in chain if s.get(data_style)), None)
         self._number_format = None
         if data_style_name:
             number_tag = reader._find_number_style(data_style_name)
@@ -693,11 +697,11 @@ class CellStyle:
         self._require_cell()
         tag = self._cell._ensure_own_style()
         if raw_value is None:
-            child = tag.find(props_tag_name, recursive=False)
-            if child is not None:
-                child.attrs.pop(attr, None)
+            props = child(tag, props_tag_name)
+            if props is not None:
+                unset(props, qn(attr))
             return
-        _ensure_style_child(tag, props_tag_name).attrs[attr] = raw_value
+        _ensure_style_child(tag, props_tag_name).set(qn(attr), raw_value)
 
     def _write_border_sides(self, updates: "dict[str, Border | str | None]") -> None:
         """Set 1+ of the 4 border sides, carrying the other (currently
@@ -712,10 +716,10 @@ class CellStyle:
         }
         values.update(updates)
         props = _ensure_style_child(tag, "style:table-cell-properties")
-        props.attrs.pop("fo:border", None)
+        unset(props, qn("fo:border"))
         for key, value in values.items():
             raw = _border_to_raw(value)
-            props.attrs[self._BORDER_SIDE_ATTRS[key]] = raw if raw is not None else "none"
+            props.set(qn(self._BORDER_SIDE_ATTRS[key]), raw if raw is not None else "none")
             setattr(self, f"_{key}", _make_border(raw))
 
     @property
@@ -746,13 +750,13 @@ class CellStyle:
         tag = self._cell._ensure_own_style()
         props = _ensure_style_child(tag, "style:text-properties")
         if value:
-            props.attrs["style:text-underline-style"] = "solid"
-            props.attrs["style:text-underline-width"] = "auto"
-            props.attrs["style:text-underline-color"] = "font-color"
+            props.set(qn("style:text-underline-style"), "solid")
+            props.set(qn("style:text-underline-width"), "auto")
+            props.set(qn("style:text-underline-color"), "font-color")
         else:
-            props.attrs["style:text-underline-style"] = "none"
-            props.attrs.pop("style:text-underline-width", None)
-            props.attrs.pop("style:text-underline-color", None)
+            props.set(qn("style:text-underline-style"), "none")
+            unset(props, qn("style:text-underline-width"))
+            unset(props, qn("style:text-underline-color"))
         self._underline = bool(value)
 
     @property
@@ -953,7 +957,7 @@ class CellStyle:
         self._require_cell()
         tag = self._cell._ensure_own_style()
         if fmt is None:
-            tag.attrs.pop("style:data-style-name", None)
+            unset(tag, qn("style:data-style-name"))
             self._number_format = None
             self._cell._read_by_format()
             return
@@ -966,7 +970,7 @@ class CellStyle:
         number_tag = self._cell.sheet.reader._find_number_style(name)
         if number_tag is None:
             raise ValueError(f"no number format named {name!r} exists in this document")
-        tag.attrs["style:data-style-name"] = name
+        tag.set(qn("style:data-style-name"), cast(str, name))
         self._number_format = NumberFormat(number_tag, reader=self._cell.sheet.reader)
         self._cell._read_by_format()
 
@@ -989,14 +993,16 @@ class RowStyle:
     style already had (all 3 properties come from one single style tag,
     not a chain, so nothing here is resolved independently)."""
 
-    def __init__(self, tag: "Tag | None", sheet: "Sheet | None" = None, row: "int | None" = None) -> None:
+    def __init__(
+        self, tag: "etree._Element | None", sheet: "Sheet | None" = None, row: "int | None" = None
+    ) -> None:
         self._sheet = sheet
         self._row = row
-        self.name = tag.get("style:name") if tag is not None else None
-        props = tag.find("style:table-row-properties", recursive=False) if tag is not None else None
-        self._height = props.attrs.get("style:row-height") if props is not None else None
-        self._optimal_height = props is not None and props.attrs.get("style:use-optimal-row-height") == "true"
-        self._visible = props is None or props.attrs.get("table:visibility", "visible") == "visible"
+        self.name = tag.get(_STYLE_NAME) if tag is not None else None
+        props = child(tag, "style:table-row-properties") if tag is not None else None
+        self._height = props.get(qn("style:row-height")) if props is not None else None
+        self._optimal_height = props is not None and props.get(qn("style:use-optimal-row-height")) == "true"
+        self._visible = props is None or props.get(qn("table:visibility"), "visible") == "visible"
 
     def _require_owner(self) -> None:
         if self._sheet is None or self._row is None:
@@ -1013,10 +1019,10 @@ class RowStyle:
             self._sheet._ensure_row_style(cast(int, self._row)), "style:table-row-properties"
         )
         if value is None:
-            props.attrs.pop("style:row-height", None)
+            unset(props, qn("style:row-height"))
         else:
-            props.attrs["style:row-height"] = value
-        props.attrs["style:use-optimal-row-height"] = "false"
+            props.set(qn("style:row-height"), value)
+        props.set(qn("style:use-optimal-row-height"), "false")
         self._height = value
         self._optimal_height = False
 
@@ -1030,7 +1036,7 @@ class RowStyle:
         props = _ensure_style_child(
             self._sheet._ensure_row_style(cast(int, self._row)), "style:table-row-properties"
         )
-        props.attrs["style:use-optimal-row-height"] = "true" if value else "false"
+        props.set(qn("style:use-optimal-row-height"), "true" if value else "false")
         self._optimal_height = bool(value)
 
     @property
@@ -1043,7 +1049,7 @@ class RowStyle:
         props = _ensure_style_child(
             self._sheet._ensure_row_style(cast(int, self._row)), "style:table-row-properties"
         )
-        props.attrs["table:visibility"] = "visible" if value else "collapse"
+        props.set(qn("table:visibility"), "visible" if value else "collapse")
         self._visible = bool(value)
 
     def __repr__(self) -> str:
@@ -1059,13 +1065,15 @@ class ColumnStyle:
     automatic style on first use (see `Sheet._ensure_column_style`),
     carrying over whatever the column's current style already had."""
 
-    def __init__(self, tag: "Tag | None", sheet: "Sheet | None" = None, col: "int | None" = None) -> None:
+    def __init__(
+        self, tag: "etree._Element | None", sheet: "Sheet | None" = None, col: "int | None" = None
+    ) -> None:
         self._sheet = sheet
         self._col = col
-        self.name = tag.get("style:name") if tag is not None else None
-        props = tag.find("style:table-column-properties", recursive=False) if tag is not None else None
-        self._width = props.attrs.get("style:column-width") if props is not None else None
-        self._visible = props is None or props.attrs.get("table:visibility", "visible") == "visible"
+        self.name = tag.get(_STYLE_NAME) if tag is not None else None
+        props = child(tag, "style:table-column-properties") if tag is not None else None
+        self._width = props.get(qn("style:column-width")) if props is not None else None
+        self._visible = props is None or props.get(qn("table:visibility"), "visible") == "visible"
 
     def _require_owner(self) -> None:
         if self._sheet is None or self._col is None:
@@ -1082,9 +1090,9 @@ class ColumnStyle:
             self._sheet._ensure_column_style(cast(int, self._col)), "style:table-column-properties"
         )
         if value is None:
-            props.attrs.pop("style:column-width", None)
+            unset(props, qn("style:column-width"))
         else:
-            props.attrs["style:column-width"] = value
+            props.set(qn("style:column-width"), value)
         self._width = value
 
     @property
@@ -1097,7 +1105,7 @@ class ColumnStyle:
         props = _ensure_style_child(
             self._sheet._ensure_column_style(cast(int, self._col)), "style:table-column-properties"
         )
-        props.attrs["table:visibility"] = "visible" if value else "collapse"
+        props.set(qn("table:visibility"), "visible" if value else "collapse")
         self._visible = bool(value)
 
     def __repr__(self) -> str:
@@ -1114,12 +1122,12 @@ class TableStyle:
     `Sheet._ensure_table_style`), carrying over whatever the sheet's
     current style already had."""
 
-    def __init__(self, tag: "Tag | None", sheet: "Sheet | None" = None) -> None:
+    def __init__(self, tag: "etree._Element | None", sheet: "Sheet | None" = None) -> None:
         self._sheet = sheet
-        self.name = tag.get("style:name") if tag is not None else None
-        props = tag.find("style:table-properties", recursive=False) if tag is not None else None
-        self._tab_color = props.attrs.get("table:tab-color") if props is not None else None
-        self._visible = props is None or props.attrs.get("table:display", "true") != "false"
+        self.name = tag.get(_STYLE_NAME) if tag is not None else None
+        props = child(tag, "style:table-properties") if tag is not None else None
+        self._tab_color = props.get(qn("table:tab-color")) if props is not None else None
+        self._visible = props is None or props.get(qn("table:display"), "true") != "false"
 
     def _require_owner(self) -> None:
         if self._sheet is None:
@@ -1134,9 +1142,9 @@ class TableStyle:
         self._require_owner()
         props = _ensure_style_child(self._sheet._ensure_table_style(), "style:table-properties")
         if value is None:
-            props.attrs.pop("table:tab-color", None)
+            unset(props, qn("table:tab-color"))
         else:
-            props.attrs["table:tab-color"] = value
+            props.set(qn("table:tab-color"), value)
         self._tab_color = value
 
     @property
@@ -1147,7 +1155,7 @@ class TableStyle:
     def visible(self, value: bool) -> None:
         self._require_owner()
         props = _ensure_style_child(self._sheet._ensure_table_style(), "style:table-properties")
-        props.attrs["table:display"] = "true" if value else "false"
+        props.set(qn("table:display"), "true" if value else "false")
         self._visible = bool(value)
 
     def __repr__(self) -> str:

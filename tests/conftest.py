@@ -12,18 +12,19 @@ from xml.sax.saxutils import quoteattr
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pytest
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
+from lxml import etree
 
 from odsslicer import ODSReader
 from odsslicer.addresses import string_address
-from odsslicer.xmlutils import _ODF_NAMESPACES
+from odsslicer.xmltree import NAMESPACES, child, qn, remove, unset
 
 FIXTURES_DIR = Path(__file__).resolve().parent
 
 # A real, local LibreOffice install used for consistency checks (see
 # test_libreoffice_consistency.py) - the strongest available signal that a
 # file odsslicer wrote is genuinely valid ODF, not just something our own
-# (comparatively lenient) BeautifulSoup-based reader happens to parse back.
+# reader happens to parse back.
 # Not installed in CI by default, so tests using it skip automatically.
 SOFFICE = shutil.which("soffice") or shutil.which("libreoffice")
 
@@ -128,25 +129,37 @@ def libreoffice_shows(ods_path, outdir):
         return list(csv.reader(f))
 
 
-# the namespaces `_fragment` declares on top of odsslicer's own: those of what
-# a cell may hold anchored to it, which the blank document declares too
-_FRAGMENT_NAMESPACES = {
-    **_ODF_NAMESPACES,
-    "draw": "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0",
-    "svg": "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0",
-}
+# the namespaces `_fragment` declares: odsslicer's own, those of what a cell
+# may hold anchored to it among them, which the blank document declares too
+_FRAGMENT_DECLARATIONS = " ".join(f'xmlns:{prefix}="{uri}"' for prefix, uri in NAMESPACES.items())
 
 
 def _fragment(xml):
-    """The top-level elements of an ODF XML fragment, detached."""
-    declarations = " ".join(f'xmlns:{prefix}="{uri}"' for prefix, uri in _FRAGMENT_NAMESPACES.items())
-    # whitespace kept as written, as odsslicer parses a package part: by
-    # default BeautifulSoup squeezes a text node of spaces only to one
-    soup = BeautifulSoup(
-        f"<fragment {declarations}>{xml}</fragment>", "xml", preserve_whitespace_tags={"fragment"}
-    )
-    root = soup.find("fragment")
-    return [child.extract() for child in list(root.children) if isinstance(child, Tag)]
+    """The top-level elements of an ODF XML fragment, detached, as lxml
+    elements: appended to a document, each takes the document's prefixes."""
+    root = etree.fromstring(f"<fragment {_FRAGMENT_DECLARATIONS}>{xml}</fragment>")
+    return [remove(element) for element in list(root.iterchildren(etree.Element))]
+
+
+def first(where, name, **attrs):
+    """The first element named `name` ("table:table-cell") in `where` - an
+    lxml element or tree, the element itself included, or XML markup -
+    whose attributes match `attrs`, spelled with an underscore for the
+    colon (`style_name="ce1"`); `None` if there is none. How a test looks
+    into the library's tree, or into a fragment it builds a `Cell` from."""
+    return next(iter(every(where, name, **attrs)), None)
+
+
+def every(where, name, **attrs):
+    """Every element `first` would consider, in document order."""
+    if isinstance(where, (str, bytes)):
+        where = etree.fromstring(where)
+    wanted = {qn(key.replace("_", ":", 1).replace("_", "-")): value for key, value in attrs.items()}
+    return [
+        element
+        for element in where.iter(qn(name))
+        if all(element.get(key) == value for key, value in wanted.items())
+    ]
 
 
 def ods_with_sheet(path, table_xml, styles_xml=""):
@@ -157,8 +170,9 @@ def ods_with_sheet(path, table_xml, styles_xml=""):
     `styles_xml` added to its automatic styles. Returns `path`."""
     reader = ODSReader.new()
     table = reader.tables[0]
-    for child in list(table.children):
-        child.extract()
+    for element in list(table):
+        table.remove(element)
+    table.text = None
     for element in _fragment(table_xml):
         table.append(element)
     for element in _fragment(styles_xml):
@@ -172,13 +186,17 @@ def document_in(language, country):
     either one absent for `None` - as `ODSReader` reads it: `save()` copies
     `styles.xml`, where it lies, from the template."""
     reader = ODSReader.new()
-    default = reader.styles_data.find("style:default-style", attrs={"style:family": "table-cell"})
-    props = default.find("style:text-properties")
+    default = next(
+        element
+        for element in reader.styles_data.iter(qn("style:default-style"))
+        if element.get(qn("style:family")) == "table-cell"
+    )
+    props = child(default, "style:text-properties")
     for attr, value in (("fo:language", language), ("fo:country", country)):
         if value is None:
-            props.attrs.pop(attr, None)
+            unset(props, qn(attr))
         else:
-            props.attrs[attr] = value
+            props.set(qn(attr), value)
     return reader
 
 
@@ -429,8 +447,8 @@ def rebind_prefix(markup, uri, prefix):
     for key, value in root.attrib.items():
         rebuilt.set(key, value)
     rebuilt.text = root.text
-    for child in list(root):
-        rebuilt.append(child)
+    for element in list(root):
+        rebuilt.append(element)
     return etree.tostring(rebuilt, xml_declaration=True, encoding="UTF-8")
 
 

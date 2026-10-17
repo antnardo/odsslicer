@@ -13,8 +13,7 @@ authors = [{ name = "Anto", email = "antonin.marchand@normalesup.org" }]
 requires-python = ">=3.10"
 keywords = ["ods", "odf", "opendocument", "spreadsheet", "libreoffice", "openoffice", "calc", "numpy"]
 dependencies = [
-    "beautifulsoup4>=4.13",
-    "lxml>=4.6",
+    "lxml>=5.0",
     "numpy>=1.20",
 ]
 classifiers = [
@@ -37,9 +36,11 @@ Issues = "https://github.com/antnardo/odsslicer/issues"
 
 [project.optional-dependencies]
 # ruff pinned to a minor version: its formatting style only changes between minors, and
-# CI checks the format
-test = ["pytest", "ruff>=0.16,<0.17"]
-typecheck = ["mypy", "types-beautifulsoup4", "lxml-stubs"]
+# CI checks the format. BeautifulSoup for the tests alone: some inspect a saved file with
+# it, independently of the library, and others compare a result with what the bs4 code
+# odsslicer used before 1.0 did
+test = ["pytest", "ruff>=0.16,<0.17", "beautifulsoup4>=4.13"]
+typecheck = ["mypy", "lxml-stubs"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

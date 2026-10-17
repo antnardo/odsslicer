@@ -1,12 +1,11 @@
 # mypy: disable-error-code="union-attr"
-# (bs4 Tag/NavigableString/None unions are narrowed dynamically all over this
-# module, guarded by runtime checks mypy can't see through - silencing that
-# one error class here beats dozens of value-free asserts/casts. Every other
-# error class, and all signatures, remain fully checked.)
+# (`Element | None` unions are narrowed dynamically all over this module,
+# guarded by runtime checks mypy can't see through - silencing that one error
+# class here beats dozens of value-free asserts/casts. Every other error
+# class, and all signatures, remain fully checked.)
 """Sheet: numpy-style indexing over one table, structural edits (grow, insert,
 delete, copy, sort, merge), pivot definitions, row/column/table style access."""
 
-import copy
 import functools
 import itertools
 import logging
@@ -14,7 +13,7 @@ import warnings
 from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
-from bs4 import Tag
+from lxml import etree
 
 from .addresses import string_address, string_to_col
 from .cell import ArrayValues, Cell
@@ -38,20 +37,23 @@ from .formulas import (
     _unquote_odf_sheet_name,
 )
 from .styles import ColumnStyle, RowStyle, TableStyle
-from .xmlbs import (
+from .xmltree import (
+    NAMESPACES,
+    child,
     children,
     clone,
-    discard,
+    descendants,
+    elements,
     insert_after,
     insert_before,
     local_name,
-    name_of,
     namespace_of,
     new,
+    qn,
     remove,
     rename,
+    unset,
 )
-from .xmltree import NAMESPACES
 from .xmlutils import _ensure_style_child, _is_forked_style_name
 
 if TYPE_CHECKING:
@@ -60,47 +62,55 @@ if TYPE_CHECKING:
 logger = logging.getLogger("odsslicer")
 
 
-def _set_repeat(tag: Tag, attr: str, n: int) -> None:
-    """Set a `table:number-*-repeated` attribute, omitting it for 1 (its
-    default) the way applications write it."""
+# The attributes the structural edits read and write on every row and cell,
+# by namespace URI: precomputed, since `load` reads them once per element
+_ROWS_REPEATED = qn("table:number-rows-repeated")
+_COLUMNS_REPEATED = qn("table:number-columns-repeated")
+_ROWS_SPANNED = qn("table:number-rows-spanned")
+_COLUMNS_SPANNED = qn("table:number-columns-spanned")
+_STYLE_NAME = qn("table:style-name")
+
+
+def _set_repeat(tag: etree._Element, attr: str, n: int) -> None:
+    """Set a `table:number-*-repeated` attribute (`attr`, by namespace URI),
+    omitting it for 1 (its default) the way applications write it."""
     if n == 1:
-        tag.attrs.pop(attr, None)
+        unset(tag, attr)
     else:
-        tag.attrs[attr] = str(n)
+        tag.set(attr, str(n))
 
 
-def _repeat(tag: Tag, attr: str) -> int:
-    """A `table:number-*-repeated` attribute's value: 1 when absent."""
-    return int(tag.attrs.get(attr, "1"))
+def _repeat(tag: etree._Element, attr: str) -> int:
+    """A `table:number-*-repeated` attribute's value (`attr`, by namespace
+    URI): 1 when absent."""
+    return int(tag.get(attr, "1"))
 
 
-_CELL_NAMES = frozenset(TAG_CELL)
+_CELL_TAGS = frozenset(qn(name) for name in TAG_CELL)
 # what holds a sheet's rows besides the sheet itself: header rows, and row
 # groups at any depth
 _ROW_CONTAINERS = frozenset({"table-rows", "table-header-rows", "table-row-group"})
 
 
-def _row_cells(row: Tag) -> list[Tag]:
+def _row_cells(row: etree._Element) -> list[etree._Element]:
     """The cells of `row`: its children. Searching every descendant went
     into each cell's content as well, where a frame may hold a table of its
     own, and counted that table's cells in the row - a column the sheet does
     not have, which LibreOffice does not show either."""
-    return [child for child in row.contents if isinstance(child, Tag) and name_of(child) in _CELL_NAMES]
+    return [cell for cell in row if cell.tag in _CELL_TAGS]
 
 
-def _sheet_rows(parent: Tag) -> list[Tag]:
+def _sheet_rows(parent: etree._Element) -> list[etree._Element]:
     """The `<table:table-row>` elements of `parent` - a sheet, or a group of
     rows - in order, through header rows and row groups at any depth, and
     never inside a cell: a cell may hold a table of its own, whose rows a
     search of every descendant counted among the sheet's."""
-    found: list[Tag] = []
-    for child in parent.children:
-        if not isinstance(child, Tag):
-            continue
-        if local_name(child) == "table-row":
-            found.append(child)
-        elif local_name(child) in _ROW_CONTAINERS:
-            found.extend(_sheet_rows(child))
+    found: list[etree._Element] = []
+    for element in elements(parent):
+        if local_name(element) == "table-row":
+            found.append(element)
+        elif local_name(element) in _ROW_CONTAINERS:
+            found.extend(_sheet_rows(element))
     return found
 
 
@@ -119,24 +129,20 @@ def _holds_content(cell: Cell) -> bool:
 _DRAWING_NAMESPACES = frozenset({NAMESPACES["draw"], NAMESPACES["dr3d"]})
 
 
-def _carries_formatting(cell_tag: Tag) -> bool:
+def _carries_formatting(cell_tag: etree._Element) -> bool:
     """True if the element says anything about the cell beyond how many
     columns it stands for - a style, most of all. Such a cell holds no
     content, yet deleting it loses the formatting of a row formatted as a
     whole (issue #23)."""
-    return bool(set(cell_tag.attrs) - {"table:number-columns-repeated"})
+    return bool(set(cell_tag.attrib) - {_COLUMNS_REPEATED})
 
 
-def _drawings_in(cell_tag: Tag) -> "list[Tag]":
+def _drawings_in(cell_tag: etree._Element) -> "list[etree._Element]":
     """What is anchored in `cell_tag`: a chart, a shape, an image."""
-    return [
-        child
-        for child in cell_tag.find_all(True, recursive=False)
-        if namespace_of(child) in _DRAWING_NAMESPACES
-    ]
+    return [element for element in elements(cell_tag) if namespace_of(element) in _DRAWING_NAMESPACES]
 
 
-def _rescue_drawings(cell_tag: Tag, heir: "Tag | None") -> None:
+def _rescue_drawings(cell_tag: etree._Element, heir: "etree._Element | None") -> None:
     """Move what is anchored in `cell_tag` into `heir`, the cell taking its
     place, so deleting a row or a column does not delete the chart anchored
     there - LibreOffice keeps it, at the same address (issue #24). Nothing
@@ -147,48 +153,41 @@ def _rescue_drawings(cell_tag: Tag, heir: "Tag | None") -> None:
         heir.append(remove(drawing))
 
 
-def _position_after(tag: Tag) -> int:
-    """The index, among its parent's children, right after `tag`, counted
-    from the end: what bs4's `insert_after` would insert at.
+def _insert_chain(reference: etree._Element, new_elements: "Iterable[etree._Element]") -> None:
+    """Put `new_elements` right after `reference`, in order, each after the
+    one before: `insert_after`, which costs nothing in lxml - `addnext`
+    relinks a node.
 
-    bs4 finds that index with `parent.index(tag)`, a scan from the first
-    child. Placing rows one after the other below a sheet's last row then
-    scans the whole sheet each time - and writing a column past the data
-    grows the sheet one row per cell, so 100,000 rows written that way cost
-    5 billion comparisons, minutes instead of seconds (0.14.0 to 0.14.3).
-    What follows a sheet's last row is a few elements at most - conditional
-    formats, named ranges - so counting them is next to free.
-
-    An index is right on bs4 only: lxml's `insert(i)` walks its children to
-    `i`, and its `addnext` costs nothing. This function and the insertions
-    by index built on it (`_take_back_rows`, `insert_rows`, `insert_columns`)
-    stay as they are until the switch, which turns them into successive
-    `insert_after` calls; converting them now would make them quadratic."""
-    parent = cast(Tag, tag.parent)
-    return len(parent.contents) - sum(1 for _ in tag.next_siblings)
+    Never by index. lxml's `parent.insert(i, el)` and `parent.index(el)`
+    walk the parent's children to `i`, and so did bs4's `insert_after`,
+    which looked `reference` up with `parent.index()`: placing rows one
+    after the other below a sheet's last row scanned the whole sheet each
+    time (minutes instead of seconds for 100,000 rows written past the data,
+    0.14.0 to 0.14.3). 0.15.0 inserted by an index found once, right on bs4
+    only: in lxml, 20,000 rows 50,000 rows down take 2.6 s by index, 9 ms
+    as a chain (`benchmarks/LXML_STUDY.md`)."""
+    for element in new_elements:
+        insert_after(reference, element)
+        reference = element
 
 
-def _split_repetitions(tag: Tag, attr: str, n: int) -> list[Tag]:
-    """Replace `tag`, repeated `n` times by `attr`, with `n` copies of it
-    that no longer carry `attr`, in place. Returns the copies, in order.
+def _split_repetitions(tag: etree._Element, attr: str, n: int) -> list[etree._Element]:
+    """Replace `tag`, repeated `n` times by `attr` (by namespace URI), with
+    `n` copies of it that no longer carry `attr`, in place. Returns the
+    copies, in order.
 
-    `replace_with` looks `tag` up once and puts all the copies in its place
-    (see `_position_after`). Placed one after the other with bs4's
-    `insert_after`, each copy looked the one before up with
-    `parent.index()`, a scan from the first child, so splitting a run of
-    n rows p rows down cost n × (p + n/2) comparisons -
-    23 s to write one cell in a run of 20,000 repeated rows below 50,000
-    others, 1.6 s to set the width of a column defined by one
-    `<table:table-column>` repeated 16,384 times, as LibreOffice pads a
-    sheet.
-
-    Left on bs4's own methods until the switch: on lxml, the copies are
-    `clone`s placed with successive `insert_after` calls, which cost
-    nothing there (see `_position_after`)."""
-    copies = [copy.deepcopy(tag) for _ in range(n)]
+    The copies go in as a chain after `tag`, which then leaves (see
+    `_insert_chain`): placed by index, or each after the one before with
+    bs4's `insert_after`, splitting a run of n rows p rows down cost
+    n × (p + n/2) comparisons - 23 s to write one cell in a run of 20,000
+    repeated rows below 50,000 others, 1.6 s to set the width of a column
+    defined by one `<table:table-column>` repeated 16,384 times, as
+    LibreOffice pads a sheet."""
+    copies = [clone(tag) for _ in range(n)]
     for copy_tag in copies:
-        copy_tag.attrs.pop(attr, None)
-    tag.replace_with(*copies)
+        unset(copy_tag, attr)
+    _insert_chain(tag, copies)
+    remove(tag)
     return copies
 
 
@@ -201,7 +200,7 @@ _FULL_HEIGHTS = frozenset({65_536, 1_048_576})
 _FULL_WIDTHS = frozenset({1_024, 16_384})
 
 
-def _give_back(tags: "list[Tag]", attr: str, count: int) -> None:
+def _give_back(tags: "list[etree._Element]", attr: str, count: int) -> None:
     """Take `count` repetitions (`attr`) off the elements of `tags` - rows,
     cells or column definitions past the grid - from the last, each keeping
     one: what an insertion pushed past a sheet's full size comes off the
@@ -217,16 +216,17 @@ def _give_back(tags: "list[Tag]", attr: str, count: int) -> None:
 
 
 class Sheet:
-    def __init__(self, table: Tag, verbose: bool = False, reader: "ODSReader | None" = None) -> None:
+    def __init__(
+        self, table: etree._Element, verbose: bool = False, reader: "ODSReader | None" = None
+    ) -> None:
         self.verbose = verbose
         # chatty progress messages go to the "odsslicer" logger: DEBUG
         # normally, INFO with verbose=True - configure logging to see them
         self._log_level = logging.INFO if verbose else logging.DEBUG
         self.reader = reader
-        self.table: Tag = table
-        self.attrs: dict[str, str] = self.table.attrs
-        self.name: str = cast(str, self.table["table:name"])
-        self.stylename = self.table.attrs.get("table:style-name")
+        self.table: etree._Element = table
+        self.name: str = cast(str, table.attrib[qn("table:name")])
+        self.stylename = table.get(_STYLE_NAME)
         self.rows = self.load(table)
         if len(self.rows) > 0:
             rows_len = [len(row) for row in self.rows]
@@ -239,10 +239,10 @@ class Sheet:
         self.n_rows, self.n_cols = self.size
         logger.log(self._log_level, "    %r", self)
 
-    def load(self, table_bs: Tag) -> list[list[Cell]]:
+    def load(self, table_element: etree._Element) -> list[list[Cell]]:
         table = []
         unreadable: list[Cell] = []  # read as their text instead, see Cell.__init__
-        rows = _sheet_rows(table_bs)
+        rows = _sheet_rows(table_element)
         logger.log(self._log_level, "    Loading %s, %d unrepeated rows", self.name, len(rows))
 
         # Grid-filler guard, column direction: Excel and LibreOffice pad rows
@@ -256,14 +256,14 @@ class Sheet:
         # keeping the XML and the in-memory model in agreement (the rest of
         # the library assumes rectangular rows). Only trailing *empty* cells
         # are ever touched, so no data moves and nothing visible is lost.
-        def content_width(cells_bs: "list[Tag]") -> "tuple[int, Tag | None]":
+        def content_width(cells_bs: "list[etree._Element]") -> "tuple[int, etree._Element | None]":
             """(width up to the first huge trailing empty cell, that cell)."""
             suffix_start = len(cells_bs)
             while suffix_start > 0 and not _holds_content(Cell(cells_bs[suffix_start - 1])):
                 suffix_start -= 1
             width, first_big = 0, None
             for k, cell in enumerate(cells_bs):
-                n_cols = int(cell.attrs.get("table:number-columns-repeated", "1"))
+                n_cols = int(cell.get(_COLUMNS_REPEATED, "1"))
                 if k >= suffix_start and n_cols > MAX_REPEAT_ROWS:
                     first_big = cell
                     break
@@ -276,7 +276,7 @@ class Sheet:
         # but only below the last row holding anything. Above it, empty rows
         # are real, however many: leaving them out would move every row
         # below them up (issue #6). The grid ends at the first filler.
-        def is_empty_row(row: Tag) -> bool:
+        def is_empty_row(row: etree._Element) -> bool:
             return not any(_holds_content(Cell(c)) for c in _row_cells(row))
 
         last_content = len(rows) - 1
@@ -285,7 +285,7 @@ class Sheet:
         fillers = (
             k
             for k in range(last_content + 1, len(rows))
-            if _repeat(rows[k], "table:number-rows-repeated") > MAX_REPEAT_ROWS
+            if _repeat(rows[k], _ROWS_REPEATED) > MAX_REPEAT_ROWS
         )
         end = next(fillers, len(rows))
 
@@ -295,7 +295,7 @@ class Sheet:
         i = 0
         for row in rows[:end]:
             normalized.append(self._normalize_row_width(row, _row_cells(row), real_width, i))
-            i += _repeat(row, "table:number-rows-repeated")
+            i += _repeat(row, _ROWS_REPEATED)
 
         # Trailing columns empty in every row are left out of the grid when
         # there are more than MAX_REPEAT_COLS of them (see the clean-up
@@ -310,7 +310,7 @@ class Sheet:
         for cells_bs in normalized:
             col = 0
             for cell in cells_bs:
-                col += _repeat(cell, "table:number-columns-repeated")
+                col += _repeat(cell, _COLUMNS_REPEATED)
                 if _holds_content(Cell(cell)):
                     content_end = max(content_end, col)
         # an all-empty sheet keeps the general path below, which takes it apart
@@ -319,12 +319,12 @@ class Sheet:
 
         i = 0
         for row, all_cells_bs in zip(rows[:end], normalized, strict=True):
-            n_rows = int(row.attrs.get("table:number-rows-repeated", "1"))
+            n_rows = int(row.get(_ROWS_REPEATED, "1"))
             for _ in range(n_rows):
                 cells = []
                 j = 0
                 for cell in all_cells_bs:
-                    n_cols = int(cell.attrs.get("table:number-columns-repeated", "1"))
+                    n_cols = int(cell.get(_COLUMNS_REPEATED, "1"))
                     for _ in range(min(n_cols, built_width - j)):
                         cells.append(Cell(cell, row=i, col=j, sheet=self))
                         if cells[-1]._unreadable is not None:
@@ -339,7 +339,7 @@ class Sheet:
                 self._log_level,
                 "    Row [%04d] repeated %d > MAX = %d, empty to the end: grid ends",
                 i + 1,
-                _repeat(rows[end], "table:number-rows-repeated"),
+                _repeat(rows[end], _ROWS_REPEATED),
                 MAX_REPEAT_ROWS,
             )
         if unreadable:
@@ -357,11 +357,9 @@ class Sheet:
         # with no content may still hold a chart or formatting: it stays in
         # the file, past the grid.
         after_filler = rows[end + 1 :]
-        written_apart = any(
-            _repeat(row, "table:number-rows-repeated") <= MAX_REPEAT_ROWS for row in after_filler
-        )
+        written_apart = any(_repeat(row, _ROWS_REPEATED) <= MAX_REPEAT_ROWS for row in after_filler)
         if not written_apart and not any(_holds_content(cell) for cell in table[-1]):
-            row_tag = cast(Tag, table[-1][0].cell.parent)
+            row_tag = cast(etree._Element, table[-1][0].cell.getparent())
             keep = len(self._run_in(table, len(table) - 1)) - 1
             table.pop()
             logger.log(self._log_level, "    Last row empty: removed")
@@ -383,7 +381,7 @@ class Sheet:
         if n_cols - width > MAX_REPEAT_COLS:
             logger.log(self._log_level, "    Cols %d to %d empty: left out", width + 1, n_cols)
             for run in self._runs_in(table):
-                self._split_cells_at(cast(Tag, table[run.start][0].cell.parent), width)
+                self._split_cells_at(cast(etree._Element, table[run.start][0].cell.getparent()), width)
             # no column left: every row is empty, and so is the sheet
             table = [row[:width] for row in table] if width > 0 else []
         return table
@@ -394,11 +392,11 @@ class Sheet:
         run of repeated rows (`table:number-rows-repeated`), or `row` alone.
         The grid keeps one list of cells per row, but they all point at the
         same elements, so reshaping any row of a run has to reach them all."""
-        tag = rows[row][0].cell.parent
+        tag = rows[row][0].cell.getparent()
         first, stop = row, row + 1
-        while first > 0 and rows[first - 1][0].cell.parent is tag:
+        while first > 0 and rows[first - 1][0].cell.getparent() is tag:
             first -= 1
-        while stop < len(rows) and rows[stop][0].cell.parent is tag:
+        while stop < len(rows) and rows[stop][0].cell.getparent() is tag:
             stop += 1
         return range(first, stop)
 
@@ -417,11 +415,11 @@ class Sheet:
         return self._run_in(self.rows, row)
 
     @staticmethod
-    def _split_row_element(row_tag: Tag, keep: int) -> None:
+    def _split_row_element(row_tag: etree._Element, keep: int) -> None:
         """Split a repeated `<table:table-row>` after its first `keep`
         repetitions: the element keeps those, since the grid's cells point
         at its cells, and a copy inserted after it takes the others."""
-        attr = "table:number-rows-repeated"
+        attr = _ROWS_REPEATED
         n = _repeat(row_tag, attr)
         if not 0 < keep < n:
             return
@@ -431,14 +429,14 @@ class Sheet:
         insert_after(row_tag, rest)
 
     @staticmethod
-    def _split_cells_at(row_tag: Tag, position: int) -> None:
+    def _split_cells_at(row_tag: etree._Element, position: int) -> None:
         """Make logical column `position` of `row_tag` start a cell element
         of its own, splitting the repeated cell straddling it if there is
         one: the element keeps the columns before `position` and a copy
         inserted after it takes the others, as in `_split_row_element`."""
-        attr = "table:number-columns-repeated"
+        attr = _COLUMNS_REPEATED
         start = 0
-        for cell_tag in row_tag.find_all(TAG_CELL, recursive=False):
+        for cell_tag in _row_cells(row_tag):
             n = _repeat(cell_tag, attr)
             if start < position < start + n:
                 rest = clone(cell_tag)
@@ -450,7 +448,7 @@ class Sheet:
             start += n
 
     @classmethod
-    def _cell_starting_at(cls, row_tag: Tag, col: int) -> Tag:
+    def _cell_starting_at(cls, row_tag: etree._Element, col: int) -> etree._Element:
         """The cell element standing for logical column `col` of `row_tag`
         alone, split out of a repeated one if need be, and created - after
         empty cells up to it - when the row element ends before `col`: where
@@ -461,12 +459,12 @@ class Sheet:
         for cell_tag in _row_cells(row_tag):
             if start == col:
                 return cell_tag
-            start += _repeat(cell_tag, "table:number-columns-repeated")
+            start += _repeat(cell_tag, _COLUMNS_REPEATED)
         if start < col:
-            padding = new("table:table-cell", near=row_tag)
-            _set_repeat(padding, "table:number-columns-repeated", col - start)
+            padding = new("table:table-cell")
+            _set_repeat(padding, _COLUMNS_REPEATED, col - start)
             row_tag.append(padding)
-        cell_tag = new("table:table-cell", near=row_tag)
+        cell_tag = new("table:table-cell")
         row_tag.append(cell_tag)
         return cell_tag
 
@@ -485,8 +483,8 @@ class Sheet:
         )
 
     def _normalize_row_width(
-        self, row_tag: Tag, cells_bs: "list[Tag]", real_width: int, row_index: int
-    ) -> "list[Tag]":
+        self, row_tag: etree._Element, cells_bs: "list[etree._Element]", real_width: int, row_index: int
+    ) -> "list[etree._Element]":
         """Rewrite one row's XML so its total width is exactly `real_width`
         cells, touching only its trailing run of *empty* cells: a huge grid
         filler (see `load`) has its repeat count reduced, and a row that falls
@@ -505,7 +503,7 @@ class Sheet:
             suffix_start -= 1
         width = 0
         for k, cell in enumerate(cells_bs):
-            n_cols = int(cell.attrs.get("table:number-columns-repeated", "1"))
+            n_cols = int(cell.get(_COLUMNS_REPEATED, "1"))
             # only the trailing run of empty cells is ever clamped - a huge
             # repeat *before* real data is real (and counted in `real_width`)
             if k < suffix_start or (width + n_cols <= real_width and n_cols <= MAX_REPEAT_ROWS):
@@ -523,25 +521,25 @@ class Sheet:
             )
             keep = cells_bs[:k]
             if missing > 0:
-                _set_repeat(cell, "table:number-columns-repeated", missing)
+                _set_repeat(cell, _COLUMNS_REPEATED, missing)
                 keep.append(cell)
                 remainder = n_cols - missing
                 if remainder > 0 and _carries_formatting(cell):
                     # the part past the grid keeps saying what it says
                     rest = clone(cell)
-                    _set_repeat(rest, "table:number-columns-repeated", remainder)
+                    _set_repeat(rest, _COLUMNS_REPEATED, remainder)
                     insert_after(cell, rest)
                 dropped = cells_bs[k + 1 :]
             else:
                 dropped = cells_bs[k:]
             for extra in dropped:
                 if not _carries_formatting(extra):
-                    discard(extra)
+                    remove(extra)
             return keep
         if width < real_width:
             pad = self._empty_cell_template()
             if real_width - width > 1:
-                pad.attrs["table:number-columns-repeated"] = str(real_width - width)
+                pad.set(_COLUMNS_REPEATED, str(real_width - width))
             row_tag.append(pad)
             return [*cells_bs, pad]
         return cells_bs
@@ -563,11 +561,11 @@ class Sheet:
         for _ in range(8):  # a handful of structural layers is more than any real file has
             cell = self.rows[row][col]
             tag = cell.cell
-            parent = tag.parent
-            if parent is not None and parent.attrs.get("table:number-rows-repeated", "1") != "1":
+            parent = tag.getparent()
+            if parent is not None and parent.get(_ROWS_REPEATED, "1") != "1":
                 self._unrepeat_row(row)
                 continue
-            if cell.attrs.get("table:number-columns-repeated", "1") != "1":
+            if tag.get(_COLUMNS_REPEATED, "1") != "1":
                 self._unrepeat_col(row, col)
                 continue
             if local_name(tag) == "covered-table-cell":
@@ -581,18 +579,18 @@ class Sheet:
     def _unrepeat_row(self, row: int) -> None:
         """Split the `table:number-rows-repeated` row tag covering `row` into
         one independent `<table:table-row>` per repetition."""
-        row_tag = cast(Tag, self.rows[row][0].cell.parent)
-        n = int(row_tag.attrs.get("table:number-rows-repeated", "1"))
+        row_tag = cast(etree._Element, self.rows[row][0].cell.getparent())
+        n = int(row_tag.get(_ROWS_REPEATED, "1"))
         if n <= 1:
             return
 
         run = self._run_of(row)
-        copies = _split_repetitions(row_tag, "table:number-rows-repeated", n)
+        copies = _split_repetitions(row_tag, _ROWS_REPEATED, n)
 
         for r, copy_tag in zip(run, copies, strict=True):
             j = 0
             for cell_tag in _row_cells(copy_tag):
-                n_cols = int(cell_tag.attrs.get("table:number-columns-repeated", "1"))
+                n_cols = int(cell_tag.get(_COLUMNS_REPEATED, "1"))
                 for _ in range(n_cols):
                     if j < len(self.rows[r]):
                         self.rows[r][j].__init__(cell_tag, row=r, col=j, sheet=self)  # type: ignore[misc]
@@ -604,7 +602,7 @@ class Sheet:
         row of the run sharing it (see `_run_in`), which the split reaches
         all the same."""
         cell_tag = self.rows[row][col].cell
-        n = int(cell_tag.attrs.get("table:number-columns-repeated", "1"))
+        n = int(cell_tag.get(_COLUMNS_REPEATED, "1"))
         if n <= 1:
             return
 
@@ -613,7 +611,7 @@ class Sheet:
             start -= 1
         run = self._run_of(row)  # before the split detaches `cell_tag`
 
-        copies = _split_repetitions(cell_tag, "table:number-columns-repeated", n)
+        copies = _split_repetitions(cell_tag, _COLUMNS_REPEATED, n)
 
         for r in run:
             for c, copy_tag in enumerate(copies, start=start):
@@ -621,10 +619,7 @@ class Sheet:
 
     @staticmethod
     def _is_merge_master(cell: Cell) -> bool:
-        return (
-            cell.attrs.get("table:number-columns-spanned", "1") != "1"
-            or cell.attrs.get("table:number-rows-spanned", "1") != "1"
-        )
+        return cell.cell.get(_COLUMNS_SPANNED, "1") != "1" or cell.cell.get(_ROWS_SPANNED, "1") != "1"
 
     def _find_merge_master(self, row: int, col: int) -> "Cell | None":
         """Find the top-left cell of the merged range covering (row, col)."""
@@ -632,8 +627,8 @@ class Sheet:
             for master in self.rows[r]:
                 if local_name(master.cell) == "covered-table-cell" or not self._is_merge_master(master):
                     continue
-                rows_span = int(master.attrs.get("table:number-rows-spanned", "1"))
-                cols_span = int(master.attrs.get("table:number-columns-spanned", "1"))
+                rows_span = int(master.cell.get(_ROWS_SPANNED, "1"))
+                cols_span = int(master.cell.get(_COLUMNS_SPANNED, "1"))
                 if master.row <= row < master.row + rows_span and master.col <= col < master.col + cols_span:
                     return master
         return None
@@ -659,13 +654,13 @@ class Sheet:
             master = cell
 
         mr, mc = master.row, master.col
-        rows_span = int(master.attrs.get("table:number-rows-spanned", "1"))
-        cols_span = int(master.attrs.get("table:number-columns-spanned", "1"))
+        rows_span = int(master.cell.get(_ROWS_SPANNED, "1"))
+        cols_span = int(master.cell.get(_COLUMNS_SPANNED, "1"))
         # a merge can run into trailing columns the grid leaves out (see
         # `load`): every cell it covers is about to become one of the grid's
         self.grow_to(mr + rows_span - 1, mc + cols_span - 1)
-        master.cell.attrs.pop("table:number-rows-spanned", None)
-        master.cell.attrs.pop("table:number-columns-spanned", None)
+        unset(master.cell, _ROWS_SPANNED)
+        unset(master.cell, _COLUMNS_SPANNED)
         master.__init__(master.cell, row=mr, col=mc, sheet=self)  # type: ignore[misc]
 
         for r in range(mr, mr + rows_span):
@@ -742,8 +737,8 @@ class Sheet:
                 self.materialize_cell(r, c)
 
         master = self.rows[row0][col0]
-        master.cell.attrs["table:number-rows-spanned"] = str(row1 - row0 + 1)
-        master.cell.attrs["table:number-columns-spanned"] = str(col1 - col0 + 1)
+        master.cell.set(_ROWS_SPANNED, str(row1 - row0 + 1))
+        master.cell.set(_COLUMNS_SPANNED, str(col1 - col0 + 1))
         for r in range(row0, row1 + 1):
             for c in range(col0, col1 + 1):
                 if r == row0 and c == col0:
@@ -948,28 +943,30 @@ class Sheet:
                     f"expected one of {sorted(_PIVOT_DATA_FUNCTIONS)}"
                 )
 
-        spreadsheet = cast(Tag, self.reader._spreadsheet())
-        tables = spreadsheet.find("table:data-pilot-tables", recursive=False)
+        spreadsheet = cast(etree._Element, self.reader._spreadsheet())
+        tables = child(spreadsheet, "table:data-pilot-tables")
         if tables is None:
-            tables = new("table:data-pilot-tables", near=self.reader.data)
+            tables = new("table:data-pilot-tables")
             spreadsheet.append(tables)
 
-        existing = tables.find_all("table:data-pilot-table", recursive=False)
+        existing = children(tables, "table:data-pilot-table")
         pivot_name = name or f"DataPilotTable{len(existing) + 1}"
-        if any(t.get("table:name") == pivot_name for t in existing):
+        if any(t.get(qn("table:name")) == pivot_name for t in existing):
             raise ValueError(f"a pivot table named {pivot_name!r} already exists")
 
-        pivot = new("table:data-pilot-table", near=self.reader.data)
-        pivot.attrs["table:name"] = pivot_name
+        pivot = new("table:data-pilot-table")
+        pivot.set(qn("table:name"), pivot_name)
         target_row0, _, target_col0, _ = self._resolve_range(target)
-        pivot.attrs["table:target-range-address"] = (
-            f"{_quote_odf_sheet_name(self.name)}.{Sheet.string_address(target_row0, target_col0)}"
+        pivot.set(
+            qn("table:target-range-address"),
+            f"{_quote_odf_sheet_name(self.name)}.{Sheet.string_address(target_row0, target_col0)}",
         )
 
-        source_range_tag = new("table:source-cell-range", near=self.reader.data)
-        source_range_tag.attrs["table:cell-range-address"] = (
+        source_range_tag = new("table:source-cell-range")
+        source_range_tag.set(
+            qn("table:cell-range-address"),
             f"{_quote_odf_sheet_name(source_sheet_name)}."
-            f"{Sheet.string_address(row0, col0)}:{Sheet.string_address(row1, col1)}"
+            f"{Sheet.string_address(row0, col0)}:{Sheet.string_address(row1, col1)}",
         )
         pivot.append(source_range_tag)
 
@@ -982,20 +979,20 @@ class Sheet:
 
         tables.append(pivot)
 
-    def _append_pivot_field(self, pivot: Tag, field: str, orientation: str, function: str) -> None:
-        field_tag = new("table:data-pilot-field", near=self.reader.data)
-        field_tag.attrs["table:source-field-name"] = field
-        field_tag.attrs["table:orientation"] = orientation
-        field_tag.attrs["table:function"] = function
+    def _append_pivot_field(self, pivot: etree._Element, field: str, orientation: str, function: str) -> None:
+        field_tag = new(
+            "table:data-pilot-field",
+            {"table:source-field-name": field, "table:orientation": orientation, "table:function": function},
+        )
         pivot.append(field_tag)
 
-    def _empty_cell_template(self) -> Tag:
+    def _empty_cell_template(self) -> etree._Element:
         """A detached, blank `<table:table-cell/>` tag."""
-        return new("table:table-cell", near=self.table)
+        return new("table:table-cell")
 
-    def _empty_row_template(self, n_cols: int) -> Tag:
+    def _empty_row_template(self, n_cols: int) -> etree._Element:
         """A detached `<table:table-row>` tag with `n_cols` blank cells."""
-        row = new("table:table-row", near=self.table)
+        row = new("table:table-row")
         for _ in range(n_cols):
             row.append(self._empty_cell_template())
         return row
@@ -1021,7 +1018,7 @@ class Sheet:
         target_cols = max(col + 1, self.n_cols)
         if target_cols > self.n_cols:
             for run in self._runs_in(self.rows):
-                row_tag = cast(Tag, self.rows[run.start][0].cell.parent)
+                row_tag = cast(etree._Element, self.rows[run.start][0].cell.getparent())
                 new_tags = self._cells_between(row_tag, self.n_cols, target_cols)
                 for r in run:
                     self.rows[r].extend(
@@ -1048,27 +1045,28 @@ class Sheet:
         the grid takes only the rows it needs; each row is split at the
         grid's edge, as `load` splits the grid's, what lies past it staying
         in the file - a filler row is as wide as the sheet."""
-        previous = cast(Tag, self.rows[-1][0].cell.parent) if self.n_rows else None
+        previous = cast(etree._Element, self.rows[-1][0].cell.getparent()) if self.n_rows else None
         for row_tag in self._rows_past_grid():
             if self.n_rows >= n_rows:
                 return
             self._split_row_element(row_tag, n_rows - self.n_rows)
             tags = self._cells_between(row_tag, 0, self.n_cols)
-            for _ in range(_repeat(row_tag, "table:number-rows-repeated")):
+            for _ in range(_repeat(row_tag, _ROWS_REPEATED)):
                 self.rows.append(
                     [Cell(tag, row=self.n_rows, col=c, sheet=self) for c, tag in enumerate(tags)]
                 )
                 self.n_rows += 1
             previous = row_tag
         template = self._empty_row_template(self.n_cols)
-        # inserted by index, found once (see `_position_after`): left as is
-        # until the switch to lxml, where it becomes `insert_after`
-        parent = self.table if previous is None else cast(Tag, previous.parent)
-        position = len(parent.contents) if previous is None else _position_after(previous)
+        # each new row right after the one before, never by index (see
+        # `_insert_chain`)
         while self.n_rows < n_rows:
-            new_row_tag = copy.deepcopy(template)
-            parent.insert(position, new_row_tag)
-            position += 1
+            new_row_tag = clone(template)
+            if previous is None:
+                self.table.append(new_row_tag)
+            else:
+                insert_after(previous, new_row_tag)
+            previous = new_row_tag
             self.rows.append(
                 [
                     Cell(cell_tag, row=self.n_rows, col=c, sheet=self)
@@ -1077,49 +1075,47 @@ class Sheet:
             )
             self.n_rows += 1
 
-    def _rows_past_grid(self) -> "list[Tag]":
+    def _rows_past_grid(self) -> "list[etree._Element]":
         """The `<table:table-row>` elements the file holds after the grid's
         last row, in order, grouped or not: what `load` left out below the
         grid. It never looks inside a row: a cell may hold a table of its
         own."""
-        found: list[Tag] = []
+        found: list[etree._Element] = []
         if self.n_rows == 0:
             return _sheet_rows(self.table)
-        node: Tag | None = self.rows[-1][0].cell.parent
+        node: etree._Element | None = self.rows[-1][0].cell.getparent()
         while node is not None and node is not self.table:
-            for sibling in node.next_siblings:
-                if not isinstance(sibling, Tag):
-                    continue
+            for sibling in node.itersiblings(etree.Element):
                 if local_name(sibling) == "table-row":
                     found.append(sibling)
                 elif local_name(sibling) in _ROW_CONTAINERS:
                     found.extend(_sheet_rows(sibling))
-            node = node.parent
+            node = node.getparent()
         return found
 
     def _give_back_rows(self, count: int) -> None:
         """Keep the sheet's height after `count` rows were inserted, if it was
         padded to an application's full height (see `_FULL_HEIGHTS`), with
         the rows padding it below the grid (see `_give_back`)."""
-        attr = "table:number-rows-repeated"
+        attr = _ROWS_REPEATED
         below = self._rows_past_grid()
         if self.n_rows + sum(_repeat(r, attr) for r in below) - count in _FULL_HEIGHTS:
             _give_back(below, attr, count)
 
     @staticmethod
-    def _give_back_cells(row_tag: Tag, count: int, start: int = 0) -> None:
+    def _give_back_cells(row_tag: etree._Element, count: int, start: int = 0) -> None:
         """Keep the width of `row_tag` after `count` cells were inserted into
         it, if it was padded to an application's full width, with its blank
         cells from logical column `start` on - past the grid, whose cells
         must keep their elements."""
-        attr = "table:number-columns-repeated"
+        attr = _COLUMNS_REPEATED
         # a row reaches its full width through a filler, one blank cell
         # repeated to the end: without one, no need to add up its cells -
         # which, for every row of a big sheet, doubled insert_columns' time
-        last = next((c for c in reversed(row_tag.contents) if isinstance(c, Tag)), None)
+        last = next(row_tag.iterchildren(etree.Element, reversed=True), None)
         if last is None or _repeat(last, attr) <= MAX_REPEAT_ROWS:
             return
-        cells = row_tag.find_all(TAG_CELL, recursive=False)
+        cells = _row_cells(row_tag)
         positions = list(itertools.accumulate((_repeat(c, attr) for c in cells), initial=0))
         if positions[-1] - count in _FULL_WIDTHS:
             _give_back([c for c, p in zip(cells, positions[:-1], strict=True) if p >= start], attr, count)
@@ -1133,14 +1129,14 @@ class Sheet:
         for row_tag in self._rows_past_grid():
             self._split_cells_at(row_tag, col)
             position = 0
-            for cell_tag in row_tag.find_all(TAG_CELL, recursive=False):
+            for cell_tag in _row_cells(row_tag):
                 if position == col:
                     new_tag = self._empty_cell_template()
-                    _set_repeat(new_tag, "table:number-columns-repeated", count)
+                    _set_repeat(new_tag, _COLUMNS_REPEATED, count)
                     insert_before(cell_tag, new_tag)
                     self._give_back_cells(row_tag, count)
                     break
-                position += _repeat(cell_tag, "table:number-columns-repeated")
+                position += _repeat(cell_tag, _COLUMNS_REPEATED)
 
     def _delete_cells_past_grid(self, col: int) -> None:
         """Delete logical column `col` from every row the file holds below
@@ -1153,7 +1149,7 @@ class Sheet:
         for row_tag in self._rows_past_grid():
             for position in (col, col + 1, col + 2):  # the next cell alone too
                 self._split_cells_at(row_tag, position)
-            cells = row_tag.find_all(TAG_CELL, recursive=False)
+            cells = _row_cells(row_tag)
             position = 0
             for k, cell_tag in enumerate(cells):
                 if position == col:
@@ -1163,11 +1159,11 @@ class Sheet:
                             heir = self._empty_cell_template()
                             insert_after(cell_tag, heir)
                         _rescue_drawings(cell_tag, heir)
-                    discard(cell_tag)
+                    remove(cell_tag)
                     break
-                position += _repeat(cell_tag, "table:number-columns-repeated")
+                position += _repeat(cell_tag, _COLUMNS_REPEATED)
 
-    def _cells_between(self, row_tag: Tag, start: int, stop: int) -> "list[Tag]":
+    def _cells_between(self, row_tag: etree._Element, start: int, stop: int) -> "list[etree._Element]":
         """The cell elements of `row_tag` for logical columns `start` to
         `stop` (excluded), one entry per column - a repeated cell once per
         column it covers - after splitting any that straddles either bound
@@ -1175,18 +1171,18 @@ class Sheet:
         ends before `stop`."""
         self._split_cells_at(row_tag, start)
         self._split_cells_at(row_tag, stop)
-        tags: list[Tag] = []
+        tags: list[etree._Element] = []
         position = 0
-        for cell_tag in row_tag.find_all(TAG_CELL, recursive=False):
+        for cell_tag in _row_cells(row_tag):
             if position >= stop:
                 break
-            n = _repeat(cell_tag, "table:number-columns-repeated")
+            n = _repeat(cell_tag, _COLUMNS_REPEATED)
             if position >= start:
                 tags += [cell_tag] * n
             position += n
         if position < stop:
             pad = self._empty_cell_template()
-            _set_repeat(pad, "table:number-columns-repeated", stop - position)
+            _set_repeat(pad, _COLUMNS_REPEATED, stop - position)
             row_tag.append(pad)
             tags += [pad] * (stop - max(position, start))
         return tags
@@ -1245,13 +1241,13 @@ class Sheet:
                 # the cells the row element keeps beyond them: LibreOffice
                 # writes a chart there when the data stops short of it
                 start = 0
-                for cell_tag in _row_cells(cast(Tag, self.rows[row][0].cell.parent)):
+                for cell_tag in _row_cells(cast(etree._Element, self.rows[row][0].cell.getparent())):
                     if start >= self.n_cols and _drawings_in(cell_tag):
                         self._unrepeat_row(heir_row)
-                        heir_tag = cast(Tag, self.rows[heir_row][0].cell.parent)
+                        heir_tag = cast(etree._Element, self.rows[heir_row][0].cell.getparent())
                         _rescue_drawings(cell_tag, self._cell_starting_at(heir_tag, start))
-                    start += _repeat(cell_tag, "table:number-columns-repeated")
-            discard(cast(Tag, self.rows[row][0].cell.parent))
+                    start += _repeat(cell_tag, _COLUMNS_REPEATED)
+            remove(cast(etree._Element, self.rows[row][0].cell.getparent()))
             del self.rows[row]
         for r in range(targets[0], len(self.rows)):
             for cell in self.rows[r]:
@@ -1286,12 +1282,12 @@ class Sheet:
         # has no definition to delete - asserting one did raised (issue #13)
         if self._find_column_tag(col) is not None:
             definition = self._unrepeat_column_tag(col)
-            group = cast(Tag, definition.parent)
-            discard(definition)
+            group = cast(etree._Element, definition.getparent())
+            remove(definition)
             # a group of definitions - the print titles' - holds one at least
             # descendants: a group holding only a group of definitions is not empty
-            if group is not self.table and group.find("table:table-column") is None:
-                discard(group)
+            if group is not self.table and next(descendants(group, "table:table-column"), None) is None:
+                remove(group)
         for run in self._runs_in(self.rows):
             # same as for a row: the chart anchored in the column moves to the
             # cell taking its place, rather than going with it (issue #24)
@@ -1299,7 +1295,7 @@ class Sheet:
             if 0 <= heir_col < self.n_cols:
                 self._unrepeat_col(run.start, heir_col)
                 _rescue_drawings(self.rows[run.start][col].cell, self.rows[run.start][heir_col].cell)
-            discard(self.rows[run.start][col].cell)  # once for the whole run
+            remove(self.rows[run.start][col].cell)  # once for the whole run
             for r in run:
                 del self.rows[r][col]
                 for c in range(col, len(self.rows[r])):
@@ -1356,40 +1352,36 @@ class Sheet:
         # the insertion point, as LibreOffice moves a chart anchored there -
         # it used to be deleted (issue #10) - and the filler padding the
         # sheet to its full height gives back the rows inserted
-        after: Tag | None = None
-        before: Tag | None = None
+        after: etree._Element | None = None
+        before: etree._Element | None = None
         if row < self.n_rows:
             self._unrepeat_row(row)
-            before = cast(Tag, self.rows[row][0].cell.parent)
+            before = cast(etree._Element, self.rows[row][0].cell.getparent())
         else:
             below = self._rows_past_grid()
             if below:
                 before = below[0]
             elif self.n_rows:
-                after = cast(Tag, self.rows[-1][0].cell.parent)
+                after = cast(etree._Element, self.rows[-1][0].cell.getparent())
         self.n_cols = max(self.n_cols, 1)  # a row holds a cell at least
         template = self._empty_row_template(self.n_cols)
-        # inserted by index, found once: bs4's insert_before and insert_after
-        # look it up with parent.index(), a scan from the first child, so
-        # placing each row with them cost count times the insertion point's
-        # position - 8 s for 20,000 rows inserted below 20,000. Right on bs4
-        # only: with the switch to lxml, these become `insert_after` calls
+        # each next to a known element, never by index (see `_insert_chain`):
+        # placed by index, or with bs4's insert_before, each row cost the
+        # insertion point's position - 8 s for 20,000 rows inserted below
+        # 20,000
+        row_tags = [clone(template) for _ in range(count)]
         if before is not None:
-            parent = cast(Tag, before.parent)
-            position = parent.index(before)
+            for row_tag in row_tags:
+                insert_before(before, row_tag)
         elif after is not None:
-            parent = cast(Tag, after.parent)
-            position = _position_after(after)
+            _insert_chain(after, row_tags)
         else:
-            parent = self.table
-            position = len(parent.contents)
-        new_rows = []
-        for k in range(count):
-            row_tag = copy.deepcopy(template)
-            parent.insert(position + k, row_tag)
-            new_rows.append(
-                [Cell(t, row=row + k, col=c, sheet=self) for c, t in enumerate(_row_cells(row_tag))]
-            )
+            for row_tag in row_tags:
+                self.table.append(row_tag)
+        new_rows = [
+            [Cell(t, row=row + k, col=c, sheet=self) for c, t in enumerate(_row_cells(row_tag))]
+            for k, row_tag in enumerate(row_tags)
+        ]
         self.rows[row:row] = new_rows
         for r in range(row + count, len(self.rows)):
             for cell in self.rows[r]:
@@ -1436,16 +1428,17 @@ class Sheet:
             self._unrepeat_row(r)
         for r in range(self.n_rows):
             new_tags = [self._empty_cell_template() for _ in range(count)]
-            # by index, found once per row, as in `insert_rows`
+            # next to a known cell, never by index, as in `insert_rows`
             if col < self.n_cols:
                 self._unrepeat_col(r, col)
                 anchor = self.rows[r][col].cell
-                row_tag = cast(Tag, anchor.parent)
-                row_tag.insert(row_tag.index(anchor), *new_tags)
+                row_tag = cast(etree._Element, anchor.getparent())
+                for new_tag in new_tags:
+                    insert_before(anchor, new_tag)
             else:
                 previous = self.rows[r][-1].cell
-                row_tag = cast(Tag, previous.parent)
-                row_tag.insert(_position_after(previous), *new_tags)
+                row_tag = cast(etree._Element, previous.getparent())
+                _insert_chain(previous, new_tags)
             self.rows[r][col:col] = [Cell(t, row=r, col=col + k, sheet=self) for k, t in enumerate(new_tags)]
             for c in range(col + count, len(self.rows[r])):
                 self.rows[r][c].col = c
@@ -1465,8 +1458,8 @@ class Sheet:
         return [
             (
                 cell,
-                int(cell.attrs.get("table:number-rows-spanned", "1")),
-                int(cell.attrs.get("table:number-columns-spanned", "1")),
+                int(cell.cell.get(_ROWS_SPANNED, "1")),
+                int(cell.cell.get(_COLUMNS_SPANNED, "1")),
             )
             for cells_row in self.rows
             for cell in cells_row
@@ -1481,8 +1474,8 @@ class Sheet:
         self._unrepeat_row(row)
         self._unrepeat_col(row, col)
         master = self.rows[row][col]
-        master.cell.attrs["table:number-rows-spanned"] = str(span_rows)
-        master.cell.attrs["table:number-columns-spanned"] = str(span_cols)
+        master.cell.set(_ROWS_SPANNED, str(span_rows))
+        master.cell.set(_COLUMNS_SPANNED, str(span_cols))
         master.__init__(master.cell, row=row, col=col, sheet=self)  # type: ignore[misc]
         for r in range(row, row + span_rows):
             for c in range(col, col + span_cols):
@@ -1512,24 +1505,24 @@ class Sheet:
         reach `col` at all."""
         seen = 0
         for tag in list(self._column_definitions(self.table)):
-            n = int(tag.attrs.get("table:number-columns-repeated", "1"))
+            n = int(tag.get(_COLUMNS_REPEATED, "1"))
             if seen <= col < seen + n:
                 if col > seen:  # split the repeated definition at `col`
                     rest = clone(tag)
-                    _set_repeat(tag, "table:number-columns-repeated", col - seen)
-                    _set_repeat(rest, "table:number-columns-repeated", seen + n - col)
+                    _set_repeat(tag, _COLUMNS_REPEATED, col - seen)
+                    _set_repeat(rest, _COLUMNS_REPEATED, seen + n - col)
                     insert_after(tag, rest)
                     tag = rest
                 # `tag` now starts at `col`: it is the definition of the
                 # column being pushed right, and the one to repeat
                 new_tag = clone(tag)
-                _set_repeat(new_tag, "table:number-columns-repeated", count)
+                _set_repeat(new_tag, _COLUMNS_REPEATED, count)
                 insert_before(tag, new_tag)
                 break
             seen += n
         else:
             return
-        attr = "table:number-columns-repeated"
+        attr = _COLUMNS_REPEATED
         definitions = list(self._column_definitions(self.table))
         if sum(_repeat(t, attr) for t in definitions) - count in _FULL_WIDTHS:
             after = next(k for k, t in enumerate(definitions) if t is new_tag) + 1
@@ -1580,7 +1573,7 @@ class Sheet:
         - see `TableStyle`), or `None` if there's no owning `ODSReader`."""
         if self.reader is None:
             return None
-        name = self.table.attrs.get("table:style-name")
+        name = self.table.get(_STYLE_NAME)
         tag = self.reader._find_style(name, family="table") if name else None
         return TableStyle(tag, sheet=self)
 
@@ -1590,8 +1583,8 @@ class Sheet:
         owning `ODSReader`."""
         if self.reader is None or row >= self.n_rows:
             return None
-        row_tag = self.rows[row][0].cell.parent
-        name = row_tag.attrs.get("table:style-name")
+        row_tag = self.rows[row][0].cell.getparent()
+        name = row_tag.get(_STYLE_NAME)
         tag = self.reader._find_style(name, family="table-row") if name else None
         return RowStyle(tag, sheet=self, row=row)
 
@@ -1605,28 +1598,26 @@ class Sheet:
         keeps the format of a column formatted as a whole - or `None`."""
         seen = 0
         for tag in self._column_definitions(self.table):
-            seen += _repeat(tag, "table:number-columns-repeated")
+            seen += _repeat(tag, _COLUMNS_REPEATED)
             if col < seen:
-                return cast("str | None", tag.get("table:default-cell-style-name"))
+                return tag.get(qn("table:default-cell-style-name"))
         return None
 
     @classmethod
-    def _column_definitions(cls, parent: Tag) -> "Iterator[Tag]":
+    def _column_definitions(cls, parent: etree._Element) -> "Iterator[etree._Element]":
         """The `<table:table-column>` elements of `parent`, in order, grouped
         or not. ODF puts them before the rows, and the scan stops there:
         looking a column up costs nothing like a pass over the sheet."""
-        for child in parent.children:
-            if not isinstance(child, Tag):
-                continue
-            name = local_name(child)
+        for element in parent.iterchildren(etree.Element):
+            name = local_name(element)
             if name in cls._ROW_LEVEL:
                 return
             if name == "table-column":
-                yield child
+                yield element
             elif name in cls._COLUMN_GROUPS:
-                yield from cls._column_definitions(child)
+                yield from cls._column_definitions(element)
 
-    def _find_column_tag(self, col: int) -> "Tag | None":
+    def _find_column_tag(self, col: int) -> "etree._Element | None":
         """The `<table:table-column>` covering logical column `col`
         (accounting for `table:number-columns-repeated`), or `None` - grouped
         or not: LibreOffice groups the print-title columns' definitions in a
@@ -1634,13 +1625,13 @@ class Sheet:
         them when skipped (issue #13)."""
         seen = 0
         for col_tag in self._column_definitions(self.table):
-            n = int(col_tag.attrs.get("table:number-columns-repeated", "1"))
+            n = int(col_tag.get(_COLUMNS_REPEATED, "1"))
             if seen <= col < seen + n:
                 return col_tag
             seen += n
         return None
 
-    def _unrepeat_column_tag(self, col: int) -> Tag:
+    def _unrepeat_column_tag(self, col: int) -> etree._Element:
         """Split the `table:number-columns-repeated` column-definition tag
         covering `col` into one independent `<table:table-column>` per
         repetition (mirrors `_unrepeat_col`, but for column *definitions*
@@ -1648,7 +1639,7 @@ class Sheet:
         already independent if it wasn't repeated to begin with."""
         col_tag = self._find_column_tag(col)
         assert col_tag is not None  # callers only ask for a column the sheet has
-        n = int(col_tag.attrs.get("table:number-columns-repeated", "1"))
+        n = int(col_tag.get(_COLUMNS_REPEATED, "1"))
         if n <= 1:
             return col_tag
 
@@ -1657,9 +1648,9 @@ class Sheet:
             if tag is col_tag:
                 start = seen
                 break
-            seen += int(tag.attrs.get("table:number-columns-repeated", "1"))
+            seen += int(tag.get(_COLUMNS_REPEATED, "1"))
 
-        copies = _split_repetitions(col_tag, "table:number-columns-repeated", n)
+        copies = _split_repetitions(col_tag, _COLUMNS_REPEATED, n)
         return copies[col - start]
 
     def column_style(self, col: int) -> "ColumnStyle | None":
@@ -1671,11 +1662,13 @@ class Sheet:
         col_tag = self._find_column_tag(col)
         if col_tag is None:
             return None
-        name = col_tag.attrs.get("table:style-name")
+        name = col_tag.get(_STYLE_NAME)
         tag = self.reader._find_style(name, family="table-column") if name else None
         return ColumnStyle(tag, sheet=self, col=col)
 
-    def _fork_style(self, current_name: "str | None", family: str, prefix: str, props_tag_name: str) -> Tag:
+    def _fork_style(
+        self, current_name: "str | None", family: str, prefix: str, props_tag_name: str
+    ) -> etree._Element:
         """The single, uniquely-owned automatic style (see
         `Cell._ensure_own_style` for the cell-level equivalent) behind one
         row/column/sheet's `table:style-name`.
@@ -1692,41 +1685,38 @@ class Sheet:
             # a tag from there is written to in place: a style of
             # `styles.xml` that happens to bear such a name is forked like
             # any other, since save() copies that part through untouched
-            tag = self.reader._automatic_styles().find(
-                "style:style", attrs={"style:name": current_name, "style:family": family}, recursive=False
-            )
-            if tag is not None:
-                return cast(Tag, tag)
+            name, style_family = qn("style:name"), qn("style:family")
+            for tag in children(self.reader._automatic_styles(), "style:style"):
+                if tag.get(name) == current_name and tag.get(style_family) == family:
+                    return tag
         old_tag = self.reader._find_style(current_name, family=family) if current_name else None
         tag = self.reader._new_style_tag(family, prefix)
         if old_tag is not None:
-            old_props = old_tag.find(props_tag_name, recursive=False)
+            old_props = child(old_tag, props_tag_name)
             if old_props is not None:
-                _ensure_style_child(tag, props_tag_name).attrs.update(old_props.attrs)
+                props = _ensure_style_child(tag, props_tag_name)
+                for key, value in old_props.attrib.items():
+                    props.set(key, value)
         return tag
 
-    def _ensure_row_style(self, row: int) -> Tag:
+    def _ensure_row_style(self, row: int) -> etree._Element:
         self._unrepeat_row(row)
-        row_tag = self.rows[row][0].cell.parent
-        tag = self._fork_style(
-            row_tag.attrs.get("table:style-name"), "table-row", "ors", "style:table-row-properties"
-        )
-        row_tag.attrs["table:style-name"] = tag["style:name"]
+        row_tag = self.rows[row][0].cell.getparent()
+        tag = self._fork_style(row_tag.get(_STYLE_NAME), "table-row", "ors", "style:table-row-properties")
+        row_tag.set(_STYLE_NAME, tag.attrib[qn("style:name")])
         return tag
 
-    def _ensure_column_style(self, col: int) -> Tag:
+    def _ensure_column_style(self, col: int) -> etree._Element:
         col_tag = self._unrepeat_column_tag(col)
         tag = self._fork_style(
-            col_tag.attrs.get("table:style-name"), "table-column", "ocos", "style:table-column-properties"
+            col_tag.get(_STYLE_NAME), "table-column", "ocos", "style:table-column-properties"
         )
-        col_tag.attrs["table:style-name"] = tag["style:name"]
+        col_tag.set(_STYLE_NAME, tag.attrib[qn("style:name")])
         return tag
 
-    def _ensure_table_style(self) -> Tag:
-        tag = self._fork_style(
-            self.table.attrs.get("table:style-name"), "table", "ots", "style:table-properties"
-        )
-        self.table.attrs["table:style-name"] = tag["style:name"]
+    def _ensure_table_style(self) -> etree._Element:
+        tag = self._fork_style(self.table.get(_STYLE_NAME), "table", "ots", "style:table-properties")
+        self.table.set(_STYLE_NAME, tag.attrib[qn("style:name")])
         return tag
 
     def empty_row(

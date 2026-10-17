@@ -4,7 +4,7 @@
 import datetime as dt
 
 import pytest
-from bs4 import BeautifulSoup
+from lxml import etree
 
 from odsslicer.dateformats import (
     _STANDARD_FORMATS,
@@ -12,7 +12,7 @@ from odsslicer.dateformats import (
     _format_code_components,
 )
 from odsslicer.styles import NumberFormat, _render_date_time_from_format
-from odsslicer.xmlutils import _ODF_NAMESPACES
+from odsslicer.xmltree import NAMESPACES
 
 _DMY = [("day", "long"), ("text", "/"), ("month", "long"), ("text", "/")]
 
@@ -135,11 +135,11 @@ def _render(code, value):
     )
     overflow = ' number:truncate-on-overflow="false"' if elapsed else ""
     xml = (
-        f'<number:{family}-style xmlns:number="{_ODF_NAMESPACES["number"]}"'
-        f' xmlns:style="{_ODF_NAMESPACES["style"]}" style:name="N1"{overflow}>'
+        f'<number:{family}-style xmlns:number="{NAMESPACES["number"]}"'
+        f' xmlns:style="{NAMESPACES["style"]}" style:name="N1"{overflow}>'
         f"{children}</number:{family}-style>"
     )
-    tag = BeautifulSoup(xml, "xml").find(f"number:{family}-style")
+    tag = etree.fromstring(xml)
     return _render_date_time_from_format(NumberFormat(tag), value, family)
 
 

@@ -1,6 +1,6 @@
 """
 Consistency checks against a real, local LibreOffice install (via its
-`--headless` CLI), not just odsslicer's own BeautifulSoup-based reader.
+`--headless` CLI), not just odsslicer's own reader.
 
 odsslicer's read path is comparatively lenient - it parses whatever XML is
 there. These tests instead hand a file odsslicer *wrote* to actual
@@ -48,7 +48,6 @@ from conftest import (
 )
 from odsslicer import ODSReader
 from odsslicer.classes import Border, NumberFormat
-from odsslicer.sheet import _repeat
 
 
 @requires_soffice
@@ -90,7 +89,7 @@ def test_libreoffice_reads_back_a_forked_cell_style(writable_reader, tmp_path, l
     writable_reader.save(out)
 
     xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
-    style_name = c.attrs["table:style-name"]
+    style_name = c.style_name
     style_def = re.search(rf'<style:style style:name="{style_name}"[^>]*>.*?</style:style>', xml, re.DOTALL)
     assert style_def is not None, f"style {style_name!r} not found in LibreOffice's own re-export"
     assert 'fo:font-weight="bold"' in style_def.group(0)
@@ -112,7 +111,7 @@ def test_libreoffice_reads_back_a_border_with_all_four_sides_explicit(
     writable_reader.save(out)
 
     xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
-    style_name = c.attrs["table:style-name"]
+    style_name = c.style_name
     style_def = re.search(
         rf'<style:style style:name="{style_name}"[^>]*>.*?</style:style>', xml, re.DOTALL
     ).group(0)
@@ -147,7 +146,7 @@ def test_libreoffice_keeps_every_property_across_repeated_style_forks(
 
     xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
     style_def = re.search(
-        rf'<style:style style:name="{b.attrs["table:style-name"]}"[^>]*>.*?</style:style>',
+        rf'<style:style style:name="{b.style_name}"[^>]*>.*?</style:style>',
         xml,
         re.DOTALL,
     )
@@ -527,7 +526,7 @@ def test_libreoffice_still_sees_a_whole_row_and_column_formatted(tmp_path, libre
     }
     rows = fods.find("table:table").find_all("table:table-row")
     yellow = sum(
-        _repeat(cell, "table:number-columns-repeated")
+        int(cell.get("table:number-columns-repeated", "1"))
         for cell in rows[0].find_all(["table:table-cell", "table:covered-table-cell"])
         if backgrounds.get(cell.get("table:style-name")) == "#ffff00"
     )
