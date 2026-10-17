@@ -131,12 +131,10 @@ MUTATIONS = [
         "        self._read_objects()  # a malformed chart raises before anything is renamed\n",
         "",
     ),
-    (
-        "pre-check: through the drawings' cache",
-        "sheet.py",
-        "            self.reader._read_objects()\n",
-        "            self.reader._charts()\n",
-    ),
+    # No mutation for a pre-check through the drawings' cache any more: it
+    # raised TypeError on an element the edit then discarded, which
+    # `_drawings` now leaves out (master, 62ea419) - the guard became a
+    # preference no test can tell from its absence.
     (
         "pre-check: a refusal forgotten",
         "reader.py",

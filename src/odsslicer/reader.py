@@ -584,9 +584,12 @@ class ODSReader:
 
         Found among the package's members, not through the `<draw:object>`
         elements: looking those up now would fill `_drawings`' cache before
-        the edit, with elements the edit may then discard - a row deleted
-        with a chart anchored past the grid's columns. A document whose
-        content names no object has nothing to read, as for `_drawings`."""
+        the edit, with elements the edit may then discard. `_drawings` leaves
+        those out since a row's drawings past the grid are rescued (it raised
+        TypeError on LibreOffice's ser_labels.ods), but the cache is still
+        better filled once the document is in the shape the edit left it. A
+        document whose content names no object has nothing to read, as for
+        `_drawings`."""
         if self._objects_read:
             return
         if b"draw:object" in self.content:
