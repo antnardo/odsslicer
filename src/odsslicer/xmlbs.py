@@ -34,7 +34,6 @@ not this step's to make.
 
 import copy
 import re
-from collections.abc import Iterator
 from typing import cast
 
 from bs4 import BeautifulSoup, CData, NavigableString, Tag
@@ -169,7 +168,7 @@ def wrap_contents(element: Tag, wrapper: Tag) -> None:
     element.append(wrapper)
 
 
-def children(element: Tag, name: str) -> Iterator[Tag]:
+def children(element: Tag, name: str) -> list[Tag]:
     """The children of `element` named `name` ("text:p"), in order -
     `find_all(name, recursive=False)`, `xmltree.children`, without what
     `find_all` costs.
@@ -183,14 +182,14 @@ def children(element: Tag, name: str) -> Iterator[Tag]:
     matches it: prefix and local name, or the whole name on an element whose
     prefix the parser could not resolve.
 
-    An iterator, as lxml's: `list()` it where the result is counted or
-    tested for emptiness."""
+    A list, and in both layers: those paths test it for emptiness, and a
+    generator cost them a tenth of `Sheet.load`."""
     prefix, _, local = name.partition(":")
-    for child in element.contents:
-        if isinstance(child, Tag) and (
-            child.name == name or (child.name == local and child.prefix == prefix)
-        ):
-            yield child
+    return [
+        child
+        for child in element.contents
+        if isinstance(child, Tag) and (child.name == name or (child.name == local and child.prefix == prefix))
+    ]
 
 
 def local_name(element: Tag) -> str:

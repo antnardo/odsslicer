@@ -165,12 +165,16 @@ def serialize(tree: "etree._ElementTree", original: bytes) -> bytes:
     return original[:end] + etree.tostring(tree, encoding="UTF-8", xml_declaration=False)
 
 
-def children(element: etree._Element, name: str) -> "Iterator[etree._Element]":
+def children(element: etree._Element, name: str) -> "list[etree._Element]":
     """The children of `element` named `name` - bs4's
     `find_all(name, recursive=False)`. A cell's own paragraphs are its
     children; the paragraphs of its note are further down, and a search of
-    the descendants took them for the cell's value once."""
-    return element.iterchildren(qn(name))
+    the descendants took them for the cell's value once.
+
+    A list, as `find_all` returns, rather than lxml's iterator: the code
+    tests the result for emptiness once per cell, and `xmlbs.children`, its
+    bs4 counterpart, cost a tenth of `Sheet.load` as a generator."""
+    return list(element.iterchildren(qn(name)))
 
 
 def descendants(element: etree._Element, *names: str) -> "Iterator[etree._Element]":

@@ -78,8 +78,8 @@ MUTATIONS = [
     (
         "xmltree.children searches the descendants",
         "xmltree.py",
-        "return element.iterchildren(qn(name))",
-        "return element.iterdescendants(qn(name))",
+        "return list(element.iterchildren(qn(name)))",
+        "return list(element.iterdescendants(qn(name)))",
     ),
     (
         "xmltree.new declares no prefix",
@@ -168,8 +168,8 @@ MUTATIONS = [
     (
         "xmlbs.children searches the descendants",
         "xmlbs.py",
-        "    for child in element.contents:\n",
-        "    for child in element.descendants:\n",
+        "        for child in element.contents\n",
+        "        for child in element.descendants\n",
     ),
     (
         "xmlbs.local_name gives the prefixed name",

@@ -5,7 +5,6 @@
 # error class, and all signatures, remain fully checked.)
 """ArrayValues (multi-cell selections), Comment (cell notes) and Cell itself."""
 
-import copy
 import datetime as dt
 import decimal
 import itertools
@@ -36,15 +35,22 @@ from .formulas import (
     _shift_odf_formula,
 )
 from .styles import CellStyle, _render_date_time_from_format, _render_number_from_format
-from .xmlutils import (
-    _ODF_NAMESPACES,
-    _blank_template,
-    _children_named,
-    _ensure_style_child,
-    _new_qualified_tag,
-    _paragraph_text,
-    _set_paragraph_text,
+from .xmlbs import (
+    children,
+    clone,
+    insert_before,
+    local_name,
+    name_of,
+    new,
+    paragraph_text,
+    remove,
+    set_paragraph_text,
+    set_text,
+    text,
+    unwrap,
+    wrap_contents,
 )
+from .xmlutils import _ODF_NAMESPACES, _ensure_style_child
 
 if TYPE_CHECKING:
     from .reader import ODSReader
@@ -254,66 +260,66 @@ class Comment:
     def _insert_before_text(self, child: Tag) -> None:
         # keeps dc:creator/dc:date ahead of the text:p paragraphs, matching
         # real ODF layout, regardless of which property gets set first
-        first_p = self._tag.find("text:p")
+        first_p = cast("Tag | None", self._tag.find("text:p"))
         if first_p is not None:
-            first_p.insert_before(child)
+            insert_before(first_p, child)
         else:
             self._tag.append(child)
 
     @property
     def text(self) -> "str | None":
-        paragraphs = [_paragraph_text(p) for p in self._tag.find_all("text:p")]
+        paragraphs = [paragraph_text(p) for p in self._tag.find_all("text:p")]
         return "\n".join(paragraphs) if paragraphs else None
 
     @text.setter
     def text(self, value: "str | None") -> None:
         for p in self._tag.find_all("text:p"):
-            p.decompose()
+            remove(p)
         for line in (value or "").split("\n"):
-            p = _blank_template(self._tag, "text:p")
-            _set_paragraph_text(p, line)
+            p = new("text:p", near=self._tag)
+            set_paragraph_text(p, line)
             self._tag.append(p)
 
     @property
     def author(self) -> "str | None":
-        tag = self._tag.find("dc:creator")
-        return tag.get_text() if tag is not None else None
+        tag = cast("Tag | None", self._tag.find("dc:creator"))
+        return text(tag) if tag is not None else None
 
     @author.setter
     def author(self, value: "str | None") -> None:
-        tag = self._tag.find("dc:creator")
+        tag = cast("Tag | None", self._tag.find("dc:creator"))
         if value is None:
             if tag is not None:
-                tag.decompose()
+                remove(tag)
             return
         if tag is None:
-            tag = _blank_template(self._tag, "dc:creator")
+            tag = new("dc:creator", near=self._tag)
             self._insert_before_text(tag)
-        tag.string = value
+        set_text(tag, value)
 
     @property
     def date(self) -> "dt.datetime | None":
-        tag = self._tag.find("dc:date")
+        tag = cast("Tag | None", self._tag.find("dc:date"))
         if tag is None:
             return None
         try:
-            return dt.datetime.fromisoformat(tag.get_text())
+            return dt.datetime.fromisoformat(text(tag))
         except ValueError:
             return None
 
     @date.setter
     def date(self, value: "dt.datetime | None") -> None:
-        tag = self._tag.find("dc:date")
+        tag = cast("Tag | None", self._tag.find("dc:date"))
         if value is None:
             if tag is not None:
-                tag.decompose()
+                remove(tag)
             return
         if not isinstance(value, dt.datetime):
             raise TypeError(f"Comment.date must be a datetime.datetime or None, got {type(value)!r}")
         if tag is None:
-            tag = _blank_template(self._tag, "dc:date")
+            tag = new("dc:date", near=self._tag)
             self._insert_before_text(tag)
-        tag.string = value.isoformat()
+        set_text(tag, value.isoformat())
 
     @property
     def visible(self) -> bool:
@@ -357,12 +363,12 @@ class Cell:
         # recursive=False: a cell's own value paragraphs are always direct
         # children - an unscoped find_all() would also match those nested
         # inside an office:annotation (a cell comment, see Cell.comment).
-        paragraphs = _children_named(self.cell, "text:p")
-        # `_paragraph_text`, not `p.string` - None both for a genuinely empty
+        paragraphs = children(self.cell, "text:p")
+        # `paragraph_text`, not `p.string` - None both for a genuinely empty
         # <text:p/> (a formula whose cached result is "") and for one with
         # several children (spans...) - nor `get_text()`, which drops the
         # spaces, tabs and line breaks ODF writes as elements (issue #27).
-        self.text: str | None = "\n".join(_paragraph_text(p) for p in paragraphs) if paragraphs else None
+        self.text: str | None = "\n".join(paragraph_text(p) for p in paragraphs) if paragraphs else None
         # A value its declared type cannot be read from - a malformed date, a
         # type no reader knows (KeyError) - must not take the whole sheet
         # down with it: the cell reads as its displayed text instead, and
@@ -881,17 +887,17 @@ class Cell:
         paragraphs = self.cell.find_all("text:p", recursive=False)  # see __init__'s note on scoping
         if text is None:
             for p in paragraphs:
-                p.decompose()
+                remove(p)
             self.text = None
             return
         # one paragraph per line, the only way ODF represents a multi-line
         # cell (a literal "\n" inside a paragraph is just whitespace there)
         lines = text.split("\n")
         for extra in paragraphs[len(lines) :]:
-            extra.decompose()
+            remove(extra)
         for i, line in enumerate(lines):
             p = paragraphs[i] if i < len(paragraphs) else self._new_text_paragraph()
-            _set_paragraph_text(p, line)
+            set_paragraph_text(p, line)
         self.text = text
 
     def _new_text_paragraph(self) -> Tag:
@@ -900,13 +906,14 @@ class Cell:
         An existing text:p elsewhere in the document is preferred as a
         template (keeps whatever incidental formatting bs4/lxml would
         otherwise not know how to reproduce), falling back to building one
-        from scratch (see `_new_qualified_tag`) if there is none."""
-        template = self.cell.find_previous("text:p") or self.cell.find_next("text:p")
+        from scratch (see `xmlbs.new`) if there is none."""
+        template = cast("Tag | None", self.cell.find_previous("text:p") or self.cell.find_next("text:p"))
         if template is None:
-            p = _new_qualified_tag("text:p")
+            # no paragraph anywhere: `new` declares the namespace, as it did
+            p = new("text:p", near=self.cell)
         else:
-            p = cast(Tag, copy.copy(template))
-            p.string = ""
+            p = clone(template)
+            set_text(p, "")
         self.cell.append(p)
         return p
 
@@ -1108,13 +1115,13 @@ class Cell:
             if "style:data-style-name" in source.attrs:  # the number format
                 tag.attrs["style:data-style-name"] = source.attrs["style:data-style-name"]
             for child in source.find_all(True, recursive=False):
-                child_name = f"{child.prefix}:{child.name}" if child.prefix else child.name
+                child_name = name_of(child)
                 if child_name in self._STYLE_PROPERTY_TAGS:
                     _ensure_style_child(tag, child_name).attrs.update(child.attrs)
                 else:
                     for previous in tag.find_all(child_name, recursive=False):
-                        previous.decompose()  # this nearer style replaces them
-                    tag.append(copy.deepcopy(child))
+                        remove(previous)  # this nearer style replaces them
+                    tag.append(clone(child))
 
     @property
     def is_merge_master(self) -> bool:
@@ -1132,7 +1139,7 @@ class Cell:
         (a `table:covered-table-cell`) - its own value/formatting is still
         there in the XML, just not shown, until `Sheet.unmerge(...)`
         reveals it again."""
-        return self.cell.name == "covered-table-cell"
+        return local_name(self.cell) == "covered-table-cell"
 
     @property
     def is_merged(self) -> bool:
@@ -1197,12 +1204,14 @@ class Cell:
         tag = cast("Tag | None", self.cell.find("office:annotation", recursive=False))
         if value is None:
             if tag is not None:
-                tag.decompose()
+                remove(tag)
             return
         if not isinstance(value, str):
             raise TypeError(f"cell.comment must be a str or None, got {type(value)!r}")
         if tag is None:
-            tag = _blank_template(self.cell, "office:annotation")
+            tag = new("office:annotation", near=self.cell)
+            # bs4 puts it before any text the cell starts with, lxml after:
+            # indentation at most, in a cell
             self.cell.insert(0, tag)
         Comment(tag).text = value
 
@@ -1233,7 +1242,7 @@ class Cell:
             if p is not None:
                 a = cast("Tag | None", p.find("text:a", recursive=False))
                 if a is not None:
-                    a.unwrap()
+                    unwrap(a)
             return
         if not isinstance(url, str):
             raise TypeError(f"cell.hyperlink must be a str or None, got {type(url)!r}")
@@ -1242,11 +1251,9 @@ class Cell:
             p = cast(Tag, self.cell.find("text:p", recursive=False))
         a = cast("Tag | None", p.find("text:a", recursive=False))
         if a is None:
-            a = _blank_template(self.cell, "text:a")
+            a = new("text:a", near=self.cell)
             a.attrs["xmlns:xlink"] = _ODF_NAMESPACES["xlink"]
             # the paragraph's content moves into the link as it is - spans and
             # encoded spaces included - rather than flattened to its text
-            for child in list(p.children):
-                a.append(child.extract())
-            p.append(a)
+            wrap_contents(p, a)
         a.attrs["xlink:href"] = url

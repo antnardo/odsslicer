@@ -461,10 +461,11 @@ class TestChildren:
         cell = side.kids(side.root(NOTED))[0]
         assert [side.layer.text(p) for p in side.layer.children(cell, "text:p")] == ["v"]
 
-    def test_children_is_an_iterator_as_lxml_gives_it(self, side):
-        # truthiness or len() of the result would hold on a list only
-        found = side.layer.children(side.kids(side.root(NOTED))[0], "text:p")
-        assert iter(found) is found
+    def test_children_is_a_list_in_both_layers(self, side):
+        # the code tests it for emptiness: an lxml iterator would always be true
+        cell = side.kids(side.root(NOTED))[0]
+        assert isinstance(side.layer.children(cell, "text:p"), list)
+        assert side.layer.children(cell, "text:s") == []
 
 
 def test_both_layers_have_the_same_operations():

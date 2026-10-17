@@ -136,8 +136,4 @@ def _is_forked_style_name(name: "str | None", prefix: str) -> bool:
 # calls them there.
 _paragraph_text = paragraph_text
 _set_paragraph_text = set_paragraph_text
-
-
-def _children_named(tag: Tag, name: str) -> list[Tag]:
-    """`xmlbs.children`, as the list it used to be."""
-    return list(children(tag, name))
+_children_named = children
