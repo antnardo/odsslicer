@@ -23,6 +23,7 @@ from typing import ClassVar
 import numpy as np
 import pytest
 from bs4 import Tag
+from lxml import etree
 
 from conftest import (
     ENCODED_WHITESPACE,
@@ -43,13 +44,14 @@ from conftest import (
     number_cell,
     ods_with_prefixes,
     ods_with_sheet,
+    rebind_prefix,
     saved_table,
     shape_cell,
     table_row,
     text_cell,
     with_chart,
 )
-from odsslicer import ODSReader
+from odsslicer import MalformedDocumentError, ODSReader
 from odsslicer.classes import ArrayValues, Border, Cell, CellStyle, NumberFormat, Sheet
 from odsslicer.constants import TAG_CELL
 from odsslicer.sheet import _repeat
@@ -2122,6 +2124,140 @@ def test_a_chart_part_no_edit_moves_is_copied_through_byte_for_byte(tmp_path):
 
     with zipfile.ZipFile(path) as package:
         assert package.read("Object 1/content.xml") == before
+
+
+def _chart_part_edited(path, edit):
+    """`path` with its chart part, `Object 1/content.xml`, through `edit`
+    (bytes -> bytes), in place."""
+    with zipfile.ZipFile(path) as package:
+        members = [(item, package.read(item.filename)) for item in package.infolist()]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as package:
+        for item, data in members:
+            package.writestr(item, edit(data) if item.filename == "Object 1/content.xml" else data)
+    return path
+
+
+_CHART_NS = "urn:oasis:names:tc:opendocument:xmlns:chart:1.0"
+_TABLE_NS = "urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+_OFFICE_NS = "urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+
+
+def test_a_chart_with_other_prefixes_follows_and_keeps_its_own(tmp_path):
+    # a chart's part is on lxml: its ranges are found by namespace whatever
+    # prefixes it binds, and it is written back with the same prefixes
+    path = _chart_part_edited(
+        _chart_workbook(tmp_path),
+        lambda data: rebind_prefix(
+            rebind_prefix(rebind_prefix(data, _CHART_NS, "c"), _TABLE_NS, "t"), _OFFICE_NS, "o"
+        ),
+    )
+    with zipfile.ZipFile(path) as package:
+        assert b"<c:series " in package.read("Object 1/content.xml")
+    r = ODSReader(path)
+    r.sheet("Sheet1").insert_rows(4)
+    r.save()
+
+    with zipfile.ZipFile(path) as package:
+        saved = package.read("Object 1/content.xml")
+    assert b'<c:plot-area t:cell-range-address="Sheet1.A1:Sheet1.B8">' in saved
+    assert b'<c:categories t:cell-range-address="Sheet1.A2:Sheet1.A8"/>' in saved
+    assert b'c:values-cell-range-address="Sheet1.B2:Sheet1.B8"' in saved
+    assert b"xmlns:chart=" not in saved and b"xmlns:table=" not in saved and b"<office:" not in saved
+
+
+def test_a_chart_part_rewritten_with_its_ranges_unchanged_says_what_it_said(tmp_path):
+    # its data on Data, an edit of Sheet1: the part is serialised by lxml,
+    # nothing in it having moved - the same document in canonical form,
+    # under the XML declaration it was read with
+    path = _chart_workbook(tmp_path, sheet="Data")
+    with zipfile.ZipFile(path) as package:
+        before = package.read("Object 1/content.xml")
+    r = ODSReader(path)
+    r.sheet("Sheet1").insert_rows(0)
+    r.save()
+
+    with zipfile.ZipFile(path) as package:
+        after = package.read("Object 1/content.xml")
+    assert after != before, "a structural edit is expected to rewrite every chart"
+    assert etree.tostring(etree.fromstring(after), method="c14n") == etree.tostring(
+        etree.fromstring(before), method="c14n"
+    )
+    assert after.startswith(b'<?xml version="1.0" encoding="UTF-8"?>\n<office:document-content')
+
+
+def test_an_embedded_object_that_is_no_chart_is_copied_through_a_structural_edit(tmp_path):
+    # a formula object, say: its part has no office:chart, and is not ours -
+    # an empty element and an escape in it, which serialising would rewrite
+    formula = (
+        b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        b'<math xmlns="http://www.w3.org/1998/Math/MathML"><semantics>'
+        b"<mi>x</mi><mtext>&apos;</mtext><mspace></mspace></semantics></math>"
+    )
+    path = _chart_part_edited(_chart_workbook(tmp_path), lambda data: formula)
+    r = ODSReader(path)
+    r.sheet("Sheet1").insert_rows(4)
+    r.save()
+
+    with zipfile.ZipFile(path) as package:
+        assert package.read("Object 1/content.xml") == formula
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda r: r.sheet("Sheet1").insert_rows(4),
+        lambda r: r.sheet("Sheet1").insert_columns(1),
+        lambda r: r.sheet("Sheet1").delete_rows([3]),
+        lambda r: r.sheet("Sheet1").delete_column(1),
+        lambda r: r.rename_sheet("Sheet1", "Report"),
+    ],
+    ids=["insert_rows", "insert_columns", "delete_rows", "delete_column", "rename_sheet"],
+)
+def test_a_structural_edit_refuses_a_malformed_chart_before_changing_anything(tmp_path, edit):
+    # strict parsing, as for every part on lxml: bs4 recovered a truncated
+    # chart and save() wrote the guess back; the edit now raises, the sheet
+    # left as it was rather than edited but for its chart
+    path = _chart_part_edited(_chart_workbook(tmp_path), lambda data: data[: len(data) // 2])
+    r = ODSReader(path)
+    before = r.data.encode("utf-8")
+
+    for _ in range(2):  # and again: a refusal is not forgotten
+        with pytest.raises(MalformedDocumentError, match=r"Object 1/content\.xml"):
+            edit(r)
+
+    assert r.data.encode("utf-8") == before
+    assert r.sheets_names == ["Sheet1"]
+
+
+def test_reading_the_charts_before_an_edit_leaves_the_drawings_to_the_edit(tmp_path):
+    # the charts are parsed before a structural edit, to refuse a malformed
+    # one; looking them up through their `<draw:object>` would also record
+    # the drawings before the edit - and deleting the row of a chart
+    # anchored past the grid's columns (P1 here, past 13 empty columns, as
+    # LibreOffice's own ser_labels.ods has it) discards it, which the remap
+    # then tripped on (TypeError)
+    xml = table_row(
+        text_cell("Day"),
+        text_cell("Visits"),
+        empty_cells(13),
+        "<table:table-cell>" + chart_frame("Sheet1.B2:Sheet1.B3", "Sheet1.T10") + "</table:table-cell>",
+    ) + "".join(
+        table_row(text_cell(day), text_cell(visits)) for day, visits in (("mon", "10"), ("tue", "20"))
+    )
+    path = with_chart(
+        ods_with_sheet(tmp_path / "chart.ods", xml),
+        plot="Sheet1.A1:Sheet1.B3",
+        categories="Sheet1.A2:Sheet1.A3",
+        values="Sheet1.B2:Sheet1.B3",
+        label="Sheet1.B1:Sheet1.B1",
+    )
+    r = ODSReader(path)
+    assert r.sheet("Sheet1").n_cols == 2, "the chart is expected to be anchored past the grid"
+
+    r.sheet("Sheet1").delete_rows([0])
+    r.save()
+
+    assert ODSReader(path).sheet("Sheet1")["A1"].value == "mon"
 
 
 def test_save_round_trip(writable_reader, tmp_path):

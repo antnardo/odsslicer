@@ -1201,6 +1201,7 @@ class Sheet:
         for row in targets:
             if row < 0 or row >= self.n_rows:
                 raise IndexError(f"row {row} out of range (sheet has {self.n_rows} rows)")
+        self._read_charts_first()
         for row in targets:
             c = 0
             while c < self.n_cols:
@@ -1240,6 +1241,7 @@ class Sheet:
         """
         if col < 0 or col >= self.n_cols:
             raise IndexError(f"column {col} out of range (sheet has {self.n_cols} columns)")
+        self._read_charts_first()
         r = 0
         while r < self.n_rows:
             if self.rows[r][col].is_merged:
@@ -1310,6 +1312,7 @@ class Sheet:
             raise ValueError(f"count must be at least 1, got {count}")
         if row < 0 or row > self.n_rows:
             raise IndexError(f"row {row} out of range for insertion (sheet has {self.n_rows} rows)")
+        self._read_charts_first()
         if self.n_cols == 0 and self.n_rows > 0:  # every column deleted
             self.grow_to(self.n_rows - 1, 0)
         straddling = [
@@ -1389,6 +1392,7 @@ class Sheet:
             raise ValueError(f"count must be at least 1, got {count}")
         if col < 0 or col > self.n_cols:
             raise IndexError(f"column {col} out of range for insertion (sheet has {self.n_cols} columns)")
+        self._read_charts_first()
         straddling = [
             (master.row, master.col, span_rows, span_cols)
             for master, span_rows, span_cols in self._merge_masters()
@@ -1499,6 +1503,15 @@ class Sheet:
         if sum(_repeat(t, attr) for t in definitions) - count in _FULL_WIDTHS:
             after = next(k for k, t in enumerate(definitions) if t is new_tag) + 1
             _give_back(definitions[after:], attr, count)
+
+    def _read_charts_first(self) -> None:
+        """Parse the content of the document's charts, if not done yet,
+        before a structural edit changes anything: a chart's part that is
+        not well-formed raises `MalformedDocumentError` with the sheet as it
+        was, rather than once the edit is halfway through (see
+        `ODSReader._read_objects`)."""
+        if self.reader is not None:
+            self.reader._read_objects()
 
     def _remap_formula_references(self, remap: _Remap) -> None:
         """After a structural edit of this sheet (rows or columns deleted or

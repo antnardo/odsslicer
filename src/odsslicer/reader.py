@@ -7,6 +7,7 @@ from typing import cast
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from bs4 import BeautifulSoup, Tag
+from lxml import etree
 
 from .dateformats import _default_format_code, _format_code_components
 from .fileutils import _replacing
@@ -16,7 +17,7 @@ from .properties import DocumentProperties
 from .sheet import Sheet
 from .styles import _NUMBER_STYLE_TAGS, NumberFormat
 from .xmlbs import discard, insert_after, insert_before, name_of, new, remove, text
-from .xmltree import parse, serialize
+from .xmltree import parse, qn, serialize
 from .xmlutils import _encrypted_parts, _parse_xml
 
 logger = logging.getLogger("odsslicer")
@@ -69,9 +70,49 @@ def _same_number_format(a: Tag, b: Tag) -> bool:
     return definition(a) == definition(b)
 
 
+# A chart's attributes holding cell ranges, in its own content.xml, by
+# namespace URI (`xmltree.qn`): the chart's part is on lxml
+_CHART_RANGE_ATTRS = tuple(
+    qn(name)
+    for name in (
+        "table:cell-range-address",
+        "chart:values-cell-range-address",
+        "chart:label-cell-address",
+        "chart:error-lower-range",
+        "chart:error-upper-range",
+    )
+)
+_OFFICE_CHART = qn("office:chart")
+
+
+def _carrying(chart: "etree._ElementTree", attr: str) -> "list[etree._Element]":
+    """The elements of `chart` with attribute `attr` (by URI), in document
+    order, the root included - bs4's `find_all(attrs={attr: True})`, which
+    searched the whole document. Wherever a range sits in a chart, it
+    follows the cells."""
+    return [element for element in chart.getroot().iter(etree.Element) if attr in element.attrib]
+
+
 class EncryptedDocumentError(ValueError):
     """The package is password-protected: its content is encrypted, and
     odsslicer reads none of it rather than read it as an empty document."""
+
+
+class MalformedDocumentError(ValueError):
+    """A part of the package is not well-formed XML. odsslicer reads it as
+    written or not at all: a parser that recovers would complete a truncated
+    part with whatever it guesses, and `save()` would write that guess back
+    over the original."""
+
+
+def _parse_part(file: Path, name: str, markup: bytes) -> "etree._ElementTree":
+    """Package part `name` of `file` as an lxml tree (`xmltree.parse`),
+    `MalformedDocumentError` naming the part and the place if it is not
+    well-formed."""
+    try:
+        return parse(markup)
+    except etree.XMLSyntaxError as exc:
+        raise MalformedDocumentError(f"{file}: {name} is not well-formed XML ({exc})") from exc
 
 
 class ODSReader:
@@ -114,10 +155,10 @@ class ODSReader:
         self.data = _parse_xml(self.content)
         self.styles_data = _parse_xml(self.styles)
         # on lxml alone, the feasibility study's prototype - see `properties`
-        self.meta_data = parse(self.meta)
+        self.meta_data = _parse_part(self.file, "meta.xml", self.meta)
         # `settings.xml` holds nothing a cell needs, so it is parsed only if
         # something asks for it - see `settings_data`
-        self._settings_data: BeautifulSoup | None = None
+        self._settings_data: etree._ElementTree | None = None
         # The parts save() regenerates only once something here wrote to
         # their tree; until then it copies their bytes through, which is
         # what keeps the promise that editing values leaves the styling
@@ -134,10 +175,12 @@ class ODSReader:
         self._default_date_formats: dict[str, str] = {}
         self._date_formatted_styles: dict[tuple[str | None, str], str] = {}
         # the package's other parts parsed on demand - the content of the
-        # charts, for their cell ranges - which save() writes back; None
-        # for an embedded object that is no chart
-        self._parts: dict[str, BeautifulSoup | None] = {}
+        # charts, for their cell ranges - which save() writes back, each with
+        # the bytes it was read from; None for an embedded object that is no
+        # chart
+        self._parts: dict[str, tuple[etree._ElementTree, bytes] | None] = {}
         self._drawing_tags: tuple[list[Tag], list[Tag]] | None = None  # see _drawings
+        self._objects_read = False  # see _read_objects
         # number formats, by name: whether each counts time in full, [HH]:MM
         # (see Cell._counts_elapsed_time)
         self._elapsed_formats: dict[str, bool] = {}
@@ -153,21 +196,25 @@ class ODSReader:
         return DocumentProperties(self)
 
     @property
-    def settings_data(self) -> BeautifulSoup:
+    def settings_data(self) -> "etree._ElementTree":
         """`settings.xml` - what the application remembers of the window
         rather than of the document: frozen panes, the active sheet, the
-        cursor's position - parsed on first access.
+        cursor's position - as an lxml tree, parsed on first access.
+        Elements are named by namespace URI, whatever prefix the file
+        binds: `xmltree.qn("config:config-item")`.
 
         Reading a cell never needs it, and `save()` copies its bytes
         through, so a document nothing asks it of is never parsed at all:
         the cost is paid by the code that wants it. A missing part (Excel
         ships none) gives the blank skeleton above, so that writing to it
-        works the same way.
+        works the same way. A part that is not well-formed XML raises
+        `MalformedDocumentError`.
 
-        Whatever writes here must call `_touched_part("settings.xml")`, or
-        `save()` will copy the original bytes over the change."""
+        Whatever writes here must call `_touched_tag` on what it wrote (or
+        `_touched_part("settings.xml")`), or `save()` will copy the original
+        bytes over the change."""
         if self._settings_data is None:
-            self._settings_data = _parse_xml(self.settings)
+            self._settings_data = _parse_part(self.file, "settings.xml", self.settings)
         return self._settings_data
 
     def _touched_part(self, name: str) -> None:
@@ -176,29 +223,55 @@ class ODSReader:
         its bytes through."""
         self._touched.add(name)
 
-    def _touched_tag(self, tag: Tag) -> None:
+    def _touched_tag(self, tag: "Tag | etree._Element") -> None:
         """Record a write to `tag`, wherever it lives: the part whose tree
         holds it is then serialised by `save()`. For a tag of `content.xml`
         or `meta.xml`, which are always regenerated, there is nothing to
         record. The way for code that writes to a tag it found rather than
         made - a number format of `styles.xml`, say - to say so without
-        knowing which part it came from."""
-        top: Tag = tag
-        while top.parent is not None:
-            top = top.parent  # up to the document itself, the BeautifulSoup object
+        knowing which part it came from.
+
+        Until 1.0 the parts are on two libraries: `styles.xml` on bs4, whose
+        tag climbs to the BeautifulSoup object; `settings.xml` and the
+        charts on lxml, whose element climbs to its tree's root. Not by
+        `getroottree()`: an element taken out of its tree still belongs to
+        the same lxml document, and `getroottree()` answers that document's
+        root - a write to a detached element would count as one to the
+        part. Climbing, it is a root of its own, and belongs to no part."""
+        top: object
+        if isinstance(tag, etree._Element):
+            element = tag
+            while (parent := element.getparent()) is not None:
+                element = parent
+            top = element
+        else:
+            top = tag
+            while top.parent is not None:
+                top = top.parent  # up to the document itself, the BeautifulSoup object
         for name, part in self._lazy_parts().items():
-            if part is top:
+            root = part.getroot() if isinstance(part, etree._ElementTree) else part
+            if root is top:
                 self._touched_part(name)
 
-    def _lazy_parts(self) -> "dict[str, BeautifulSoup]":
+    def _lazy_parts(self) -> "dict[str, BeautifulSoup | etree._ElementTree]":
         """The parsed parts `save()` writes back only once touched, by the
         name they have in the package. `settings.xml` is absent until
         something parses it; so is a chart's content (see `_charts`)."""
-        parts: dict[str, BeautifulSoup] = {"styles.xml": self.styles_data}
+        parts: dict[str, BeautifulSoup | etree._ElementTree] = {"styles.xml": self.styles_data}
         if self._settings_data is not None:
             parts["settings.xml"] = self._settings_data
-        parts.update({name: part for name, part in self._parts.items() if part is not None})
+        parts.update({name: part[0] for name, part in self._parts.items() if part is not None})
         return parts
+
+    def _serialized(self, name: str, part: "BeautifulSoup | etree._ElementTree") -> bytes:
+        """Parsed part `name` back to bytes: by bs4 for `styles.xml`, by
+        `xmltree.serialize` under the XML declaration it was read with for
+        the parts on lxml."""
+        if not isinstance(part, etree._ElementTree):
+            return part.encode("utf-8")
+        if name == "settings.xml":
+            return serialize(part, self.settings)
+        return serialize(part, cast("tuple[etree._ElementTree, bytes]", self._parts[name])[1])
 
     def _find_style(self, name: "str | None", family: "str | None" = None) -> "Tag | None":
         """A `<style:style>` by name (optionally constrained to a
@@ -419,7 +492,9 @@ class ODSReader:
             "meta.xml": serialize(self.meta_data, self.meta),
         }
         regenerated.update(
-            (name, part.encode("utf-8")) for name, part in self._lazy_parts().items() if name in self._touched
+            (name, self._serialized(name, part))
+            for name, part in self._lazy_parts().items()
+            if name in self._touched
         )
         with ZipFile(self.file) as src:
             entries = [
@@ -439,15 +514,6 @@ class ODSReader:
             # the parameter shadows the module function
             _recalculate_file(path, timeout=timeout, update_links=update_links)
 
-    # A chart's attributes holding cell ranges, in its own content.xml
-    _CHART_RANGE_ATTRS = (
-        "table:cell-range-address",
-        "chart:values-cell-range-address",
-        "chart:label-cell-address",
-        "chart:error-lower-range",
-        "chart:error-upper-range",
-    )
-
     def _drawings(self) -> "tuple[list[Tag], list[Tag]]":
         """The elements of `content.xml` recording the cell they end in,
         `table:end-cell-address`, and the embedded objects, `<draw:object>`,
@@ -466,13 +532,19 @@ class ODSReader:
                 self._drawing_tags = ([], [])
         return self._drawing_tags
 
-    def _charts(self) -> "list[tuple[str, BeautifulSoup]]":
+    def _charts(self) -> "list[tuple[str, etree._ElementTree]]":
         """The content of every chart embedded in the document, each the
         `content.xml` of an object of the package (`Object 1/`...) that a
-        `<draw:object>` points at, parsed once and kept for save(), with
-        the name it has in the package: parsing one is not editing it, so
-        a caller about to rewrite its ranges has to say so
-        (`_touched_part`) for save() to write the tree back."""
+        `<draw:object>` points at, parsed once with lxml and kept for
+        save(), with the name it has in the package: parsing one is not
+        editing it, so a caller about to rewrite its ranges has to say so
+        (`_touched_part`) for save() to write the tree back.
+
+        `<draw:object>` itself is in `content.xml`, still on bs4 until 1.0;
+        only the chart's own part is on lxml, which nothing else reads.
+        Its elements are found by namespace, whatever prefixes it binds.
+        An object's part that is not well-formed XML raises
+        `MalformedDocumentError` - before the edit, see `_read_objects`."""
         wanted = []
         for tag in self._drawings()[1]:
             href = cast(str, tag.get("xlink:href", "")).removeprefix("./").rstrip("/")
@@ -483,9 +555,37 @@ class ODSReader:
             with ZipFile(self.file) as package:
                 members = set(package.namelist())
                 for name in missing:
-                    part = _parse_xml(package.read(name)) if name in members else None
-                    self._parts[name] = part if part and part.find("office:chart") else None
-        return [(name, part) for name in wanted if (part := self._parts[name]) is not None]
+                    self._parts[name] = (
+                        self._chart_part(name, package.read(name)) if name in members else None
+                    )
+        return [(name, part[0]) for name in wanted if (part := self._parts[name]) is not None]
+
+    def _chart_part(self, name: str, markup: bytes) -> "tuple[etree._ElementTree, bytes] | None":
+        """Object part `name` parsed, with the bytes it was read from, if it
+        is a chart's - `None` for another object, an embedded formula say."""
+        tree = _parse_part(self.file, name, markup)
+        # `office:chart` anywhere, the root included, where bs4's `find` looked for it
+        return (tree, markup) if next(tree.getroot().iter(_OFFICE_CHART), None) is not None else None
+
+    def _read_objects(self) -> None:
+        """Parse the content of every object the package embeds, if not done
+        yet, before a structural edit changes anything: one that is not
+        well-formed XML raises `MalformedDocumentError` with the document as
+        it was, rather than once the edit is halfway through.
+
+        Found among the package's members, not through the `<draw:object>`
+        elements: looking those up now would fill `_drawings`' cache before
+        the edit, with elements the edit may then discard - a row deleted
+        with a chart anchored past the grid's columns. A document whose
+        content names no object has nothing to read, as for `_drawings`."""
+        if self._objects_read:
+            return
+        if b"draw:object" in self.content:
+            with ZipFile(self.file) as package:
+                for name in package.namelist():
+                    if name.endswith("/content.xml") and name not in self._parts:
+                        self._parts[name] = self._chart_part(name, package.read(name))
+        self._objects_read = True  # once every part has parsed: a malformed one raises again
 
     def _remap_drawing_references(self, target_sheet: str, remap: _Remap) -> None:
         """After a structural edit of `target_sheet`, have what drawings hold
@@ -508,9 +608,9 @@ class ODSReader:
                 tag["draw:notify-on-update-of-ranges"] = _remap_range_list(ranges, target_sheet, remap)
         for name, chart in self._charts():
             self._touched_part(name)
-            for attr in self._CHART_RANGE_ATTRS:
-                for tag in chart.find_all(attrs={attr: True}):
-                    tag[attr] = _remap_range_list(cast(str, tag[attr]), target_sheet, remap)
+            for attr in _CHART_RANGE_ATTRS:
+                for element in _carrying(chart, attr):
+                    element.set(attr, _remap_range_list(cast(str, element.get(attr)), target_sheet, remap))
 
     def _rename_drawing_references(self, old_name: str, new_name: str) -> None:
         """`_remap_drawing_references`' counterpart for a sheet renamed."""
@@ -524,9 +624,9 @@ class ODSReader:
                 tag["draw:notify-on-update-of-ranges"] = _rename_range_list(ranges, old_name, new_name)
         for name, chart in self._charts():
             self._touched_part(name)
-            for attr in self._CHART_RANGE_ATTRS:
-                for tag in chart.find_all(attrs={attr: True}):
-                    tag[attr] = _rename_range_list(cast(str, tag[attr]), old_name, new_name)
+            for attr in _CHART_RANGE_ATTRS:
+                for element in _carrying(chart, attr):
+                    element.set(attr, _rename_range_list(cast(str, element.get(attr)), old_name, new_name))
 
     def export_content_xml(self, pretty: bool = True) -> None:
         target = self.file.with_suffix(".xml")
@@ -614,6 +714,7 @@ class ODSReader:
             raise ValueError("a sheet name is required")
         if new_name != old_name and new_name in self.sheets_names:
             raise ValueError(f"a sheet named {new_name!r} already exists")
+        self._read_objects()  # a malformed chart raises before anything is renamed
 
         idx = self.sheets_names.index(old_name)
         self.tables[idx].attrs["table:name"] = new_name
