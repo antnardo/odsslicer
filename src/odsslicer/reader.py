@@ -462,6 +462,15 @@ class ODSReader:
                 )
             else:
                 self._drawing_tags = ([], [])
+        # an element discarded with its row or column since is gone for good
+        # (bs4 empties it): remapping it would fail, and there is nothing left
+        # to remap - a drawing moved elsewhere is moved, not discarded
+        ended, objects = self._drawing_tags
+        if any(tag.decomposed for tag in ended) or any(tag.decomposed for tag in objects):
+            self._drawing_tags = (
+                [tag for tag in ended if not tag.decomposed],
+                [tag for tag in objects if not tag.decomposed],
+            )
         return self._drawing_tags
 
     def _charts(self) -> "list[tuple[str, BeautifulSoup]]":

@@ -821,6 +821,27 @@ def test_libreoffice_round_trips_a_multi_line_cell(writable_reader, tmp_path, li
 
 
 @requires_soffice
+def test_libreoffice_keeps_a_shape_past_the_grid_where_its_deleted_row_left_it(tmp_path, libreoffice_export):
+    # the rescue of issue #24, past the grid's columns: LibreOffice reads the
+    # shape in O2 of the row that took the deleted one's place
+    xml = (
+        table_row(text_cell("1"), number_cell(1))
+        + table_row(text_cell("2"), number_cell(2), empty_cells(12), shape_cell("Box"))
+        + table_row(text_cell("3"), number_cell(3))
+    )
+    path = ods_with_sheet(tmp_path / "past-the-grid.ods", xml)
+    reader = ODSReader(path)
+    reader.sheet("Sheet1").delete_rows([1])
+    reader.save()
+    rewritten = libreoffice_export(path, "ods")
+
+    def is_shape(cell):
+        return cell.find("draw:rect", recursive=False) is not None
+
+    assert addresses_holding(saved_table(rewritten), is_shape) == ["O2"]
+
+
+@requires_soffice
 def test_libreoffice_shows_no_sheet_nor_column_for_a_table_in_a_cells_frame(tmp_path, libreoffice_export):
     path = ods_with_sheet(tmp_path / "framed.ods", table_row(FRAMED_TABLE_CELL, number_cell(2)))
     assert libreoffice_shows(path, tmp_path) == [["v", "2"]]

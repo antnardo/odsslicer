@@ -7,6 +7,18 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Deleting a row no longer deletes a chart or a shape anchored in it past the grid's columns.**
+  LibreOffice writes a chart there when the data stops short of it, in the cells a row element
+  keeps beyond the grid. The rescue of [#24](https://github.com/antnardo/odsslicer/issues/24),
+  which moves a drawing into the cell taking its place, only walked the grid's columns, so such a
+  chart went with its row. It now stays at its address in the row that takes the deleted one's
+  place, as LibreOffice reads it. Found on LibreOffice's own test file `ser_labels.ods`.
+- **Two structural edits in a row no longer raise `TypeError` when the second deletes a
+  drawing.** The first one cached the elements recording the cells a drawing ends in; the second
+  deleted one with its row, and remapping what was left of it failed. Present since 0.14.
+
 ## [0.16.0] — 2026-10-17
 
 ### Added

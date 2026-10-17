@@ -449,6 +449,27 @@ class Sheet:
                 return
             start += n
 
+    @classmethod
+    def _cell_starting_at(cls, row_tag: Tag, col: int) -> Tag:
+        """The cell element standing for logical column `col` of `row_tag`
+        alone, split out of a repeated one if need be, and created - after
+        empty cells up to it - when the row element ends before `col`: where
+        a drawing anchored past the grid's columns goes."""
+        cls._split_cells_at(row_tag, col)
+        cls._split_cells_at(row_tag, col + 1)
+        start = 0
+        for cell_tag in _row_cells(row_tag):
+            if start == col:
+                return cell_tag
+            start += _repeat(cell_tag, "table:number-columns-repeated")
+        if start < col:
+            padding = new("table:table-cell", near=row_tag)
+            _set_repeat(padding, "table:number-columns-repeated", col - start)
+            row_tag.append(padding)
+        cell_tag = new("table:table-cell", near=row_tag)
+        row_tag.append(cell_tag)
+        return cell_tag
+
     def _warn_unreadable(self, cells: list[Cell]) -> None:
         """One warning for all the cells of this sheet whose value could not
         be read as its declared type - one per cell would bury the user
@@ -1219,6 +1240,16 @@ class Sheet:
                     if _drawings_in(cell.cell):
                         self._unrepeat_col(heir_row, c)
                         _rescue_drawings(cell.cell, self.rows[heir_row][c].cell)
+                # and so does what is anchored past the grid's columns, in
+                # the cells the row element keeps beyond them: LibreOffice
+                # writes a chart there when the data stops short of it
+                start = 0
+                for cell_tag in _row_cells(cast(Tag, self.rows[row][0].cell.parent)):
+                    if start >= self.n_cols and _drawings_in(cell_tag):
+                        self._unrepeat_row(heir_row)
+                        heir_tag = cast(Tag, self.rows[heir_row][0].cell.parent)
+                        _rescue_drawings(cell_tag, self._cell_starting_at(heir_tag, start))
+                    start += _repeat(cell_tag, "table:number-columns-repeated")
             discard(cast(Tag, self.rows[row][0].cell.parent))
             del self.rows[row]
         for r in range(targets[0], len(self.rows)):

@@ -1479,6 +1479,70 @@ def test_a_shape_inside_the_data_survives_the_deletion_of_its_row_or_column(tmp_
     assert addresses_holding(saved_table(path), _is_shape) == [shape_at]
 
 
+def _is_chart(cell):
+    return cell.find("draw:frame", recursive=False) is not None
+
+
+def _drawing_past_the_grid(tmp_path, drawing):
+    """Three rows of two columns of data, with `drawing` anchored in the
+    second row's 15th column (O2), past the grid: LibreOffice writes a chart
+    there when the data stops short of it, and the empty columns between are
+    too many to stay in the grid."""
+    xml = (
+        table_row(text_cell("1"), number_cell(1))
+        + table_row(text_cell("2"), number_cell(2), empty_cells(12), drawing)
+        + table_row(text_cell("3"), number_cell(3))
+    )
+    return ods_with_sheet(tmp_path / "past-the-grid.ods", xml)
+
+
+def test_a_shape_anchored_past_the_grid_survives_the_deletion_of_its_row(tmp_path):
+    # regression: the rescue of issue #24 only walked the grid's columns, so
+    # deleting the row a chart was anchored in past them deleted the chart
+    path = _drawing_past_the_grid(tmp_path, shape_cell("Box"))
+    r = ODSReader(path)
+    sheet = r.sheet("Sheet1")
+    assert sheet.size == (3, 2)
+    assert addresses_holding(saved_table(path), _is_shape) == ["O2"]
+    sheet.delete_rows([1])
+    r.save()
+    assert addresses_holding(saved_table(path), _is_shape) == ["O2"]
+    assert [row[0].value for row in ODSReader(path).sheet("Sheet1").rows] == ["1", "3"]
+
+
+def test_two_structural_edits_in_a_row_follow_a_chart_past_the_grid(tmp_path):
+    # regression: the first edit cached the elements recording a chart's
+    # cells; the second deleted the row holding one, and remapping what was
+    # left of it raised TypeError
+    path = _drawing_past_the_grid(
+        tmp_path, f"<table:table-cell>{chart_frame('Sheet1.B1:Sheet1.B3', 'Sheet1.T9')}</table:table-cell>"
+    )
+    r = ODSReader(path)
+    sheet = r.sheet("Sheet1")
+    sheet.insert_columns(1)
+    sheet.delete_rows([1])
+    r.save()
+    assert addresses_holding(saved_table(path), _is_chart) == ["P2"]
+    frame = saved_table(path).find("draw:frame")
+    assert frame["table:end-cell-address"] == "Sheet1.U8"
+
+
+def test_a_chart_deleted_with_every_row_does_not_break_the_edit_after(tmp_path):
+    # with no row left to take it, a chart goes with the last one: the
+    # elements an earlier edit cached for it are gone, and the edits that
+    # follow must not try to remap them (they raised TypeError)
+    path = _drawing_past_the_grid(
+        tmp_path, f"<table:table-cell>{chart_frame('Sheet1.B1:Sheet1.B3', 'Sheet1.T9')}</table:table-cell>"
+    )
+    r = ODSReader(path)
+    sheet = r.sheet("Sheet1")
+    sheet.insert_columns(1)
+    sheet.delete_rows([0, 1, 2])
+    sheet.insert_columns(0)
+    r.save()
+    assert addresses_holding(saved_table(path), _is_chart) == []
+
+
 _WHOLE_ROW_YELLOW = (
     '<style:style style:name="yellow" style:family="table-cell">'
     '<style:table-cell-properties fo:background-color="#ffff00"/></style:style>'
