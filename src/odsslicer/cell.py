@@ -18,7 +18,7 @@ import numpy as np
 from lxml import etree
 
 from .addresses import string_address
-from .constants import EMPTY_CELL_BS, FORMATS, TAG_CELL
+from .constants import EMPTY_CELL, FORMATS, TAG_CELL
 from .datetimes import (
     _as_datetime,
     _as_timedelta,
@@ -654,7 +654,7 @@ class Cell:
         """
         if self.sheet is None:
             raise RuntimeError(f"cell {self.address} has no owning sheet and cannot be written to")
-        if self.cell is EMPTY_CELL_BS:
+        if self.cell is EMPTY_CELL:
             self.sheet.grow_to(self.row, self.col)
             new_cell = self.sheet.rows[self.row][self.col]
             self.__init__(new_cell.cell, row=self.row, col=self.col, sheet=self.sheet)  # type: ignore[misc]

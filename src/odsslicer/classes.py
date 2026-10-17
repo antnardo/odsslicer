@@ -11,7 +11,7 @@ from `odsslicer` directly.
 from .addresses import string_address, string_to_col
 from .cell import ArrayValues, Cell, Comment
 from .constants import (
-    EMPTY_CELL_BS,
+    EMPTY_CELL,
     FORMATS,
     MAX_CELLS_PER_SHEET,
     MAX_CHARS_PER_CELL,
@@ -32,7 +32,7 @@ from .styles import Border, CellStyle, ColumnStyle, NumberFormat, RowStyle, Tabl
 # Re-exported for the old `from odsslicer.classes import ...` imports: named here
 # so the shim's whole purpose is explicit rather than looking like dead imports.
 __all__ = [
-    "EMPTY_CELL_BS",
+    "EMPTY_CELL",
     "FORMATS",
     "LIBREOFFICE_COMMAND",
     "MAX_CELLS_PER_SHEET",

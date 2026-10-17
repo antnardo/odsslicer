@@ -674,7 +674,8 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
    - **`of:` non déclaré** : écrire avec le préfixe que le document lie à OpenFormula
      (`prefix_of()`), sinon déclarer `of` sur la racine.
    - **lxml ≥ 5.0**, bs4 retiré des dépendances.
-   - Contrats de l'étape 2 gardés : `new(name, near=...)` (ignoré par `xmltree`), `children`
+   - Contrats de l'étape 2 : `new(name, near=...)` a perdu `near` à l'étape 5 (validé par l'auteur le
+     2026-10-18 : il ne servait qu'à `xmlbs`), `children`
      rend une liste dans les deux couches.
 5. ~~**La bascule : `content.xml` et `styles.xml` sur lxml, ensemble — 1.0.**~~ **Faite le
    2026-10-17** (branche `claude/lxml-step5`, partie de `claude/lxml-study`, à fusionner). Chaque
@@ -700,8 +701,8 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
    élément détaché devient `ns0:href`) ; `xmltree` gagne `child`, `elements`, `attributes` et
    `unset` (les stubs de lxml refusent `attrib.pop(k, None)`) ; `parse` lève la limite de taille
    de libxml2 (`huge_tree`), sans quoi le `tdf136551.ods` de LibreOffice, bien formé, avec un
-   attribut de 10,9 Mo, était refusé comme mal formé ; `EMPTY_CELL_BS` garde son nom, exporté par
-   `odsslicer.classes`.
+   attribut de 10,9 Mo, était refusé comme mal formé  ; `EMPTY_CELL_BS`, exporté par
+   `odsslicer.classes`, gardé à l'étape 5 puis renommé `EMPTY_CELL` (2026-10-18).
 
    **Ce que ça a coûté** : une session ; `src` +928 −1 116 lignes (7 961 au lieu de 8 149),
    `tests` +892 −812 (la moitié dans `test_odsslicer.py`, `test_xmlbs.py` versé dans
@@ -775,7 +776,8 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
 
    **Laissé à décider** : publier la 1.0 après l'étape 6 ou avant, `Sheet.load` étant plus lent
    que la 0.16 pris seul (l'ouverture et le chargement ensemble sont trois fois plus rapides) ;
-   et le nom `EMPTY_CELL_BS`, gardé parce qu'exporté par `odsslicer.classes`.
+   et le nom `EMPTY_CELL_BS`, gardé parce qu'exporté par `odsslicer.classes` — tranché le 2026-10-18 :
+   renommé `EMPTY_CELL` à la 1.0, `near` retiré pour de bon.
 
 6. **Le chemin chaud et la mesure.** `Cell.__init__` et `Sheet.load` en appels lxml natifs, banc
    complet contre la section 12 de DOCS.md, CHANGELOG et DOCS de la 1.0 (les échappatoires

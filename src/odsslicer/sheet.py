@@ -18,7 +18,7 @@ from lxml import etree
 from .addresses import string_address, string_to_col
 from .cell import ArrayValues, Cell
 from .constants import (
-    EMPTY_CELL_BS,
+    EMPTY_CELL,
     MAX_REPEAT_COLS,
     MAX_REPEAT_ROWS,
     RE_STRING_CELL,
@@ -1004,7 +1004,7 @@ class Sheet:
         the current width), then appends new, full-width blank rows (if `row` is
         past the current height) — `sheet.size` reflects the new extent
         afterwards, and every newly created cell is a real `Cell` of the grid
-        (not the `EMPTY_CELL_BS` placeholder used for reads), which writing
+        (not the `EMPTY_CELL` placeholder used for reads), which writing
         unrolls like any other (see `materialize_cell`).
 
         A row element is widened once, however many rows of the grid it
@@ -1733,7 +1733,7 @@ class Sheet:
             stop = n_cols
         else:
             stop = self.n_cols
-        return [Cell(EMPTY_CELL_BS, cast(int, i), j, sheet=self) for j in range(start, stop, step)]
+        return [Cell(EMPTY_CELL, cast(int, i), j, sheet=self) for j in range(start, stop, step)]
 
     def empty_col(
         self,
@@ -1749,7 +1749,7 @@ class Sheet:
             stop = n_rows
         else:
             stop = self.n_rows
-        return [[Cell(EMPTY_CELL_BS, i, cast(int, j), sheet=self)] for i in range(start, stop, step)]
+        return [[Cell(EMPTY_CELL, i, cast(int, j), sheet=self)] for i in range(start, stop, step)]
 
     def get_row(self, i: int) -> list[Cell]:
         if i >= self.n_rows:
@@ -1762,7 +1762,7 @@ class Sheet:
     def get_cell(self, i: int, j: int) -> Cell:
         row = self.get_row(i)
         if j >= self.n_cols:
-            return Cell(EMPTY_CELL_BS, i, j, sheet=self)
+            return Cell(EMPTY_CELL, i, j, sheet=self)
         return row[j]
 
     def _unslice(self, slice: slice, row: bool = False, col: bool = False) -> tuple[int, int, int]:

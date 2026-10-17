@@ -11,6 +11,9 @@ still change between minor versions.
 
 These come with the move to lxml (DOCS.md, section 15) and wait for 1.0.
 
+- **`odsslicer.classes.EMPTY_CELL_BS` is renamed `EMPTY_CELL`**: the empty cell stood in for a
+  position past the sheet is an lxml element now, and the BeautifulSoup in its name went with it.
+
 - **BeautifulSoup is gone: every part of the package is read and written with lxml alone.**
   `beautifulsoup4` is no longer a dependency; `lxml` 5.0 or later is. The high-level API -
   `ODSReader`, `Sheet`, `Cell`, `CellStyle`, values, styles, formulas - is unchanged.

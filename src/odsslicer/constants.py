@@ -11,7 +11,7 @@ RE_STRING_CELL = re.compile(r"([A-Z]+)?([0-9]+)?(:)?([A-Z]+)?([0-9]+)?")
 TAG_CELL = ["table:table-cell", "table:covered-table-cell"]
 # what a position past the sheet reads from: a blank cell, in no document -
 # writing there grows the sheet first (`Cell._prepare_for_write`)
-EMPTY_CELL_BS = new("table:table-cell")
+EMPTY_CELL = new("table:table-cell")
 
 # https://wiki.documentfoundation.org/Faq/Calc/022
 MAX_ROWS_PER_SHEET = 2**20  # way too big for python
