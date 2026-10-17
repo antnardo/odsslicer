@@ -87,10 +87,13 @@ sheet.size                  # (n_rows, n_cols)
 sheet.name                  # "Sheet1"
 ```
 
-`ODSReader` parses `content.xml`, `styles.xml` and `meta.xml` (via BeautifulSoup/lxml) into
-in-memory trees. `settings.xml` — what the application remembers of the window rather than of
-the document — is parsed only if something asks for it (`reader.settings_data`), since reading
-a cell never needs it. `ODSReader.sheet(name)` raises `KeyError` for an unknown name.
+`ODSReader` parses `content.xml` and `styles.xml` (via BeautifulSoup over lxml) and `meta.xml`
+(with lxml alone) into in-memory trees. `settings.xml` — what the application remembers of the
+window rather than of the document — is parsed only if something asks for it
+(`reader.settings_data`, an lxml tree), since reading a cell never needs it; so is a chart's own
+content, for its ranges to follow a structural edit. A part parsed with lxml that is not
+well-formed XML raises `MalformedDocumentError` (see section 15). `ODSReader.sheet(name)` raises
+`KeyError` for an unknown name.
 
 `sheet.size` covers the data, empty rows and columns between it included. A note counts as
 data, as in LibreOffice: the grid reaches a note on an empty cell, however far. What
@@ -1495,6 +1498,9 @@ before the code is written (ROADMAP.md, step 4):
 - **A document whose XML is malformed raises `MalformedDocumentError`** (a `ValueError`, like
   `EncryptedDocumentError`), where it now opens silently repaired: a truncated part reads with
   cells missing, and `save()` writes that back. No file among 500 real ones needs the repair.
+  A part read on demand raises when it is read: `settings.xml` on the first access to
+  `settings_data`, a chart's own content at the first structural edit, before the edit changes
+  anything.
 - **A document that binds the ODF namespaces to other prefixes reads like any other** (a
   `table` namespace written `tab:`, say): it now reads with no sheet at all. And a formula
   written into a document that does not declare the OpenFormula prefix gets the prefix the

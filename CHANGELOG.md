@@ -7,6 +7,27 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Changed in 1.0 (on the 1.0 branch, not in a 0.x release)
+
+These come with the move to lxml (DOCS.md, section 15) and wait for 1.0.
+
+- **`reader.settings_data` is an lxml tree** (`lxml.etree._ElementTree`), no longer a
+  BeautifulSoup document. Its elements are named by namespace URI, whatever prefix the file
+  binds: `settings_data.getroot().iter(xmltree.qn("config:config-item"))`. It is still parsed only
+  when asked for, and `save()` still copies `settings.xml` byte for byte unless something wrote to
+  it. **`reader.meta_data`** is an lxml tree too, since `DocumentProperties` moved to lxml.
+- **A chart's own content is read and rewritten by lxml.** Its ranges are found by namespace: a
+  chart part binding the chart, table or office namespace to other prefixes now follows
+  structural edits, and is written back with its own prefixes - it was left as it was. A chart
+  part a structural edit rewrites says what 0.16 wrote, in canonical form (C14N), in other bytes:
+  `&apos;` written out, an empty element as `<x/>`, the XML declaration as the file had it.
+- **A malformed part on lxml raises `MalformedDocumentError`** (new, a `ValueError`, exported
+  next to `EncryptedDocumentError`), naming the part, rather than reading a repaired guess that
+  `save()` would write back: `meta.xml` when the document is opened, `settings.xml` when
+  `settings_data` is first read, a chart's part at the first structural edit (rows or columns
+  inserted or deleted, a sheet renamed) - before the edit changes anything, so that it refuses
+  rather than stops halfway. `content.xml` and `styles.xml` follow at 1.0.
+
 ## [0.16.1] — 2026-10-17
 
 ### Fixed

@@ -23,8 +23,9 @@ import zipfile
 import pytest
 from lxml import etree
 
-from conftest import FIXTURES_DIR
-from odsslicer import EncryptedDocumentError, ODSReader
+from conftest import FIXTURES_DIR, rebind_prefix
+from odsslicer import EncryptedDocumentError, MalformedDocumentError, ODSReader
+from odsslicer.xmltree import new, qn
 from odsslicer.xmlutils import _encrypted_parts, _parse_xml, _root_local_name
 
 
@@ -242,7 +243,7 @@ def test_editing_a_value_leaves_styles_and_settings_byte_identical(fixture, tmp_
 def test_reading_the_settings_does_not_make_the_save_rewrite_them(fixture, tmp_path):
     before = _members(fixture)
     book = ODSReader(fixture)
-    book.settings_data.find("office:settings")  # parsing is not editing
+    book.settings_data.find(qn("office:settings"))  # parsing is not editing
 
     after = _saved(book, tmp_path)
 
@@ -264,18 +265,87 @@ def test_a_number_format_padded_with_spaces_keeps_its_padding(name, expected, tm
     assert len(PADDED_NUMBER_TEXT.findall(after["styles.xml"])) == expected
 
 
+def _config_item(settings, name):
+    """The first `<config:config-item>` of `settings` named `name`."""
+    items = settings.getroot().iter(qn("config:config-item"))
+    return next((item for item in items if item.get(qn("config:name")) == name), None)
+
+
 def test_a_touched_settings_part_is_written_back(workbook, tmp_path):
     book = ODSReader(workbook)
-    item = book.settings_data.find("config:config-item", attrs={"config:name": "VisibleAreaTop"})
+    item = _config_item(book.settings_data, "VisibleAreaTop")
     assert item is not None, "TEST.ods is expected to record a visible area"
-    item.string = "4242"
+    item.text = "4242"
     book._touched_part("settings.xml")
 
     _saved(book, tmp_path)
 
-    reread = ODSReader(tmp_path / "saved.ods").settings_data
-    written = reread.find("config:config-item", attrs={"config:name": "VisibleAreaTop"})
-    assert written.get_text() == "4242"
+    assert _config_item(ODSReader(tmp_path / "saved.ods").settings_data, "VisibleAreaTop").text == "4242"
+
+
+def test_a_write_into_the_settings_said_of_its_element_is_written_back(workbook, tmp_path):
+    # `_touched_tag` finds the part an lxml element belongs to by its tree's
+    # root, as it finds a bs4 tag's by climbing to the document
+    book = ODSReader(workbook)
+    item = _config_item(book.settings_data, "VisibleAreaTop")
+    item.text = "4242"
+    book._touched_tag(item)
+
+    after = _saved(book, tmp_path)
+
+    assert b">4242</config:config-item>" in after["settings.xml"]
+
+
+def test_a_settings_element_taken_out_of_its_tree_belongs_to_no_part(workbook, tmp_path):
+    before = _members(workbook)
+    book = ODSReader(workbook)
+    item = _config_item(book.settings_data, "VisibleAreaTop")
+    item.getparent().remove(item)
+    book._touched_tag(item)  # detached: its root is itself
+
+    after = _saved(book, tmp_path)
+
+    assert after["settings.xml"] == before["settings.xml"]
+
+
+@pytest.mark.parametrize("fixture", FIXTURES, ids=lambda path: path.name)
+def test_a_settings_part_written_back_says_what_it_said(fixture, tmp_path):
+    before = _members(fixture)
+    book = ODSReader(fixture)
+    book.settings_data  # noqa: B018 - parsed, then serialised with nothing changed in it
+    book._touched_part("settings.xml")
+
+    after = _saved(book, tmp_path)
+
+    if "settings.xml" in before:
+        assert _c14n(after["settings.xml"]) == _c14n(before["settings.xml"])
+        # the declaration as the file wrote it, not lxml's
+        assert after["settings.xml"].split(b"?>")[0] == before["settings.xml"].split(b"?>")[0]
+    else:
+        assert after["settings.xml"].startswith(b'<?xml version="1.0" encoding="UTF-8"?>\n<office:')
+
+
+def test_a_settings_part_with_other_prefixes_is_read_and_written_with_its_own(workbook, tmp_path):
+    # settings.xml is on lxml: found by namespace whatever the prefixes, and
+    # serialised back with the file's own
+    config = "urn:oasis:names:tc:opendocument:xmlns:config:1.0"
+    rebound = _with_part_edited(
+        workbook, tmp_path, "settings.xml", lambda data: rebind_prefix(data, config, "cfg")
+    )
+    assert b"<cfg:config-item " in _members(rebound)["settings.xml"]
+    book = ODSReader(rebound)
+    item = _config_item(book.settings_data, "VisibleAreaTop")
+    assert item is not None
+    item.text = "4242"
+    book._touched_tag(item)
+
+    after = _saved(book, tmp_path)
+
+    assert (
+        b'<cfg:config-item cfg:name="VisibleAreaTop" cfg:type="int">4242</cfg:config-item>'
+        in (after["settings.xml"])
+    )
+    assert b"xmlns:config=" not in after["settings.xml"]
 
 
 def test_a_touched_styles_part_is_written_back(workbook, tmp_path):
@@ -296,8 +366,8 @@ def test_a_touched_settings_part_is_created_for_a_file_that_had_none(tmp_path):
     assert "settings.xml" not in _members(fixture)
     book = ODSReader(fixture)
     settings = book.settings_data
-    settings.find("office:settings").append(
-        settings.new_tag("config:config-item-set", attrs={"config:name": "ooo:view-settings"})
+    settings.find(qn("office:settings")).append(
+        new("config:config-item-set", {"config:name": "ooo:view-settings"})
     )
     book._touched_part("settings.xml")
 
@@ -428,7 +498,8 @@ def test_parsing_something_that_is_not_xml_still_gives_a_tree():
 # a write to their tree (`_touched_part`, `_touched_tag`). A write that forgot
 # to would be silently lost on save: these tests hold each path that can reach
 # such a tree. A chart's content has its own tests (test_odsslicer.py, "a chart
-# follows..."). `settings.xml` has no writer in the library yet.
+# follows..."). `settings.xml` has no writer in the library yet: the tests
+# above write into it directly.
 
 
 def test_a_condition_added_to_a_number_format_of_styles_xml_is_written_back(workbook, tmp_path):
@@ -475,6 +546,43 @@ def test_a_style_of_styles_xml_bearing_a_fork_s_name_is_forked_rather_than_writt
 
     assert after["styles.xml"] == before["styles.xml"]
     assert ODSReader(tmp_path / "saved.ods").sheet("Sheet1").row_style(0).height == "2cm"
+
+
+# ---------------------------------------------------------------------------
+# A malformed part on lxml is refused, not read repaired
+# ---------------------------------------------------------------------------
+#
+# The parts on lxml - `meta.xml`, `settings.xml` and a chart's own content
+# (test_odsslicer.py) - are parsed strictly: a truncated one raises
+# `MalformedDocumentError`, naming the part, where bs4 completed it with a
+# guess that `save()` wrote back. `content.xml` and `styles.xml` move at 1.0.
+
+
+def _truncated(data):
+    return data[: len(data) // 2]
+
+
+def test_a_malformed_meta_part_is_refused_when_the_document_is_opened(workbook, tmp_path):
+    path = _with_part_edited(workbook, tmp_path, "meta.xml", _truncated)
+
+    with pytest.raises(MalformedDocumentError, match=r"meta\.xml"):
+        ODSReader(path)
+
+
+def test_a_malformed_settings_part_is_refused_when_something_reads_it(workbook, tmp_path):
+    path = _with_part_edited(workbook, tmp_path, "settings.xml", _truncated)
+    before = _members(path)
+    book = ODSReader(path)  # nothing reads it yet: the document opens
+
+    with pytest.raises(MalformedDocumentError, match=r"settings\.xml"):
+        book.settings_data  # noqa: B018
+
+    after = _saved(book, tmp_path)
+    assert after["settings.xml"] == before["settings.xml"]
+
+
+def test_a_malformed_document_error_is_a_value_error():
+    assert issubclass(MalformedDocumentError, ValueError)
 
 
 # ---------------------------------------------------------------------------

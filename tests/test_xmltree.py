@@ -308,6 +308,17 @@ class TestSearch:
         span = lxml_fragment("<text:span><text:span/></text:span>")
         assert len(list(span.iter(qn("text:span")))) == 2
 
+    def test_naive_getroottree_of_a_removed_element_is_still_its_documents(self):
+        # an element taken out of its tree stays in the same lxml document:
+        # `getroottree()` answers that document's root, not the element.
+        # Finding which part a write went to (`ODSReader._touched_tag`)
+        # climbs `getparent()` instead, as bs4's `parent` does
+        root = lxml_fragment("<text:span><text:span/></text:span>").getparent()
+        inner = root[0][0]
+        remove(inner)
+        assert inner.getparent() is None
+        assert inner.getroottree().getroot() is root
+
     def test_descendants_leave_the_element_out(self):
         span = lxml_fragment("<text:span><text:span/></text:span>")
         assert len(list(descendants(span, "text:span"))) == 1
