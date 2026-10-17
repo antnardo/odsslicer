@@ -87,13 +87,14 @@ sheet.size                  # (n_rows, n_cols)
 sheet.name                  # "Sheet1"
 ```
 
-`ODSReader` parses `content.xml` and `styles.xml` (via BeautifulSoup over lxml) and `meta.xml`
-(with lxml alone) into in-memory trees. `settings.xml` — what the application remembers of the
-window rather than of the document — is parsed only if something asks for it
-(`reader.settings_data`, an lxml tree), since reading a cell never needs it; so is a chart's own
-content, for its ranges to follow a structural edit. A part parsed with lxml that is not
-well-formed XML raises `MalformedDocumentError` (see section 15). `ODSReader.sheet(name)` raises
-`KeyError` for an unknown name.
+`ODSReader` parses `content.xml`, `styles.xml` and `meta.xml` with lxml into in-memory trees
+(`reader.data`, `reader.styles_data`, `reader.meta_data`). `settings.xml` — what the application
+remembers of the window rather than of the document — is parsed only if something asks for it
+(`reader.settings_data`), since reading a cell never needs it; so is a chart's own content, for
+its ranges to follow a structural edit. Elements are found by namespace, whatever prefixes the
+file binds: a document that writes the table namespace `tab:` reads like any other. A part that
+is not well-formed XML raises `MalformedDocumentError` (see section 15). `ODSReader.sheet(name)`
+raises `KeyError` for an unknown name.
 
 `sheet.size` covers the data, empty rows and columns between it included. A note counts as
 data, as in LibreOffice: the grid reaches a note on an empty cell, however far. What
@@ -333,16 +334,16 @@ path.
 
 Copying by default is what makes “values change, styling does not” a property of the code
 rather than a hope. Parsing XML and serialising it back is faithful in meaning but not to the
-byte, and the difference is measurable: on the eight test fixtures a round trip reorders the
-attributes of a third to a half of the start tags, writes `&apos;` out as `'`, collapses an empty
-element to `<x/>` and rewrites the XML declaration. It is faithful in meaning, though: the
-canonical form (C14N) of every part written out of its tree is identical to the original's, on
-all eight fixtures — including every run of whitespace, which BeautifulSoup would otherwise
-squeeze to one character in a text node made of nothing else, and `<number:text>   </number:text>`
-is a number format whose padding that is (34 such nodes across three of those fixtures). The
-parts are parsed with their document element named as whitespace-preserving, so that holds for
-any element, not only the ones odsslicer knows. A part nothing touched never goes through any of
-it, so none of it can reach a file where only values were edited.
+byte, and the difference is measurable: on the eight test fixtures a round trip keeps the order
+of the attributes and the XML declaration as written, but writes `&apos;` and `&quot;` out as
+characters (up to 123 per part) and collapses an empty element to `<x/>` — only the parts Excel
+wrote come back byte for byte. It is faithful in meaning, though: the canonical form (C14N) of
+every part written out of its tree is identical to the original's, on all eight fixtures —
+including every run of whitespace, which lxml keeps as written, for any element:
+`<number:text>   </number:text>` is a number format whose padding a parser squeezing whitespace
+would lose (34 such nodes across three of those fixtures; BeautifulSoup did, before 0.14.2). A
+part nothing touched never goes through any of it, so none of it can reach a file where only
+values were edited.
 
 A write into a part that is copied through has to say so: the library records it
 (`_touched_part`, or `_touched_tag` for a write into a tag found rather than made), and
@@ -1335,9 +1336,14 @@ column), Apple Silicon laptop, Python 3.12.
 
 What the numbers mean in practice:
 
+> **Out of date since 1.0** (section 15): the figures above and the two bullets that follow were
+> measured with BeautifulSoup, which 1.0 drops for lxml alone; opening and loading are several
+> times faster, and the peak memory lower. They are to be measured again before 1.0 is
+> released.
+
 - **Time scales linearly** with document size for whole-document operations (open, save,
   full read), and the per-cell constants are small. **Memory is the real limit**: every cell
-  is materialized (a bs4 XML element plus a `Cell`), costing ~4.5 KB per cell — a
+  is materialized (a bs4 XML element plus a `Cell`, before 1.0), costing ~4.5 KB per cell — a
   100,000-row × 5-column sheet peaks around 2.3 GB of RSS. Beyond that scale, `odsslicer` is
   the wrong tool; use a streaming reader like `python-calamine` for pure reading.
 - **Local operations don't scale with document size**: reading or writing a cell, writing a
@@ -1348,9 +1354,10 @@ What the numbers mean in practice:
   document size).
 - **Copying into new columns** pays for growing every existing row first (`grow_to`) — the
   cost is proportional to the sheet's height, not just the copied block.
-- **Keeping whitespace as written costs a few per cent on open, and no memory.** Every part is
-  parsed with its document element named as whitespace-preserving (see [`Cell.value` and `save()`](#cellvalue-and-save)), and
-  BeautifulSoup then checks each element it opens and closes. Measured on the same synthetic
+- **Keeping whitespace as written cost a few per cent on open, and no memory** (0.14.2 to
+  0.16): every part was parsed with its document element named as whitespace-preserving (see
+  [`Cell.value` and `save()`](#cellvalue-and-save)), and BeautifulSoup then checked each
+  element it opened and closed - lxml keeps it as written, at no cost. Measured on the same synthetic
   workbooks, open time in fresh processes, interleaved, median of 7 runs (3 at 100,000 rows),
   before and after that change on one machine: +1.1 % at 1,000 rows, +1.9 % at 10,000, +2.4 % at
   100,000; peak RSS within 0.5 % at every size.
@@ -1364,8 +1371,9 @@ What the numbers mean in practice:
   rows past the data cost N²/2 comparisons. `generate + save` above took 246 s at 100,000 rows
   instead of 32 s (Apple M4, Python 3.14, one fresh process each, the same machine before and
   after); median of 5 interleaved runs of the bulk writes alone: 3.8 s → 3.2 s at 10,000 rows,
-  15.7 s → 9.9 s at 30,000. The rows now go in at an index counted from the end of the table,
-  and the cost is linear again.
+  15.7 s → 9.9 s at 30,000. The rows then went in at an index counted from the end of the table,
+  and the cost was linear again; since 1.0 each goes right after the one before (lxml's
+  `addnext`, in constant time), never by index, which lxml's `insert` walks to.
 
 ### How it compares to other readers
 
@@ -1478,33 +1486,53 @@ issue it was reported in.
 ## 15. What changes in 1.0
 
 odsslicer 1.0 drops BeautifulSoup and reads and writes the XML with lxml alone: opening and
-loading a large sheet is projected about six times faster, with half the memory, in
-[`benchmarks/LXML_STUDY.md`](benchmarks/LXML_STUDY.md). The high-level API - `ODSReader`,
-`Sheet`, `Cell`, `CellStyle`, values, styles, formulas - stays as it is. What changes, decided
-before the code is written (ROADMAP.md, step 4):
+loading a large sheet was projected about six times faster, with half the memory, in
+[`benchmarks/LXML_STUDY.md`](benchmarks/LXML_STUDY.md) (section 12 is to be measured again). The
+high-level API - `ODSReader`, `Sheet`, `Cell`, `CellStyle`, values, styles, formulas - stays as
+it is. What changes, decided before the code was written (ROADMAP.md, step 4):
 
 - **`Cell.attrs` and `Sheet.attrs` are removed.** They were the element's own attribute
   dictionary, with the file's prefixed keys, and writing to them bypassed everything the library
-  keeps consistent. Their one common use has a property of its own already:
-  `cell.attrs.get("table:style-name")` is `cell.style_name`. A sheet's name, style and the rest
-  are its properties already (`sheet.name`, `sheet.style`). Until 1.0 both still work.
-- **The escape hatches to the XML become lxml elements and trees**: `reader.data`,
-  `reader.styles_data`, `reader.meta_data`, `reader.settings_data`, `reader.tables`,
-  `sheet.table` and `cell.cell`. Code that searched them with bs4 (`find`, `find_all`) has to use
-  lxml's (`find`, `iter`, `xpath`), with names spelled by namespace URI.
-- **`CellStyle.cell_properties` and `text_properties` keep their keys** as they read today,
-  prefixed the way the ODF specification writes them (`"fo:background-color"`), whatever prefix
-  the file itself uses.
-- **A document whose XML is malformed raises `MalformedDocumentError`** (a `ValueError`, like
-  `EncryptedDocumentError`), where it now opens silently repaired: a truncated part reads with
-  cells missing, and `save()` writes that back. No file among 500 real ones needs the repair.
-  A part read on demand raises when it is read: `settings.xml` on the first access to
-  `settings_data`, a chart's own content at the first structural edit, before the edit changes
-  anything.
-- **A document that binds the ODF namespaces to other prefixes reads like any other** (a
-  `table` namespace written `tab:`, say): it now reads with no sheet at all. And a formula
-  written into a document that does not declare the OpenFormula prefix gets the prefix the
-  document binds to it, or a declaration of `of` on the root - it is written `of:=...` with no
-  declaration today.
-- **lxml 5.0 or later** is required, and BeautifulSoup no longer is.
+  keeps consistent. Their one common use has a property of its own: `cell.attrs.get("table:style-name")`
+  is `cell.style_name`. A sheet's name, style and the rest are its properties (`sheet.name`,
+  `sheet.style`).
+- **The escape hatches to the XML are lxml elements and trees**: `reader.data`,
+  `reader.styles_data`, `reader.meta_data` and `reader.settings_data` are trees
+  (`lxml.etree._ElementTree`), `reader.tables` a list of elements, `sheet.table` and `cell.cell`
+  elements. Code that searched them with bs4 (`find`, `find_all`) uses lxml's (`find`, `iter`,
+  `xpath`), with names spelled by namespace URI - `odsslicer.xmltree.qn` spells them from the
+  usual prefixes:
 
+  ```python
+  from odsslicer.xmltree import qn
+
+  cell = sheet["A1"]
+  cell.cell.get(qn("table:formula"))                         # was cell.attrs.get("table:formula")
+  [p.text for p in cell.cell.iterchildren(qn("text:p"))]     # was cell.cell.find_all("text:p", recursive=False)
+  reader.data.getroot().iter(qn("table:named-range"))        # was reader.data.find_all("table:named-range")
+  ```
+
+  An element taken out of the document - the cells of a deleted sheet, say - stays readable,
+  where bs4 emptied it; `save()` no longer writes it either way.
+- **`CellStyle.cell_properties` and `text_properties` keep their keys** as they read before,
+  prefixed the way the ODF specification writes them (`"fo:background-color"`), whatever prefix
+  the file itself uses. An attribute of a namespace the specification does not name - LibreOffice's
+  `officeooo:rsid` - keeps the file's prefix, as before.
+- **A document whose XML is malformed raises `MalformedDocumentError`** (a `ValueError`, like
+  `EncryptedDocumentError`), where it opened silently repaired: a truncated part read with
+  cells missing, and `save()` wrote that back. No file among 500 real ones needs the repair.
+  `content.xml`, `styles.xml` and `meta.xml` raise when the document is opened; a part read on
+  demand raises when it is read: `settings.xml` on the first access to `settings_data`, a
+  chart's own content at the first structural edit, before the edit changes anything.
+- **A document that binds the ODF namespaces to other prefixes reads like any other** (a
+  `table` namespace written `tab:`, say): it read with no sheet at all, and what odsslicer writes
+  into it takes its prefixes. And a formula written into a document that does not declare the
+  OpenFormula prefix gets the prefix the document binds to it (`openformula:=...`), or a
+  declaration of `of` on the root of `content.xml` - it was written `of:=...` with no
+  declaration.
+- **`content.xml` comes out of `save()` in other bytes, the same canonical form**, as every part
+  odsslicer serialises: under the XML declaration it was read with (bs4 wrote
+  `encoding="utf-8"`), `&apos;` and `&quot;` written out, an empty element as `<x/>`, and
+  without the namespace declarations bs4 repeated on some of the elements it created.
+  `export_content_xml(pretty=True)` indents with lxml.
+- **lxml 5.0 or later** is required, and BeautifulSoup no longer is.

@@ -11,6 +11,33 @@ still change between minor versions.
 
 These come with the move to lxml (DOCS.md, section 15) and wait for 1.0.
 
+- **BeautifulSoup is gone: every part of the package is read and written with lxml alone.**
+  `beautifulsoup4` is no longer a dependency; `lxml` 5.0 or later is. The high-level API -
+  `ODSReader`, `Sheet`, `Cell`, `CellStyle`, values, styles, formulas - is unchanged.
+- **The escape hatches to the XML are lxml elements and trees**: `reader.data` and
+  `reader.styles_data` are `lxml.etree._ElementTree`s, `reader.tables` a list of elements,
+  `sheet.table` and `cell.cell` elements. Search them with lxml (`iter`, `iterchildren`, `find`,
+  `xpath`), names spelled by namespace URI: `cell.cell.get(xmltree.qn("table:formula"))`. An
+  element taken out of the document - a cell of a deleted sheet - stays readable, where bs4
+  emptied it.
+- **`Cell.attrs` and `Sheet.attrs` are removed**, as announced in 0.16.0: `cell.style_name`,
+  `cell.style`, `sheet.name` and `sheet.style` say what they were used for.
+- **`CellStyle.cell_properties` and `text_properties` keep the specification's prefixes**
+  (`"fo:background-color"`) whatever the file binds; an attribute of a namespace the
+  specification does not name, LibreOffice's `officeooo:rsid`, keeps the file's prefix, as it did.
+- **A document binding the ODF namespaces to other prefixes reads like any other** - a `table`
+  namespace written `tab:` read as a document with no sheet - and what odsslicer writes into it
+  takes its prefixes. No file among 492 sampled does it; LibreOffice reads such a file as it
+  reads the original.
+- **A formula is written with the prefix the document binds to OpenFormula** (`of:=` in every
+  file LibreOffice writes), and a document that binds it to none gets `of` declared on the root
+  of `content.xml`: `of:=...` went in with no declaration, which only LibreOffice's leniency
+  made work.
+- **`content.xml` is written in other bytes, in the same canonical form** (C14N): under the XML
+  declaration it was read with, `&apos;` and `&quot;` written out as characters, an empty
+  element as `<x/>`, and without the namespace declaration bs4 repeated on an element it
+  created where the document had no element of that name yet. `export_content_xml(pretty=True)`
+  indents with lxml.
 - **`reader.settings_data` is an lxml tree** (`lxml.etree._ElementTree`), no longer a
   BeautifulSoup document. Its elements are named by namespace URI, whatever prefix the file
   binds: `settings_data.getroot().iter(xmltree.qn("config:config-item"))`. It is still parsed only
@@ -21,12 +48,13 @@ These come with the move to lxml (DOCS.md, section 15) and wait for 1.0.
   structural edits, and is written back with its own prefixes - it was left as it was. A chart
   part a structural edit rewrites says what 0.16 wrote, in canonical form (C14N), in other bytes:
   `&apos;` written out, an empty element as `<x/>`, the XML declaration as the file had it.
-- **A malformed part on lxml raises `MalformedDocumentError`** (new, a `ValueError`, exported
-  next to `EncryptedDocumentError`), naming the part, rather than reading a repaired guess that
-  `save()` would write back: `meta.xml` when the document is opened, `settings.xml` when
-  `settings_data` is first read, a chart's part at the first structural edit (rows or columns
-  inserted or deleted, a sheet renamed) - before the edit changes anything, so that it refuses
-  rather than stops halfway. `content.xml` and `styles.xml` follow at 1.0.
+- **A malformed part raises `MalformedDocumentError`** (new, a `ValueError`, exported next to
+  `EncryptedDocumentError`), naming the part, rather than reading a repaired guess that `save()`
+  would write back - a truncated `content.xml` read with cells missing: `content.xml`,
+  `styles.xml` and `meta.xml` when the document is opened, `settings.xml` when `settings_data` is
+  first read, a chart's part at the first structural edit (rows or columns inserted or deleted, a
+  sheet renamed) - before the edit changes anything, so that it refuses rather than stops
+  halfway.
 
 ## [0.16.1] — 2026-10-17
 

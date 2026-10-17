@@ -21,7 +21,7 @@ sheet["C1"].style.bold = True
 table.save("out.ods")                     # add recalculate=True to have LibreOffice compute formulas/pivots
 ```
 
-`odsslicer` works directly on the ODF XML (via BeautifulSoup/lxml), so it preserves what
+`odsslicer` works directly on the ODF XML (via lxml), so it preserves what
 other tools tend to drop — cell formats (currency, percentage, date, time), formulas, merged
 and repeated cells, styles, comments — and writes them back faithfully. It has no calculation
 engine of its own: like ODF itself, it describes what to compute — and can hand the file to a
@@ -35,7 +35,7 @@ local LibreOffice (`save(..., recalculate=True)`) to compute formulas and pivot 
 pip install odsslicer
 ```
 
-Requires Python ≥ 3.10. Dependencies (`beautifulsoup4`, `lxml`, `numpy`) are installed
+Requires Python ≥ 3.10. Dependencies (`lxml` 5.0 or later, `numpy`) are installed
 automatically. For local development:
 
 ```bash
