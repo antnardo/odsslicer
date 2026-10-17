@@ -917,7 +917,7 @@ def test_growing_the_only_sheet_of_a_document_with_nothing_to_copy_from():
     #    minimal (a single bare <table:table-cell/>, no text:p anywhere at
     #    all) has none anywhere in the document either.
     # Both now fall back to building a correctly-namespaced tag from scratch
-    # (_new_qualified_tag) instead of raising NotImplementedError.
+    # (`xmlbs.new`, declaring its namespace) instead of raising NotImplementedError.
     from bs4 import BeautifulSoup
 
     xml = (

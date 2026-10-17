@@ -15,7 +15,8 @@ from .libreoffice import _recalculate_file
 from .properties import DocumentProperties
 from .sheet import Sheet
 from .styles import _NUMBER_STYLE_TAGS, NumberFormat
-from .xmlutils import _blank_template, _encrypted_parts, _new_qualified_tag, _parse_xml
+from .xmlbs import insert_after, insert_before, name_of, new, remove, text
+from .xmlutils import _encrypted_parts, _parse_xml
 
 logger = logging.getLogger("odsslicer")
 
@@ -59,11 +60,10 @@ def _same_number_format(a: Tag, b: Tag) -> bool:
 
     def definition(tag: Tag) -> object:
         attrs = {k: v for k, v in tag.attrs.items() if k != "style:name"}
-        children = [
-            (child.prefix, child.name, child.attrs, child.get_text())
-            for child in tag.find_all(True, recursive=False)
+        content = [
+            (name_of(child), child.attrs, text(child)) for child in tag.find_all(True, recursive=False)
         ]
-        return tag.prefix, tag.name, attrs, children
+        return name_of(tag), attrs, content
 
     return definition(a) == definition(b)
 
@@ -261,10 +261,10 @@ class ODSReader:
             tag.attrs["number:truncate-on-overflow"] = "false"
         name = cast(str, tag["style:name"])
         # a document odsslicer saved before has it already
-        qualified_name = f"{tag.prefix}:{tag.name}"
+        qualified_name = name_of(tag)
         for other in self._automatic_styles().find_all(qualified_name, recursive=False):
             if other is not tag and _same_number_format(other, tag):
-                tag.decompose()
+                remove(tag)
                 name = cast(str, other["style:name"])
                 break
         self._default_date_formats[kind] = name
@@ -277,10 +277,10 @@ class ODSReader:
         `save()`)."""
         styles = cast("Tag | None", self.data.find("office:automatic-styles"))
         if styles is None:
-            styles = _new_qualified_tag("office:automatic-styles")
-            body = self.data.find("office:body")
+            styles = new("office:automatic-styles", near=self.data)  # declares its namespace
+            body = cast("Tag | None", self.data.find("office:body"))
             if body is not None:
-                body.insert_before(styles)
+                insert_before(body, styles)
             else:
                 self.data.append(styles)
         return styles
@@ -306,7 +306,7 @@ class ODSReader:
         Deliberately parentless: callers fill it in themselves (see
         `Cell._copy_resolved_style_into`), because `style:parent-style-name`
         only means anything when it names a style from `styles.xml`."""
-        tag = _blank_template(self.data, "style:style")
+        tag = new("style:style", near=self.data)
         tag.attrs["style:name"] = self._new_style_name(prefix)
         tag.attrs["style:family"] = family
         self._automatic_styles().append(tag)
@@ -544,14 +544,14 @@ class ODSReader:
         if name in self.sheets_names:
             raise ValueError(f"a sheet named {name!r} already exists")
 
-        table = _blank_template(self.data, "table:table")
+        table = new("table:table", near=self.data)
         table.attrs["table:name"] = name
-        table.append(_blank_template(self.data, "table:table-column"))
-        row = _blank_template(self.data, "table:table-row")
-        row.append(_blank_template(self.data, "table:table-cell"))
+        table.append(new("table:table-column", near=self.data))
+        row = new("table:table-row", near=self.data)
+        row.append(new("table:table-cell", near=self.data))
         table.append(row)
 
-        self.tables[-1].insert_after(table)
+        insert_after(self.tables[-1], table)
         self.tables.append(table)
         self.sheets_names.append(name)
         new_sheet = Sheet(table, verbose=self.verbose, reader=self)
@@ -564,14 +564,14 @@ class ODSReader:
         Raises `KeyError` for an unknown name, and `ValueError` for the
         document's last remaining sheet (an ODF spreadsheet needs at least
         one). Any `Sheet`/`Cell` object obtained before the call that
-        pointed into this sheet is now backed by a decomposed, detached
-        XML element - stop using it."""
+        pointed into this sheet is now backed by an XML element detached
+        from the document - stop using it."""
         if name not in self.sheets_names:
             raise KeyError(f"No sheet named {name}")
         if len(self.sheets_names) <= 1:
             raise ValueError("cannot delete the only remaining sheet in the document")
         idx = self.sheets_names.index(name)
-        self.tables[idx].decompose()
+        remove(self.tables[idx])
         del self.tables[idx]
         del self.sheets_names[idx]
         del self._sheets[name]
@@ -630,7 +630,7 @@ class ODSReader:
             return
 
         table = self.tables[old_index]
-        table.extract()
+        remove(table)
         del self.tables[old_index]
         del self.sheets_names[old_index]
 
@@ -638,6 +638,6 @@ class ODSReader:
         self.sheets_names.insert(index, name)
 
         if index == 0:
-            self.tables[1].insert_before(table)
+            insert_before(self.tables[1], table)
         else:
-            self.tables[index - 1].insert_after(table)
+            insert_after(self.tables[index - 1], table)

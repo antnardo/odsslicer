@@ -9,11 +9,11 @@ from typing import cast
 from bs4 import BeautifulSoup, Tag
 from lxml import etree
 
-from .xmlbs import children, new, paragraph_text, set_paragraph_text
+from .xmlbs import new
 
-# Standard OASIS namespace URIs, used as a last-resort fallback to build a
-# namespace-qualified tag from scratch when the document has no existing tag
-# of that name to copy (e.g. a brand new sheet with no cells at all yet).
+# Standard OASIS namespace URIs - a subset of `xmltree.NAMESPACES`, the
+# declarations odsslicer writes itself (a link's `xmlns:xlink`) and the tests
+# build fragments with.
 _ODF_NAMESPACES = {
     "office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0",
     "table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
@@ -90,18 +90,6 @@ def _encrypted_parts(manifest: bytes) -> set[str]:
     return encrypted
 
 
-def _new_qualified_tag(tag_name: str) -> Tag:
-    """Build a detached `<tag_name/>` from scratch, with its own `xmlns:`
-    declaration so the "table:"/"text:" prefix resolves correctly - safe to
-    insert anywhere in an ODF document even though the declaration is then
-    redundant with the one at the document root (harmless, plain valid XML).
-    """
-    prefix = tag_name.split(":", 1)[0]
-    uri = _ODF_NAMESPACES[prefix]
-    fragment = BeautifulSoup(f'<{tag_name} xmlns:{prefix}="{uri}"/>', "xml")
-    return cast(Tag, fragment.find(tag_name))
-
-
 def _blank_template(root: Tag, tag_name: str) -> Tag:
     """A new `tag_name` element for the document `root` stands in: `new`,
     which used to be this, a blank copy of an existing element of the
@@ -130,10 +118,3 @@ def _is_forked_style_name(name: "str | None", prefix: str) -> bool:
     if not name:
         return False
     return re.match(rf"^{re.escape(prefix)}\d+$", name) is not None
-
-
-# Moved to `xmlbs`, under `xmltree`'s names: kept here until every module
-# calls them there.
-_paragraph_text = paragraph_text
-_set_paragraph_text = set_paragraph_text
-_children_named = children
