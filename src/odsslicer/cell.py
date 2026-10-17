@@ -1034,6 +1034,15 @@ class Cell:
             self.attrs["table:style-name"] = name
         self._read_by_format()
 
+    @property
+    def style_name(self) -> "str | None":
+        """The name of this cell's own style - its `table:style-name`, `"ce9"`
+        say - or `None` for a cell that has none and shows with its column's
+        default cell style. What `cell.attrs.get("table:style-name")` read,
+        which goes in 1.0 with `attrs` itself (DOCS.md, "What changes in
+        1.0"); `cell.style` gives the style itself, resolved."""
+        return cast("str | None", self.attrs.get("table:style-name"))
+
     def _style_name(self) -> "str | None":
         """The name of the style this cell shows with: its own
         `table:style-name`, else its column's default cell style, where

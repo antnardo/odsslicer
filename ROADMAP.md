@@ -370,8 +370,11 @@ ruff 0.16.x épinglé), sinon le job `lint` échoue. `.git-blame-ignore-revs` fa
 vise les enfants ou les descendants ; trois défauts corrigés contre LibreOffice, sur des structures
 qu'aucun des 500 vrais fichiers balayés ne porte (voir le plan).
 
-**Par où commencer** : l'étape 4 — décisions d'API, écrites dans DOCS.md avant le code ; l'étape 1
-(`settings.xml`, graphiques) se fait sur la branche 1.0, en parallèle ou après. Rebaser `claude/lxml-study` sur `master` une fois l'étape 2 fusionnée : `reader.py` y
+**L'étape 4 est faite** (2026-10-17) : les décisions d'API sont dans DOCS.md, section 15, et
+`Cell.style_name` remplace l'usage réel de `Cell.attrs`.
+
+**Par où commencer** : la branche 1.0 (`claude/lxml-study`) — l'étape 1 (`settings.xml`,
+graphiques), puis l'étape 5, la bascule. Rebaser `claude/lxml-study` sur `master` une fois l'étape 2 fusionnée : `reader.py` y
 change d'imports des deux côtés, et `xmlutils._blank_template` reste, réduit à `new(near=...)`,
 pour le seul `properties.py` de `master`, que la branche porte en entier.
 
@@ -609,9 +612,22 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
      (`_new_style_name`), un groupe de définitions de colonnes qui n'en contient qu'un autre
      (`delete_column`). À l'étape 5, ce sont des `descendants`.
 
-4. **Décisions d'API, écrites dans DOCS.md avant le code** : ce que deviennent `Cell.attrs`,
-   `Sheet.attrs`, les clés de `cell_properties`/`text_properties` (voir « À décider »), et le
-   message d'erreur d'un fichier mal formé (un fichier chiffré a déjà le sien).
+4. ~~**Décisions d'API, écrites dans DOCS.md avant le code**~~ **Fait** (2026-10-17, décisions de
+   l'auteur), écrites dans DOCS.md, section 15 « What changes in 1.0 » :
+   - **`Cell.attrs` et `Sheet.attrs` disparaissent à la 1.0.** Leur seul usage réel (4 lignes de
+     devoir_utils, toujours `cell.attrs.get("table:style-name")`) a sa propriété dès maintenant :
+     `Cell.style_name`. Dépréciés dans le CHANGELOG, sans avertissement à l'exécution : le code
+     interne lit `Cell.attrs` à chaque pas, et l'en sortir est le travail de l'étape 5. Les
+     usages de devoir_utils sont à migrer une fois `style_name` publié (sa session, à prévenir).
+   - **Les clés de `cell_properties` et `text_properties` gardent le préfixe de la
+     spécification** (`"fo:background-color"`), quel que soit celui du fichier.
+   - **Analyse stricte** : un XML mal formé lève `MalformedDocumentError` (sous-classe de
+     `ValueError`, comme `EncryptedDocumentError`).
+   - **`of:` non déclaré** : écrire avec le préfixe que le document lie à OpenFormula
+     (`prefix_of()`), sinon déclarer `of` sur la racine.
+   - **lxml ≥ 5.0**, bs4 retiré des dépendances.
+   - Contrats de l'étape 2 gardés : `new(name, near=...)` (ignoré par `xmltree`), `children`
+     rend une liste dans les deux couches.
 5. **La bascule : `content.xml` et `styles.xml` sur lxml, ensemble — 1.0.** Les fonctions de
    l'étape 2 prennent les corps de `xmltree` ; reste le mécanique : 238 accès aux attributs
    (`el.get(qn(...))`, constantes précalculées sur le chemin chaud), 82 recherches, 27
@@ -667,17 +683,9 @@ réparé en silence ; un fichier aux préfixes non standard se lit.
   `master`, le portage de `properties.py` sur `claude/lxml-study` jusqu'à la 1.0 (voir « Pour
   démarrer »). Rebasée sur la v0.15.0, la branche balayait à zéro partout (250 fichiers, écriture
   sur 150), le fichier chiffré levant la même erreur des deux côtés.
-- **`Cell.attrs` et `Sheet.attrs`** : les retirer, exposer `el.attrib` (clés `{URI}local`), ou
-  garder une vue en lecture aux clés préfixées (`prefixed()` existe). DOCS.md en montre l'usage.
-  Même question pour les clés de `cell_properties` et `text_properties` ; je garderais le préfixe
-  de la spécification, qui ne dépend pas du fichier.
-- **Analyse stricte** : recommandée. Le corpus ne contient aucun XML que `recover=True` aurait
-  dû réparer, et le chiffrement est désormais détecté par le manifeste, avant l'analyse : la
-  stricte ne garde plus que les parties tronquées ou mal formées, que bs4 complète sans rien
-  dire.
-- **`of:` non déclaré** : à l'écriture d'une formule, déclarer `of` sur la racine s'il manque, ou
-  écrire avec le préfixe que le document lie à OpenFormula (`prefix_of()`) — 5 fichiers réels sont
-  concernés.
-- **Plancher de lxml** : `lxml>=4.6` aujourd'hui. Les roues des Python récents imposent de fait
-  une 5.x ; le relever à la 1.0 ne coûte rien.
+- ~~**`Cell.attrs` et `Sheet.attrs`, clés des propriétés, analyse stricte, `of:` non déclaré,
+  plancher de lxml**~~ Tranché le 2026-10-17 par l'auteur : voir l'étape 4 du plan, et DOCS.md,
+  section 15. `attrs` disparaît (remplacé par `Cell.style_name`), les clés gardent le préfixe de
+  la spécification, un XML mal formé lève `MalformedDocumentError`, `of:` prend le préfixe du
+  document ou se déclare, lxml ≥ 5.0.
 

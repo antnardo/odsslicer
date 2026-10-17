@@ -67,6 +67,7 @@ sheet = table.sheet("Sheet1")
     - [How it compares to other readers](#how-it-compares-to-other-readers)
 13. [Known limitations](#13-known-limitations)
 14. [Appendix: notable bug fixes](#14-appendix-notable-bug-fixes)
+15. [What changes in 1.0](#15-what-changes-in-10)
 
 ---
 
@@ -152,6 +153,7 @@ cell.row, cell.col   # 0-indexed position
 cell.address         # spreadsheet-style address, e.g. "A1", "AZ12"
 cell.is_formula      # True if the cell holds an ODF formula
 cell.is_empty        # True if no value/text/format/formula is set
+cell.style_name      # its own style's name ("ce9"), None if it has none - see Styles
 ```
 
 `Cell` supports the usual numeric conversions (`int()`, `float()`, `round()`, `abs()`, `-`,
@@ -1110,9 +1112,9 @@ that same forked style for every later write on the same cell, so setting severa
 never affects any other cell that used to share the original style:
 
 ```python
-sheet["A1"].attrs.get("table:style-name")   # None, or some shared style like "ce9"
+sheet["A1"].style_name                      # None, or some shared style like "ce9"
 sheet["A1"].style.bold = True
-sheet["A1"].attrs.get("table:style-name")   # "ocs1" — a new style, private to A1
+sheet["A1"].style_name                      # "ocs1" — a new style, private to A1
 sheet["A1"].style.italic = True             # reuses "ocs1", doesn't fork again
 ```
 
@@ -1469,3 +1471,34 @@ issue it was reported in.
 7. **A cell's value `text:p` wasn't scoped to direct children** — once cell comments (which
    nest their own `text:p`) were added, the comment's paragraph could be mistaken for the
    cell's value. Fixed with `recursive=False` on every value `text:p` lookup.
+
+## 15. What changes in 1.0
+
+odsslicer 1.0 drops BeautifulSoup and reads and writes the XML with lxml alone: opening and
+loading a large sheet is projected about six times faster, with half the memory, in
+[`benchmarks/LXML_STUDY.md`](benchmarks/LXML_STUDY.md). The high-level API - `ODSReader`,
+`Sheet`, `Cell`, `CellStyle`, values, styles, formulas - stays as it is. What changes, decided
+before the code is written (ROADMAP.md, step 4):
+
+- **`Cell.attrs` and `Sheet.attrs` are removed.** They were the element's own attribute
+  dictionary, with the file's prefixed keys, and writing to them bypassed everything the library
+  keeps consistent. Their one common use has a property of its own already:
+  `cell.attrs.get("table:style-name")` is `cell.style_name`. A sheet's name, style and the rest
+  are its properties already (`sheet.name`, `sheet.style`). Until 1.0 both still work.
+- **The escape hatches to the XML become lxml elements and trees**: `reader.data`,
+  `reader.styles_data`, `reader.meta_data`, `reader.settings_data`, `reader.tables`,
+  `sheet.table` and `cell.cell`. Code that searched them with bs4 (`find`, `find_all`) has to use
+  lxml's (`find`, `iter`, `xpath`), with names spelled by namespace URI.
+- **`CellStyle.cell_properties` and `text_properties` keep their keys** as they read today,
+  prefixed the way the ODF specification writes them (`"fo:background-color"`), whatever prefix
+  the file itself uses.
+- **A document whose XML is malformed raises `MalformedDocumentError`** (a `ValueError`, like
+  `EncryptedDocumentError`), where it now opens silently repaired: a truncated part reads with
+  cells missing, and `save()` writes that back. No file among 500 real ones needs the repair.
+- **A document that binds the ODF namespaces to other prefixes reads like any other** (a
+  `table` namespace written `tab:`, say): it now reads with no sheet at all. And a formula
+  written into a document that does not declare the OpenFormula prefix gets the prefix the
+  document binds to it, or a declaration of `of` on the root - it is written `of:=...` with no
+  declaration today.
+- **lxml 5.0 or later** is required, and BeautifulSoup no longer is.
+

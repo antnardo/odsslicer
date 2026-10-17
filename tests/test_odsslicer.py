@@ -588,6 +588,25 @@ def test_writing_a_multi_line_value_writes_one_paragraph_per_line(writable_reade
     assert ODSReader(out).sheet("Sheet1")["A1"].value == "ligne 1\nligne 2\nligne 3"
 
 
+class TestStyleName:
+    def test_a_cell_with_its_own_style_gives_its_name(self, tmp_path):
+        xml = table_row(
+            '<table:table-cell table:style-name="ce9" office:value-type="float" office:value="1"/>'
+        )
+        sheet = ODSReader(ods_with_sheet(tmp_path / "styled.ods", xml)).sheet("Sheet1")
+        assert sheet["A1"].style_name == sheet["A1"].attrs.get("table:style-name") == "ce9"
+
+    def test_a_cell_without_one_gives_none(self, tmp_path):
+        sheet = ODSReader(ods_with_sheet(tmp_path / "plain.ods", table_row(number_cell(1)))).sheet("Sheet1")
+        assert sheet["A1"].style_name is None
+
+    def test_a_formatted_cell_gives_the_style_it_was_forked(self, writable_reader):
+        cell = writable_reader.sheet("Sheet1")["A1"]
+        cell.style.bold = True
+        assert cell.style_name == cell.attrs.get("table:style-name")
+        assert cell.style_name is not None
+
+
 class TestChildrenNotDescendants:
     """What the sheet holds is found among children, not anything under
     them: step 3 of the lxml migration (ROADMAP.md)."""

@@ -7,6 +7,20 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Added
+
+- **`Cell.style_name`**: the name of a cell's own style (`"ce9"`), or `None` for a cell that has
+  none and shows with its column's default. It is what `cell.attrs.get("table:style-name")`
+  read, the one common use of `attrs`.
+
+### Deprecated
+
+- **`Cell.attrs` and `Sheet.attrs` go in 1.0**, with BeautifulSoup: use `cell.style_name`,
+  `cell.style` and the sheet's properties instead. They still work until then. DOCS.md, section
+  15, lists everything 1.0 changes: the XML escape hatches (`reader.data`, `cell.cell`...)
+  become lxml elements, a malformed document raises `MalformedDocumentError`, a document with
+  other prefixes reads, and lxml 5.0 is required.
+
 ### Fixed
 
 - **A table held in a cell's frame is no longer read as a sheet, nor its cells as the row's.** A
