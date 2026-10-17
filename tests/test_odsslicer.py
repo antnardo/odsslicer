@@ -29,6 +29,7 @@ from conftest import (
     FRAMED_TABLE_CELL,
     PRINT_TITLE_WIDTHS_XML,
     PRINT_TITLE_XML,
+    _fragment,
     addresses_holding,
     cells_with_content,
     chart_frame,
@@ -702,6 +703,54 @@ class TestNamesByNamespace:
         )
         sheet = ODSReader(ods_with_sheet(tmp_path / "foreign.ods", xml)).sheet("Sheet1")
         assert sheet._column_default_cell_style(0) == "mine"
+
+
+# Every shape of cell element `load` decides on, as another application may
+# write it: `_holds_content` reads the element where `load` built a `Cell`
+CELL_ELEMENTS = [
+    "<table:table-cell/>",
+    '<table:table-cell table:style-name="ce1" table:number-columns-repeated="3"/>',
+    '<table:table-cell office:value-type="string"><text:p>a</text:p></table:table-cell>',
+    '<table:table-cell office:value-type="string"/>',
+    '<table:table-cell office:value-type=""/>',
+    '<table:table-cell office:value-type="float" office:value="1"/>',
+    '<table:table-cell office:value-type="date" office:date-value="2026-10-18"/>',
+    '<table:table-cell office:value-type="float"><text:p>1</text:p></table:table-cell>',
+    '<table:table-cell office:value="1"/>',
+    '<table:table-cell office:date-value="2026-10-18"/>',
+    '<table:table-cell office:boolean-value="true"/>',
+    '<table:table-cell table:formula="of:=1+1"/>',
+    "<table:table-cell><text:p/></table:table-cell>",
+    "<table:table-cell><text:p>a</text:p><text:p>b</text:p></table:table-cell>",
+    "<table:table-cell><!-- a comment --></table:table-cell>",
+    "<table:table-cell><!-- a comment --><text:p>a</text:p></table:table-cell>",
+    "<table:table-cell><text:span>a</text:span></table:table-cell>",
+    '<table:table-cell><text:p>a<text:s text:c="2"/>b</text:p></table:table-cell>',
+    "<table:table-cell><text:p>a</text:p><!-- a comment --></table:table-cell>",
+    "<table:table-cell><office:annotation><text:p>note</text:p></office:annotation></table:table-cell>",
+    '<table:table-cell><draw:rect draw:name="r"><text:p>in a shape</text:p></draw:rect></table:table-cell>',
+    '<table:covered-table-cell office:value-type="string"><text:p>a</text:p></table:covered-table-cell>',
+    "<table:covered-table-cell/>",
+]
+
+
+@pytest.mark.parametrize("xml", CELL_ELEMENTS)
+def test_holds_content_reads_the_element_as_a_cell_reads_it(xml):
+    from odsslicer.sheet import _holds_content
+
+    (element,) = _fragment(xml)
+    cell = Cell(element)
+    assert _holds_content(element) == (
+        not cell.is_empty or bool(xmltree.children(element, "office:annotation"))
+    )
+
+
+@pytest.mark.parametrize("xml", CELL_ELEMENTS)
+def test_cell_text_is_its_paragraphs_joined_whatever_else_it_holds(xml):
+    (element,) = _fragment(xml)
+    paragraphs = xmltree.children(element, "text:p")
+    expected = "\n".join(xmltree.paragraph_text(p) for p in paragraphs) if paragraphs else None
+    assert Cell(element).text == expected
 
 
 class TestLoadingWideSheets:

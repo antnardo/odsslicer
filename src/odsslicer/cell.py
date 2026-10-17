@@ -412,12 +412,28 @@ class Cell:
         # recursive=False: a cell's own value paragraphs are always direct
         # children - an unscoped find_all() would also match those nested
         # inside an office:annotation (a cell comment, see Cell.comment).
-        paragraphs = list(cell.iterchildren(_TEXT_P))
         # `paragraph_text`, not `p.string` - None both for a genuinely empty
         # <text:p/> (a formula whose cached result is "") and for one with
         # several children (spans...) - nor `get_text()`, which drops the
         # spaces, tabs and line breaks ODF writes as elements (issue #27).
-        self.text: str | None = "\n".join(paragraph_text(p) for p in paragraphs) if paragraphs else None
+        # A cell of no child or of one paragraph, nearly all of them, is read
+        # without listing its children: this runs once per cell of a sheet
+        # being loaded, and the list cost a fifth of it.
+        n_children = len(cell)
+        self.text: str | None
+        if n_children == 0:
+            self.text = None
+        elif n_children == 1:
+            only = cell[0]
+            if only.tag != _TEXT_P:
+                self.text = None
+            elif len(only) == 0:  # `paragraph_text`'s first line: one text node
+                self.text = only.text or ""
+            else:
+                self.text = paragraph_text(only)
+        else:
+            paragraphs = list(cell.iterchildren(_TEXT_P))
+            self.text = "\n".join([paragraph_text(p) for p in paragraphs]) if paragraphs else None
         # A value its declared type cannot be read from - a malformed date, a
         # type no reader knows (KeyError) - must not take the whole sheet
         # down with it: the cell reads as its displayed text instead, and

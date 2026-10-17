@@ -32,6 +32,7 @@ TESTS = ["tests/test_xmltree.py"]
 # those guards name the tests that hold them
 POSITIONAL = ["tests/test_odsslicer.py", "-k", "never_places"]
 NAMES = ["tests/test_odsslicer.py", "-k", "NamesByNamespace"]
+READ_FROM_ELEMENT = ["tests/test_odsslicer.py", "-k", "holds_content or paragraphs_joined"]
 
 
 def _by_index(reference: str, element: str, after: bool) -> str:
@@ -197,6 +198,49 @@ MUTATIONS = [
         "            if name == _COLUMN:\n",
         '            if etree.QName(element).localname == "table-column":\n',
         NAMES,
+    ),
+    # the grid's guards read the element, and say what a `Cell` would say
+    (
+        "_holds_content forgets the value type",
+        "sheet.py",
+        "        cell_tag.get(_VALUE_TYPE) is not None\n        or ",
+        "        ",
+        READ_FROM_ELEMENT,
+    ),
+    (
+        "_holds_content forgets office:value",
+        "sheet.py",
+        "        or cell_tag.get(_VALUE) is not None\n",
+        "",
+        READ_FROM_ELEMENT,
+    ),
+    (
+        "_holds_content forgets the formula",
+        "sheet.py",
+        "        or cell_tag.get(_FORMULA) is not None\n",
+        "",
+        READ_FROM_ELEMENT,
+    ),
+    (
+        "_holds_content forgets the note",
+        "sheet.py",
+        '_PARAGRAPH_OR_NOTE = (qn("text:p"), qn("office:annotation"))',
+        '_PARAGRAPH_OR_NOTE = (qn("text:p"),)',
+        READ_FROM_ELEMENT,
+    ),
+    (
+        "_holds_content looks past the cell's children",
+        "sheet.py",
+        "next(cell_tag.iterchildren(*_PARAGRAPH_OR_NOTE), None)",
+        "next(cell_tag.iterdescendants(*_PARAGRAPH_OR_NOTE), None)",
+        READ_FROM_ELEMENT,
+    ),
+    (
+        "Cell reads a lone child as a paragraph",
+        "cell.py",
+        "            if only.tag != _TEXT_P:\n",
+        "            if False:\n",
+        READ_FROM_ELEMENT,
     ),
     # sheet.py: next to a known element, never by index
     (

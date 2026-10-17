@@ -90,8 +90,9 @@ def _repeat(tag: etree._Element, attr: str) -> int:
 # of another namespace that happens to share a local name is no row and no
 # cell - LibreOffice skips it. `etree.QName(element).localname`, which
 # compared local names alone until 1.0, also built an object per call, on
-# the path that loads every row.
-_CELL_TAGS = frozenset(qn(name) for name in TAG_CELL)
+# the path that loads every row. A tuple where `iterchildren` takes the names
+# as its arguments: lxml filters the children, rather than a Python loop.
+_CELL_TAGS = tuple(qn(name) for name in TAG_CELL)
 _ROW = qn("table:table-row")
 _COVERED_CELL = qn("table:covered-table-cell")
 # what holds a sheet's rows besides the sheet itself: header rows, and row
@@ -104,6 +105,11 @@ _COLUMN = qn("table:table-column")
 _COLUMN_GROUPS = frozenset(
     qn(name) for name in ("table:table-columns", "table:table-header-columns", "table:table-column-group")
 )
+# what `_holds_content` reads, see there
+_VALUE_TYPE = qn("office:value-type")
+_VALUE = qn("office:value")
+_FORMULA = qn("table:formula")
+_PARAGRAPH_OR_NOTE = (qn("text:p"), qn("office:annotation"))
 
 
 def _row_cells(row: etree._Element) -> list[etree._Element]:
@@ -111,7 +117,7 @@ def _row_cells(row: etree._Element) -> list[etree._Element]:
     into each cell's content as well, where a frame may hold a table of its
     own, and counted that table's cells in the row - a column the sheet does
     not have, which LibreOffice does not show either."""
-    return [cell for cell in row if cell.tag in _CELL_TAGS]
+    return list(row.iterchildren(*_CELL_TAGS))
 
 
 def _sheet_rows(parent: etree._Element) -> list[etree._Element]:
@@ -128,14 +134,28 @@ def _sheet_rows(parent: etree._Element) -> list[etree._Element]:
     return found
 
 
-def _holds_content(cell: Cell) -> bool:
-    """Whether `cell` holds what LibreOffice counts in a sheet's used area,
-    formatting aside: a value, a text or a formula (see `Cell.is_empty`), or
-    a note (issue #10). The grid reaches every such cell. Formatting stays
-    out on purpose: files carry it in the rows padding a sheet to its full
-    height, down to the millionth, and a formatted row the grid leaves out
-    stays in the file all the same (see `grow_to`)."""
-    return not cell.is_empty or bool(children(cell.cell, "office:annotation"))
+def _holds_content(cell_tag: etree._Element) -> bool:
+    """Whether the cell element `cell_tag` holds what LibreOffice counts in
+    a sheet's used area, formatting aside: a value, a text or a formula - what
+    makes `Cell.is_empty` false - or a note (issue #10). The grid reaches
+    every such cell. Formatting stays out on purpose: files carry it in the
+    rows padding a sheet to its full height, down to the millionth, and a
+    formatted row the grid leaves out stays in the file all the same (see
+    `grow_to`).
+
+    Read from the element, without building a `Cell`: `load` asks it of
+    every element before the grid exists, and a `Cell` built to answer it,
+    then another for the grid, made `Cell.__init__` most of the loading time.
+    A `Cell` is empty when the element has no `office:value-type`, no
+    `office:value`, no formula and no paragraph of its own (`Cell.__init__`:
+    with no type, the value is `None` whatever is written); a test holds the
+    two answers equal."""
+    return (
+        cell_tag.get(_VALUE_TYPE) is not None
+        or cell_tag.get(_VALUE) is not None
+        or cell_tag.get(_FORMULA) is not None
+        or next(cell_tag.iterchildren(*_PARAGRAPH_OR_NOTE), None) is not None
+    )
 
 
 # the namespaces of what a cell may hold anchored to it: shapes, charts and
@@ -270,19 +290,21 @@ class Sheet:
         # keeping the XML and the in-memory model in agreement (the rest of
         # the library assumes rectangular rows). Only trailing *empty* cells
         # are ever touched, so no data moves and nothing visible is lost.
-        def content_width(cells_bs: "list[etree._Element]") -> "tuple[int, etree._Element | None]":
-            """(width up to the first huge trailing empty cell, that cell)."""
+        # Each row is measured once, and both passes read the measure: what
+        # each cell repeats over, and where its trailing empty cells start.
+        def measure(cells_bs: "list[etree._Element]") -> "tuple[list[int], int, int]":
+            """(each cell's repeat, the start of the trailing run of empty
+            cells, the width up to the first huge cell of that run)."""
+            repeats = [int(cell.get(_COLUMNS_REPEATED, "1")) for cell in cells_bs]
             suffix_start = len(cells_bs)
-            while suffix_start > 0 and not _holds_content(Cell(cells_bs[suffix_start - 1])):
+            while suffix_start > 0 and not _holds_content(cells_bs[suffix_start - 1]):
                 suffix_start -= 1
-            width, first_big = 0, None
-            for k, cell in enumerate(cells_bs):
-                n_cols = int(cell.get(_COLUMNS_REPEATED, "1"))
+            width = 0
+            for k, n_cols in enumerate(repeats):
                 if k >= suffix_start and n_cols > MAX_REPEAT_ROWS:
-                    first_big = cell
                     break
                 width += n_cols
-            return width, first_big
+            return repeats, suffix_start, width
 
         # Its row-direction counterpart: a row repeated absurdly many times
         # whose cells are all empty is grid filler too (Excel and LibreOffice
@@ -290,11 +312,14 @@ class Sheet:
         # but only below the last row holding anything. Above it, empty rows
         # are real, however many: leaving them out would move every row
         # below them up (issue #6). The grid ends at the first filler.
-        def is_empty_row(row: etree._Element) -> bool:
-            return not any(_holds_content(Cell(c)) for c in _row_cells(row))
+        # Each row's cells, listed once: every pass below walks them.
+        row_cells = [_row_cells(row) for row in rows]
+
+        def is_empty_row(k: int) -> bool:
+            return not any(_holds_content(c) for c in row_cells[k])
 
         last_content = len(rows) - 1
-        while last_content >= 0 and is_empty_row(rows[last_content]):
+        while last_content >= 0 and is_empty_row(last_content):
             last_content -= 1
         fillers = (
             k
@@ -303,12 +328,14 @@ class Sheet:
         )
         end = next(fillers, len(rows))
 
-        widths = (content_width(_row_cells(row))[0] for row in rows[:end])
-        real_width = max(widths, default=0)
+        measures = [measure(cells_bs) for cells_bs in row_cells[:end]]
+        real_width = max((width for _, _, width in measures), default=0)
         normalized = []
         i = 0
-        for row in rows[:end]:
-            normalized.append(self._normalize_row_width(row, _row_cells(row), real_width, i))
+        for row, cells_bs, (repeats, suffix_start, _) in zip(
+            rows[:end], row_cells[:end], measures, strict=True
+        ):
+            normalized.append(self._normalize_row_width(row, cells_bs, repeats, suffix_start, real_width, i))
             i += _repeat(row, _ROWS_REPEATED)
 
         # Trailing columns empty in every row are left out of the grid when
@@ -321,28 +348,29 @@ class Sheet:
         # element answers for every column it repeats over.
         built_width = real_width
         content_end = 0
-        for cells_bs in normalized:
+        for pairs in normalized:
             col = 0
-            for cell in cells_bs:
-                col += _repeat(cell, _COLUMNS_REPEATED)
-                if _holds_content(Cell(cell)):
-                    content_end = max(content_end, col)
+            for cell, n_cols in pairs:
+                col += n_cols
+                if col > content_end and _holds_content(cell):
+                    content_end = col
         # an all-empty sheet keeps the general path below, which takes it apart
         if content_end > 0 and real_width - content_end > MAX_REPEAT_COLS:
             built_width = content_end
 
+        # One `Cell` per position, and no other: the grid's.
         i = 0
-        for row, all_cells_bs in zip(rows[:end], normalized, strict=True):
+        for row, pairs in zip(rows[:end], normalized, strict=True):
             n_rows = int(row.get(_ROWS_REPEATED, "1"))
             for _ in range(n_rows):
                 cells = []
                 j = 0
-                for cell in all_cells_bs:
-                    n_cols = int(cell.get(_COLUMNS_REPEATED, "1"))
+                for cell, n_cols in pairs:
                     for _ in range(min(n_cols, built_width - j)):
-                        cells.append(Cell(cell, row=i, col=j, sheet=self))
-                        if cells[-1]._unreadable is not None:
-                            unreadable.append(cells[-1])
+                        built = Cell(cell, i, j, self)
+                        cells.append(built)
+                        if built._unreadable is not None:
+                            unreadable.append(built)
                         j += 1
                     if j >= built_width:
                         break
@@ -372,7 +400,7 @@ class Sheet:
         # the file, past the grid.
         after_filler = rows[end + 1 :]
         written_apart = any(_repeat(row, _ROWS_REPEATED) <= MAX_REPEAT_ROWS for row in after_filler)
-        if not written_apart and not any(_holds_content(cell) for cell in table[-1]):
+        if not written_apart and not any(_holds_content(cell.cell) for cell in table[-1]):
             row_tag = cast(etree._Element, table[-1][0].cell.getparent())
             keep = len(self._run_in(table, len(table) - 1)) - 1
             table.pop()
@@ -390,7 +418,7 @@ class Sheet:
         # them back as the sheet grows.
         n_cols = real_width
         width = len(table[0])
-        while width > 0 and not any(_holds_content(row[width - 1]) for row in table):
+        while width > 0 and not any(_holds_content(row[width - 1].cell) for row in table):
             width -= 1
         if n_cols - width > MAX_REPEAT_COLS:
             logger.log(self._log_level, "    Cols %d to %d empty: left out", width + 1, n_cols)
@@ -497,14 +525,22 @@ class Sheet:
         )
 
     def _normalize_row_width(
-        self, row_tag: etree._Element, cells_bs: "list[etree._Element]", real_width: int, row_index: int
-    ) -> "list[etree._Element]":
+        self,
+        row_tag: etree._Element,
+        cells_bs: "list[etree._Element]",
+        repeats: "list[int]",
+        suffix_start: int,
+        real_width: int,
+        row_index: int,
+    ) -> "list[tuple[etree._Element, int]]":
         """Rewrite one row's XML so its total width is exactly `real_width`
-        cells, touching only its trailing run of *empty* cells: a huge grid
-        filler (see `load`) has its repeat count reduced, and a row that falls
-        short is padded with a blank repeated cell. Rows already the right
-        width come back untouched. Returns the row's cell tags of the grid,
-        after the rewrite.
+        cells, touching only its trailing run of *empty* cells, which starts
+        at `suffix_start`: a huge grid filler (see `load`) has its repeat
+        count reduced, and a row that falls short is padded with a blank
+        repeated cell. Rows already the right width come back untouched.
+        `repeats` is what each cell of `cells_bs` repeats over. Returns the
+        row's cell tags of the grid, after the rewrite, each with the number
+        of columns it stands for.
 
         What a trailing cell says about itself is kept: one carrying a style
         stays in the file, out of the grid, where it used to be deleted -
@@ -512,12 +548,8 @@ class Sheet:
         one repeated to the last column, and a plain save dropped that
         formatting (issue #23). `grow_to` takes such a cell back into the grid,
         formatting and all, when the sheet widens (issue #6)."""
-        suffix_start = len(cells_bs)
-        while suffix_start > 0 and not _holds_content(Cell(cells_bs[suffix_start - 1])):
-            suffix_start -= 1
         width = 0
-        for k, cell in enumerate(cells_bs):
-            n_cols = int(cell.get(_COLUMNS_REPEATED, "1"))
+        for k, (cell, n_cols) in enumerate(zip(cells_bs, repeats, strict=True)):
             # only the trailing run of empty cells is ever clamped - a huge
             # repeat *before* real data is real (and counted in `real_width`)
             if k < suffix_start or (width + n_cols <= real_width and n_cols <= MAX_REPEAT_ROWS):
@@ -533,10 +565,10 @@ class Sheet:
                 n_cols,
                 real_width,
             )
-            keep = cells_bs[:k]
+            keep = list(zip(cells_bs[:k], repeats[:k], strict=True))
             if missing > 0:
                 _set_repeat(cell, _COLUMNS_REPEATED, missing)
-                keep.append(cell)
+                keep.append((cell, missing))
                 remainder = n_cols - missing
                 if remainder > 0 and _carries_formatting(cell):
                     # the part past the grid keeps saying what it says
@@ -550,13 +582,14 @@ class Sheet:
                 if not _carries_formatting(extra):
                     remove(extra)
             return keep
+        pairs = list(zip(cells_bs, repeats, strict=True))
         if width < real_width:
             pad = self._empty_cell_template()
             if real_width - width > 1:
                 pad.set(_COLUMNS_REPEATED, str(real_width - width))
             row_tag.append(pad)
-            return [*cells_bs, pad]
-        return cells_bs
+            pairs.append((pad, real_width - width))
+        return pairs
 
     def materialize_cell(self, row: int, col: int) -> None:
         """Ensure the cell at (row, col) has its own, independent XML element,
