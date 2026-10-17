@@ -900,6 +900,20 @@ class Sheet:
         if not col0 <= by <= col1:
             raise ValueError(f"sort column {by} is outside {source!r}'s columns ({col0}-{col1})")
 
+        # `Cell._style_name`, each column's default cell style looked up once:
+        # a cell with no style of its own asks its column for one, by a walk
+        # of the column definitions, twice per cell here - which made sorting
+        # 1,000 rows slower than with bs4. Nothing here changes the columns.
+        column_defaults: dict[int, str | None] = {}
+
+        def style_name(cell: Cell) -> "str | None":
+            own = cell.cell.get(_STYLE_NAME)
+            if own is not None:
+                return own
+            if cell.col not in column_defaults:
+                column_defaults[cell.col] = self._column_default_cell_style(cell.col)
+            return column_defaults[cell.col]
+
         snapshot = [
             (
                 r,
@@ -907,7 +921,7 @@ class Sheet:
                     (
                         self.rows[r][c].value,
                         self.rows[r][c].formula,
-                        self.rows[r][c]._style_name(),  # as in `copy`
+                        style_name(self.rows[r][c]),  # as in `copy`
                     )
                     for c in range(col0, col1 + 1)
                 ],
@@ -939,10 +953,10 @@ class Sheet:
         for new_offset, (old_row, row_data) in enumerate(ordered):
             new_row = row0 + new_offset
             drow = new_row - old_row
-            for j, (value, formula, style_name) in enumerate(row_data):
+            for j, (value, formula, target_style) in enumerate(row_data):
                 target = self.rows[new_row][col0 + j]
-                if target._style_name() != style_name:  # as in `copy`
-                    target.style = style_name
+                if style_name(target) != target_style:  # as in `copy`
+                    target.style = target_style
                 if formula is not None:
                     target._write_formula(_shift_odf_formula(formula, drow, 0))
                 else:

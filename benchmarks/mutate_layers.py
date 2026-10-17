@@ -257,6 +257,13 @@ MUTATIONS = [
         "        copy.row = row\n",
         COPIES,
     ),
+    (
+        "sort looks one column's default style up for every column",
+        "sheet.py",
+        "            return column_defaults[cell.col]\n",
+        "            return next(iter(column_defaults.values()))\n",
+        ["tests/test_odsslicer.py", "-k", "sort"],
+    ),
     # sheet.py: next to a known element, never by index
     (
         "a row grown past the data placed by index",

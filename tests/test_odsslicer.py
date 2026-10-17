@@ -3263,6 +3263,26 @@ def test_sorting_a_formatted_column_gives_its_cells_no_style_of_their_own(
     assert all(s[r, 1].style_name is None for r in (1, 2, 3))
 
 
+def test_sorting_across_formatted_columns_compares_each_cell_with_its_column(
+    formatted_columns,
+):
+    # `sort` looks each column's default style up once: a cell with no style
+    # of its own is compared with its own column's, and keeps none; a cell
+    # whose style a row with none replaces takes that column's
+    s = formatted_columns.sheet("Sheet1")
+    s["A2:B4"].value = [[3.0, dt.date(2022, 3, 9)], [1.0, dt.date(2022, 3, 7)], [2.0, dt.date(2022, 3, 8)]]
+    s["B2"].style.bold = True
+    s.sort("A2:B4", by=0)
+    assert s["A2:B4"].to_list() == [
+        [1.0, dt.date(2022, 3, 7)],
+        [2.0, dt.date(2022, 3, 8)],
+        [3.0, dt.date(2022, 3, 9)],
+    ]
+    assert s["B2"].style_name == s._column_default_cell_style(1) != s._column_default_cell_style(0)
+    assert s["B4"].style.bold
+    assert [s[r, c].style_name for r, c in ((1, 0), (2, 0), (3, 0), (2, 1))] == [None] * 4
+
+
 def test_setting_a_style_property_keeps_the_columns_formatting(formatted_columns):
     # the fork used to start from nothing, dropping the column's background
     s = formatted_columns.sheet("Sheet1")
