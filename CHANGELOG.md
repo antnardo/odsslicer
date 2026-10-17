@@ -7,6 +7,8 @@ still change between minor versions.
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-10-17
+
 ### Fixed
 
 - **Deleting a row no longer deletes a chart or a shape anchored in it past the grid's columns.**
@@ -703,7 +705,8 @@ typed cell values (text, number, percentage, currency, date, time, boolean), for
 repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
-[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.16.1...HEAD
+[0.16.1]: https://github.com/antnardo/odsslicer/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/antnardo/odsslicer/compare/v0.15.1...v0.16.0
 [0.15.1]: https://github.com/antnardo/odsslicer/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/antnardo/odsslicer/compare/v0.14.3...v0.15.0
