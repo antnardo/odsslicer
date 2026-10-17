@@ -7,6 +7,18 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A table held in a cell's frame is no longer read as a sheet, nor its cells as the row's.** A
+  text box anchored in a cell can hold a table of its own: odsslicer found it among the sheets,
+  and counted its cells as columns of the row it stands in, where LibreOffice shows neither. The
+  sheets are now the tables directly under `office:spreadsheet`, the rows those of the sheet and
+  its row groups, the cells the children of their row. None of 500 real files holds such a table:
+  nothing changes in reading them.
+- **Rewriting the text of a note set as a bulleted list no longer leaves the list behind**, empty
+  items and all, and giving such a note an author puts it before the list rather than inside it.
+  Its text still reads as its items, as LibreOffice shows them.
+
 ## [0.15.1] — 2026-10-12
 
 ### Changed

@@ -27,6 +27,7 @@ from bs4 import Tag
 from conftest import (
     ENCODED_WHITESPACE,
     FIXTURES_DIR,
+    FRAMED_TABLE_CELL,
     PRINT_TITLE_WIDTHS_XML,
     PRINT_TITLE_XML,
     addresses_holding,
@@ -37,6 +38,7 @@ from conftest import (
     empty_cells,
     encoded_whitespace_ods,
     formula_cell,
+    list_note_cell,
     note_cell,
     number_cell,
     ods_with_sheet,
@@ -584,6 +586,58 @@ def test_writing_a_multi_line_value_writes_one_paragraph_per_line(writable_reade
     out = tmp_path / "out.ods"
     writable_reader.save(out)
     assert ODSReader(out).sheet("Sheet1")["A1"].value == "ligne 1\nligne 2\nligne 3"
+
+
+class TestChildrenNotDescendants:
+    """What the sheet holds is found among children, not anything under
+    them: step 3 of the lxml migration (ROADMAP.md)."""
+
+    def test_a_table_in_a_cells_frame_is_no_sheet_and_no_column(self, tmp_path):
+        reader = ODSReader(
+            ods_with_sheet(tmp_path / "framed.ods", table_row(FRAMED_TABLE_CELL, number_cell(2)))
+        )
+        assert reader.sheets_names == ["Sheet1"]
+        sheet = reader.sheet("Sheet1")
+        assert (sheet.size, sheet["A1"].value, sheet["B1"].value) == ((1, 2), "v", 2)
+
+    def test_rows_in_header_rows_and_nested_groups_are_the_sheets(self, tmp_path):
+        xml = (
+            f"<table:table-header-rows>{table_row(text_cell('head'))}</table:table-header-rows>"
+            f"<table:table-row-group>{table_row(text_cell('a'))}"
+            f"<table:table-row-group>{table_row(text_cell('b'))}</table:table-row-group>"
+            f"</table:table-row-group>{table_row(text_cell('c'))}"
+        )
+        sheet = ODSReader(ods_with_sheet(tmp_path / "grouped.ods", xml)).sheet("Sheet1")
+        assert [row[0].value for row in sheet.rows] == ["head", "a", "b", "c"]
+
+    def test_a_note_set_as_a_list_reads_its_items(self, tmp_path):
+        sheet = ODSReader(ods_with_sheet(tmp_path / "note.ods", table_row(list_note_cell("a", "b")))).sheet(
+            "Sheet1"
+        )
+        assert sheet["A1"].comment.text == "a\nb"
+
+    def test_rewriting_a_note_set_as_a_list_drops_the_list(self, tmp_path):
+        reader = ODSReader(
+            ods_with_sheet(tmp_path / "note.ods", table_row(list_note_cell("a", "b", author="me")))
+        )
+        reader.sheet("Sheet1")["A1"].comment.text = "new"
+        out = tmp_path / "out.ods"
+        reader.save(out)
+        note = saved_table(out).find("office:annotation")
+        assert note.find("text:list") is None
+        assert [p.get_text() for p in note.find_all("text:p")] == ["new"]
+        assert ODSReader(out).sheet("Sheet1")["A1"].comment.author == "me"
+
+    def test_an_author_given_to_a_note_set_as_a_list_goes_before_it(self, tmp_path):
+        reader = ODSReader(ods_with_sheet(tmp_path / "note.ods", table_row(list_note_cell("a"))))
+        reader.sheet("Sheet1")["A1"].comment.author = "me"
+        out = tmp_path / "out.ods"
+        reader.save(out)
+        names = [
+            f"{c.prefix}:{c.name}"
+            for c in saved_table(out).find("office:annotation").find_all(True, recursive=False)
+        ]
+        assert names == ["dc:creator", "text:list"]
 
 
 class TestLoadingWideSheets:

@@ -366,9 +366,12 @@ CI le vérifie : formater chaque commit avant de le pousser (`ruff format src te
 ruff 0.16.x épinglé), sinon le job `lint` échoue. `.git-blame-ignore-revs` fait sauter ce commit
 à `git blame`.
 
-**Par où commencer** : l'étape 3 sur `master`, avec la liste des recherches relevées à l'étape 2
-(plan, étape 3) ; l'étape 1 (`settings.xml`, graphiques) se fait sur la branche 1.0, en parallèle
-ou après. Rebaser `claude/lxml-study` sur `master` une fois l'étape 2 fusionnée : `reader.py` y
+**L'étape 3 est faite** (2026-10-17, branche `claude/lxml-step3`) : chaque recherche dit si elle
+vise les enfants ou les descendants ; trois défauts corrigés contre LibreOffice, sur des structures
+qu'aucun des 500 vrais fichiers balayés ne porte (voir le plan).
+
+**Par où commencer** : l'étape 4 — décisions d'API, écrites dans DOCS.md avant le code ; l'étape 1
+(`settings.xml`, graphiques) se fait sur la branche 1.0, en parallèle ou après. Rebaser `claude/lxml-study` sur `master` une fois l'étape 2 fusionnée : `reader.py` y
 change d'imports des deux côtés, et `xmlutils._blank_template` reste, réduit à `new(near=...)`,
 pour le seul `properties.py` de `master`, que la branche porte en entier.
 
@@ -378,9 +381,8 @@ pour le seul `properties.py` de `master`, que la branche porte en entier.
   des correctifs de la 0.15.0 sont tous dans `sheet.py` — `_position_after` et ses trois
   appelants (`_take_back_rows`, `insert_rows`, `insert_columns`), et `_split_repetitions`
   (`replace_with(*copies)`) — et deviennent à l'étape 5 des `insert_after` successifs.
-- **Enfants ou descendants** : 47 recherches comptent sur le défaut récursif de bs4 ; c'est
-  l'étape 3, et c'est là que se cachent les bogues (la note lue comme valeur). La liste, relevée à
-  l'étape 2, est au plan.
+- **Enfants ou descendants** : réglé à l'étape 3 ; à la bascule, `recursive=False` devient
+  `children`, une recherche sans lui `descendants`.
 - **Le `tail`** : réglé à l'étape 2, une fois, dans `xmlbs`/`xmltree` et leurs tests de parité ;
   les deux sites de texte mixte de `hyperlink` appellent `unwrap` et `wrap_contents`.
 
@@ -577,31 +579,36 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
    `append` (même nom, même sens dans les deux bibliothèques), les insertions par indice de
    `sheet.py`, les recherches (étapes 3 et 5) et l'analyse et la sérialisation (`encode`,
    `prettify`, étape 5).
-3. **Enfants ou descendants, site par site.** Les 47 recherches qui comptent sur le défaut
-   récursif de `find_all` disent ce qu'elles veulent (`recursive=False` là où ce sont des
-   enfants). Étape à part parce qu'elle peut changer un comportement — elle corrige des bogues du
-   type de la note lue comme valeur — et que chaque différence au balayage doit pouvoir lui être
-   imputée.
+3. ~~**Enfants ou descendants, site par site.**~~ **Fait** (2026-10-17, branche
+   `claude/lxml-step3`). Chaque recherche dit maintenant ce qu'elle veut : `recursive=False` (ou
+   `children`) là où ce sont des enfants, un commentaire là où les descendants sont voulus.
 
-   **Relevé à l'étape 2** (lignes de la branche `claude/lxml-step2`), par ce qu'il faut sans doute
-   en faire — à confirmer site par site, et contre LibreOffice :
+   **Mesuré d'abord** : `benchmarks/children_scan.py` compare, avec lxml seul, « les enfants » et
+   « tout ce qui est dessous » pour chaque structure en jeu. Sur **500 vrais fichiers, les deux
+   s'accordent partout** ; sur un fichier fabriqué qui porte chaque cas, le script les voit tous.
+   Les corrections ne changent donc rien sur le corpus, et le balayage contre la 0.15.1 est à zéro.
+   Sur le fichier fabriqué, LibreOffice tranche :
 
-   - *Probablement des enfants, et un bogue possible* : les feuilles, `reader.py:124`
-     (`data.find_all("table:table")`) — un tableau imbriqué dans une cellule compterait pour une
-     feuille ; les lignes d'une feuille, `sheet.py:214` (`load`, `find_all("table:table-row")`,
-     qui doit descendre dans les groupes de lignes mais pas dans une cellule : `_rows_past_grid`
-     le fait déjà à la main) ; les cellules d'une ligne, `sheet.py:249, 261, 266` (`load`), `542`
-     (`_unrepeat_row`), `1023` (`_take_back_rows`), `1336` (`insert_rows`) —
-     `row.find_all(TAG_CELL)`.
-   - *Enfants, sans changement attendu* : les propriétés d'un style, `styles.py:149, 156, 158, 617,
-     652, 668, 671, 696, 996, 1066, 1120`, `xmlutils.py:105` (`_ensure_style_child`),
-     `sheet.py:1638` (`_fork_style`) ; l'auteur et la date d'une note, `cell.py:285, 290, 302,
-     312`, et son premier paragraphe, `cell.py:263` ; `sheet.py:900, 1239` ; `reader.py:225, 226,
-     236, 278, 281`.
-   - *À trancher* : les paragraphes d'une note, `cell.py:271, 276` — une note en liste à puces
-     garde ses paragraphes dans `text:list`, que des enfants manqueraient.
-   - *Des descendants, voulus* : `reader.py:227, 233, 295, 442, 443, 467, 492, 508`,
-     `sheet.py:899`. `properties.py` (8 recherches) est sur la branche 1.0.
+   - *Corrigés, contre LibreOffice* : un tableau logé dans le cadre d'une cellule (une zone de
+     texte) comptait pour une feuille, et ses cellules pour des colonnes de la ligne ; LibreOffice
+     ne montre ni l'un ni l'autre. Les feuilles sont désormais les `table:table` enfants de
+     `office:spreadsheet` (`ODSReader._spreadsheet`), les lignes s'atteignent par les conteneurs de
+     lignes sans entrer dans une cellule (`sheet._sheet_rows`, que `_rows_past_grid` partage), les
+     cellules sont les enfants de leur ligne (`sheet._row_cells`, sept sites).
+   - *La note en liste à puces* : LibreOffice en montre les éléments comme son texte, donc sa
+     lecture garde les descendants. Réécrire son texte laissait la liste vide derrière, et lui
+     donner un auteur le plaçait dans la liste : les deux visent maintenant les enfants qui portent
+     le texte, paragraphes et listes (`cell._NOTE_TEXT`).
+   - *Enfants, sans changement* : les propriétés d'un style (`styles.py`, 11 sites,
+     `_ensure_style_child`, `_fork_style`), l'auteur et la date d'une note, les styles
+     automatiques et le corps du document (enfants de la racine, `ODSReader._content_root`), les
+     tableaux croisés du classeur.
+   - *Descendants, voulus et commentés* : les styles de `styles.xml` (`_find_in_styles`, le
+     style par défaut), les dessins et leurs plages (`_drawings`, `_charts`,
+     `_remap_drawing_references`, `_rename_drawing_references`), les noms de styles du document
+     (`_new_style_name`), un groupe de définitions de colonnes qui n'en contient qu'un autre
+     (`delete_column`). À l'étape 5, ce sont des `descendants`.
+
 4. **Décisions d'API, écrites dans DOCS.md avant le code** : ce que deviennent `Cell.attrs`,
    `Sheet.attrs`, les clés de `cell_properties`/`text_properties` (voir « À décider »), et le
    message d'erreur d'un fichier mal formé (un fichier chiffré a déjà le sien).

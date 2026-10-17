@@ -245,6 +245,10 @@ class ArrayValues:
         return array.to_list() == self.to_list()
 
 
+# what a note holds as its text, after its author and date
+_NOTE_TEXT = frozenset({"text:p", "text:list"})
+
+
 class Comment:
     """A cell's note (`<office:annotation>`) - `.text` (the note body,
     `\\n`-joined across ODF's own multiple `<text:p>` paragraphs),
@@ -258,23 +262,29 @@ class Comment:
         self._tag = tag
 
     def _insert_before_text(self, child: Tag) -> None:
-        # keeps dc:creator/dc:date ahead of the text:p paragraphs, matching
-        # real ODF layout, regardless of which property gets set first
-        first_p = cast("Tag | None", self._tag.find("text:p"))
-        if first_p is not None:
-            insert_before(first_p, child)
+        # keeps dc:creator/dc:date ahead of the note's text, as ODF orders
+        # them, whichever property gets set first: before its first
+        # paragraph or list - a paragraph searched among all descendants
+        # could be one inside a list, and put the author inside it
+        first = next((c for c in self._tag.contents if isinstance(c, Tag) and name_of(c) in _NOTE_TEXT), None)
+        if first is not None:
+            insert_before(first, child)
         else:
             self._tag.append(child)
 
     @property
     def text(self) -> "str | None":
+        # every paragraph, descendants: a note set as a bulleted list keeps
+        # its paragraphs in text:list, and LibreOffice shows them as its text
         paragraphs = [paragraph_text(p) for p in self._tag.find_all("text:p")]
         return "\n".join(paragraphs) if paragraphs else None
 
     @text.setter
     def text(self, value: "str | None") -> None:
-        for p in self._tag.find_all("text:p"):
-            discard(p)
+        # the whole text goes, a list with it: discarding its paragraphs only
+        # left the list behind, empty items and all
+        for element in [c for c in self._tag.contents if isinstance(c, Tag) and name_of(c) in _NOTE_TEXT]:
+            discard(element)
         for line in (value or "").split("\n"):
             p = new("text:p", near=self._tag)
             set_paragraph_text(p, line)
@@ -282,12 +292,12 @@ class Comment:
 
     @property
     def author(self) -> "str | None":
-        tag = cast("Tag | None", self._tag.find("dc:creator"))
+        tag = cast("Tag | None", self._tag.find("dc:creator", recursive=False))
         return text(tag) if tag is not None else None
 
     @author.setter
     def author(self, value: "str | None") -> None:
-        tag = cast("Tag | None", self._tag.find("dc:creator"))
+        tag = cast("Tag | None", self._tag.find("dc:creator", recursive=False))
         if value is None:
             if tag is not None:
                 discard(tag)
@@ -299,7 +309,7 @@ class Comment:
 
     @property
     def date(self) -> "dt.datetime | None":
-        tag = cast("Tag | None", self._tag.find("dc:date"))
+        tag = cast("Tag | None", self._tag.find("dc:date", recursive=False))
         if tag is None:
             return None
         try:
@@ -309,7 +319,7 @@ class Comment:
 
     @date.setter
     def date(self, value: "dt.datetime | None") -> None:
-        tag = cast("Tag | None", self._tag.find("dc:date"))
+        tag = cast("Tag | None", self._tag.find("dc:date", recursive=False))
         if value is None:
             if tag is not None:
                 discard(tag)

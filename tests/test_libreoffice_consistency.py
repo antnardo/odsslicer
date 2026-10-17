@@ -25,6 +25,7 @@ from bs4 import BeautifulSoup
 from conftest import (
     ENCODED_WHITESPACE,
     FIXTURES_DIR,
+    FRAMED_TABLE_CELL,
     PRINT_TITLE_WIDTHS_XML,
     PRINT_TITLE_XML,
     addresses_holding,
@@ -34,6 +35,7 @@ from conftest import (
     encoded_whitespace_ods,
     formula_cell,
     libreoffice_shows,
+    list_note_cell,
     note_cell,
     number_cell,
     ods_with_sheet,
@@ -816,6 +818,28 @@ def test_libreoffice_round_trips_a_multi_line_cell(writable_reader, tmp_path, li
     assert "<text:p>ligne 1</text:p><text:p>ligne 2</text:p><text:p>ligne 3</text:p>" in xml
     reopened = ODSReader(libreoffice_export(out, "ods")).sheet("Sheet1")
     assert reopened["A1"].value == "ligne 1\nligne 2\nligne 3"
+
+
+@requires_soffice
+def test_libreoffice_shows_no_sheet_nor_column_for_a_table_in_a_cells_frame(tmp_path, libreoffice_export):
+    path = ods_with_sheet(tmp_path / "framed.ods", table_row(FRAMED_TABLE_CELL, number_cell(2)))
+    assert libreoffice_shows(path, tmp_path) == [["v", "2"]]
+    xml = libreoffice_export(path, "fods").read_text(encoding="utf-8")
+    assert re.findall(r'<table:table table:name="([^"]+)"', xml) == ["Sheet1"]
+    sheet = ODSReader(path).sheet("Sheet1")
+    assert [[c.value for c in row] for row in sheet.rows] == [["v", 2]]
+
+
+@requires_soffice
+def test_libreoffice_shows_a_rewritten_list_note_as_written(tmp_path, libreoffice_export):
+    reader = ODSReader(ods_with_sheet(tmp_path / "note.ods", table_row(list_note_cell("a", "b"))))
+    reader.sheet("Sheet1")["A1"].comment.text = "new"
+    out = tmp_path / "out.ods"
+    reader.save(out)
+    xml = libreoffice_export(out, "fods").read_text(encoding="utf-8")
+    note = xml[xml.index("<office:annotation") : xml.index("</office:annotation>")]
+    assert "<text:list" not in note
+    assert re.findall(r"<text:p[^>]*>([^<]*)</text:p>", note) == ["new"]
 
 
 @requires_soffice

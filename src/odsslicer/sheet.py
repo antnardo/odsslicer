@@ -45,6 +45,7 @@ from .xmlbs import (
     insert_after,
     insert_before,
     local_name,
+    name_of,
     namespace_of,
     new,
     remove,
@@ -71,6 +72,36 @@ def _set_repeat(tag: Tag, attr: str, n: int) -> None:
 def _repeat(tag: Tag, attr: str) -> int:
     """A `table:number-*-repeated` attribute's value: 1 when absent."""
     return int(tag.attrs.get(attr, "1"))
+
+
+_CELL_NAMES = frozenset(TAG_CELL)
+# what holds a sheet's rows besides the sheet itself: header rows, and row
+# groups at any depth
+_ROW_CONTAINERS = frozenset({"table-rows", "table-header-rows", "table-row-group"})
+
+
+def _row_cells(row: Tag) -> list[Tag]:
+    """The cells of `row`: its children. Searching every descendant went
+    into each cell's content as well, where a frame may hold a table of its
+    own, and counted that table's cells in the row - a column the sheet does
+    not have, which LibreOffice does not show either."""
+    return [child for child in row.contents if isinstance(child, Tag) and name_of(child) in _CELL_NAMES]
+
+
+def _sheet_rows(parent: Tag) -> list[Tag]:
+    """The `<table:table-row>` elements of `parent` - a sheet, or a group of
+    rows - in order, through header rows and row groups at any depth, and
+    never inside a cell: a cell may hold a table of its own, whose rows a
+    search of every descendant counted among the sheet's."""
+    found: list[Tag] = []
+    for child in parent.children:
+        if not isinstance(child, Tag):
+            continue
+        if local_name(child) == "table-row":
+            found.append(child)
+        elif local_name(child) in _ROW_CONTAINERS:
+            found.extend(_sheet_rows(child))
+    return found
 
 
 def _holds_content(cell: Cell) -> bool:
@@ -211,7 +242,7 @@ class Sheet:
     def load(self, table_bs: Tag) -> list[list[Cell]]:
         table = []
         unreadable: list[Cell] = []  # read as their text instead, see Cell.__init__
-        rows = table_bs.find_all("table:table-row")
+        rows = _sheet_rows(table_bs)
         logger.log(self._log_level, "    Loading %s, %d unrepeated rows", self.name, len(rows))
 
         # Grid-filler guard, column direction: Excel and LibreOffice pad rows
@@ -246,7 +277,7 @@ class Sheet:
         # are real, however many: leaving them out would move every row
         # below them up (issue #6). The grid ends at the first filler.
         def is_empty_row(row: Tag) -> bool:
-            return not any(_holds_content(Cell(c)) for c in row.find_all(TAG_CELL))
+            return not any(_holds_content(Cell(c)) for c in _row_cells(row))
 
         last_content = len(rows) - 1
         while last_content >= 0 and is_empty_row(rows[last_content]):
@@ -258,12 +289,12 @@ class Sheet:
         )
         end = next(fillers, len(rows))
 
-        widths = (content_width(row.find_all(TAG_CELL))[0] for row in rows[:end])
+        widths = (content_width(_row_cells(row))[0] for row in rows[:end])
         real_width = max(widths, default=0)
         normalized = []
         i = 0
         for row in rows[:end]:
-            normalized.append(self._normalize_row_width(row, row.find_all(TAG_CELL), real_width, i))
+            normalized.append(self._normalize_row_width(row, _row_cells(row), real_width, i))
             i += _repeat(row, "table:number-rows-repeated")
 
         # Trailing columns empty in every row are left out of the grid when
@@ -539,7 +570,7 @@ class Sheet:
 
         for r, copy_tag in zip(run, copies, strict=True):
             j = 0
-            for cell_tag in copy_tag.find_all(TAG_CELL):
+            for cell_tag in _row_cells(copy_tag):
                 n_cols = int(cell_tag.attrs.get("table:number-columns-repeated", "1"))
                 for _ in range(n_cols):
                     if j < len(self.rows[r]):
@@ -896,8 +927,8 @@ class Sheet:
                     f"expected one of {sorted(_PIVOT_DATA_FUNCTIONS)}"
                 )
 
-        spreadsheet = self.reader.data.find("office:spreadsheet")
-        tables = spreadsheet.find("table:data-pilot-tables")
+        spreadsheet = cast(Tag, self.reader._spreadsheet())
+        tables = spreadsheet.find("table:data-pilot-tables", recursive=False)
         if tables is None:
             tables = new("table:data-pilot-tables", near=self.reader.data)
             spreadsheet.append(tables)
@@ -1020,7 +1051,7 @@ class Sheet:
             self.rows.append(
                 [
                     Cell(cell_tag, row=self.n_rows, col=c, sheet=self)
-                    for c, cell_tag in enumerate(new_row_tag.find_all(TAG_CELL))
+                    for c, cell_tag in enumerate(_row_cells(new_row_tag))
                 ]
             )
             self.n_rows += 1
@@ -1031,19 +1062,8 @@ class Sheet:
         grid. It never looks inside a row: a cell may hold a table of its
         own."""
         found: list[Tag] = []
-
-        def collect(parent: Tag) -> None:
-            for child in parent.children:
-                if not isinstance(child, Tag):
-                    continue
-                if local_name(child) == "table-row":
-                    found.append(child)
-                elif local_name(child) in self._ROW_LEVEL:  # a group of rows
-                    collect(child)
-
         if self.n_rows == 0:
-            collect(self.table)
-            return found
+            return _sheet_rows(self.table)
         node: Tag | None = self.rows[-1][0].cell.parent
         while node is not None and node is not self.table:
             for sibling in node.next_siblings:
@@ -1051,8 +1071,8 @@ class Sheet:
                     continue
                 if local_name(sibling) == "table-row":
                     found.append(sibling)
-                elif local_name(sibling) in self._ROW_LEVEL:
-                    collect(sibling)
+                elif local_name(sibling) in _ROW_CONTAINERS:
+                    found.extend(_sheet_rows(sibling))
             node = node.parent
         return found
 
@@ -1236,6 +1256,7 @@ class Sheet:
             group = cast(Tag, definition.parent)
             discard(definition)
             # a group of definitions - the print titles' - holds one at least
+            # descendants: a group holding only a group of definitions is not empty
             if group is not self.table and group.find("table:table-column") is None:
                 discard(group)
         for run in self._runs_in(self.rows):
@@ -1333,7 +1354,7 @@ class Sheet:
             row_tag = copy.deepcopy(template)
             parent.insert(position + k, row_tag)
             new_rows.append(
-                [Cell(t, row=row + k, col=c, sheet=self) for c, t in enumerate(row_tag.find_all(TAG_CELL))]
+                [Cell(t, row=row + k, col=c, sheet=self) for c, t in enumerate(_row_cells(row_tag))]
             )
         self.rows[row:row] = new_rows
         for r in range(row + count, len(self.rows)):
@@ -1635,7 +1656,7 @@ class Sheet:
         old_tag = self.reader._find_style(current_name, family=family) if current_name else None
         tag = self.reader._new_style_tag(family, prefix)
         if old_tag is not None:
-            old_props = old_tag.find(props_tag_name)
+            old_props = old_tag.find(props_tag_name, recursive=False)
             if old_props is not None:
                 _ensure_style_child(tag, props_tag_name).attrs.update(old_props.attrs)
         return tag

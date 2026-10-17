@@ -121,7 +121,10 @@ class ODSReader:
         # what keeps the promise that editing values leaves the styling
         # exactly as the spreadsheet application wrote it (see save()).
         self._touched: set[str] = set()
-        self.tables = self.data.find_all("table:table")
+        # the sheets are the tables directly under office:spreadsheet: one
+        # held in a cell's frame is no sheet, and LibreOffice shows none for it
+        spreadsheet = self._spreadsheet()
+        self.tables = spreadsheet.find_all("table:table", recursive=False) if spreadsheet is not None else []
         self.sheets_names = [table["table:name"] for table in self.tables]
         self._sheets: dict[str, Sheet | None] = dict.fromkeys(self.sheets_names)
         # the formats dates written into unformatted cells get, and the cell
@@ -222,18 +225,20 @@ class ODSReader:
         `content.xml` holds are its automatic ones: searching the whole of it
         for a style of `styles.xml` - its column's default, `Default`, for
         most cells - cost a pass over every cell of every sheet, each time."""
-        automatic = cast("Tag | None", self.data.find("office:automatic-styles"))
-        found = automatic.find(names, attrs=attrs) if automatic is not None else None
+        automatic = cast("Tag | None", self._content_root().find("office:automatic-styles", recursive=False))
+        found = automatic.find(names, attrs=attrs, recursive=False) if automatic is not None else None
         return cast("Tag | None", found or self.styles_data.find(names, attrs=attrs))
 
     def _document_locale(self) -> "tuple[str | None, str | None]":
         """The document's default language and country - `fo:language` and
         `fo:country` of its default cell style in `styles.xml`, where
         LibreOffice records them - `None` for either one it does not give."""
-        default = self.styles_data.find("style:default-style", attrs={"style:family": "table-cell"})
+        default = cast(
+            "Tag | None", self.styles_data.find("style:default-style", attrs={"style:family": "table-cell"})
+        )
         props = cast(
             "Tag | None",
-            default.find("style:text-properties") if default is not None else None,
+            default.find("style:text-properties", recursive=False) if default is not None else None,
         )
         if props is None:
             return None, None
@@ -270,15 +275,28 @@ class ODSReader:
         self._default_date_formats[kind] = name
         return name
 
+    def _content_root(self) -> Tag:
+        """`<office:document-content>`, the root element of `content.xml`:
+        the automatic styles and the body are its children."""
+        return cast(Tag, self.data.find("office:document-content", recursive=False))
+
+    def _spreadsheet(self) -> "Tag | None":
+        """`<office:spreadsheet>`, whose `<table:table>` children are the
+        sheets - `None` in a document that has none."""
+        body = cast("Tag | None", self._content_root().find("office:body", recursive=False))
+        return (
+            cast("Tag | None", body.find("office:spreadsheet", recursive=False)) if body is not None else None
+        )
+
     def _automatic_styles(self) -> Tag:
         """The `<office:automatic-styles>` element in `content.xml` - the
         only place a newly created style can go and still survive `save()`
         (styles already in `styles.xml` are copied through unchanged, see
         `save()`)."""
-        styles = cast("Tag | None", self.data.find("office:automatic-styles"))
+        styles = cast("Tag | None", self._content_root().find("office:automatic-styles", recursive=False))
         if styles is None:
             styles = new("office:automatic-styles", near=self.data)  # declares its namespace
-            body = cast("Tag | None", self.data.find("office:body"))
+            body = cast("Tag | None", self._content_root().find("office:body", recursive=False))
             if body is not None:
                 insert_before(body, styles)
             else:

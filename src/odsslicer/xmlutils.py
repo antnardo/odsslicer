@@ -102,7 +102,7 @@ def _ensure_style_child(style_tag: Tag, tag_name: str) -> Tag:
     """The `tag_name` properties child of `style_tag` (e.g.
     `<style:table-cell-properties>` under a `<style:style>`), creating a
     blank one (see `xmlbs.new`) if it isn't there yet."""
-    child = style_tag.find(tag_name)
+    child = style_tag.find(tag_name, recursive=False)
     if child is None:
         new_child = new(tag_name, near=style_tag)
         style_tag.append(new_child)

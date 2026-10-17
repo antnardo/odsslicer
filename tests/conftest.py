@@ -354,6 +354,24 @@ def encoded_whitespace_ods(path):
     return ods_with_sheet(path, rows)
 
 
+# A cell whose frame holds a table of its own, as a text box can: that table
+# is no sheet, and its cells are not the row's (step 3 of the lxml migration).
+FRAMED_TABLE_CELL = (
+    '<table:table-cell office:value-type="string"><text:p>v</text:p>'
+    '<draw:frame><draw:text-box><table:table table:name="inner">'
+    "<table:table-row><table:table-cell/><table:table-cell/></table:table-row>"
+    "</table:table></draw:text-box></draw:frame></table:table-cell>"
+)
+
+
+def list_note_cell(*items, author=None):
+    """An empty cell with a note set as a bulleted list, as `table_xml`."""
+    creator = f"<dc:creator>{author}</dc:creator>" if author else ""
+    entries = "".join(f"<text:list-item><text:p>{item}</text:p></text:list-item>" for item in items)
+    note = f"<office:annotation>{creator}<text:list>{entries}</text:list></office:annotation>"
+    return f"<table:table-cell>{note}</table:table-cell>"
+
+
 def table_row(*cells, repeat=1):
     """A `<table:table-row>` of `cells`, repeated `repeat` times."""
     attrs = f' table:number-rows-repeated="{repeat}"' if repeat > 1 else ""

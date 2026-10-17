@@ -146,16 +146,16 @@ class NumberFormat:
         self.name = cast("str | None", tag.get("style:name"))
         name = local_name(tag)
         self.family = name[: -len("-style")] if name.endswith("-style") else name
-        number_tag = tag.find("number:number") or tag.find("number:boolean")
+        number_tag = tag.find("number:number", recursive=False) or tag.find("number:boolean", recursive=False)
         self.decimal_places = None
         self.grouping = None
         if number_tag is not None:
             places = number_tag.attrs.get("number:decimal-places")
             self.decimal_places = int(places) if places is not None else None
             self.grouping = number_tag.attrs.get("number:grouping") == "true"
-        symbol = tag.find("number:currency-symbol")
+        symbol = tag.find("number:currency-symbol", recursive=False)
         self.currency_symbol = text(cast(Tag, symbol)) if symbol is not None else None
-        text_props = tag.find("style:text-properties")
+        text_props = tag.find("style:text-properties", recursive=False)
         self.font_color = text_props.attrs.get("fo:color") if text_props is not None else None
         # for date/time styles: the ordered sequence of components/literal
         # text making up the layout, e.g. [("day", "long"), ("text", "/"), ...]
@@ -614,7 +614,7 @@ class CellStyle:
 
         def prop(tag_name: str, attr: str) -> "str | None":
             for style in chain:
-                child = style.find(tag_name)
+                child = style.find(tag_name, recursive=False)
                 if child is not None and attr in child.attrs:
                     return child.attrs[attr]
             return None
@@ -649,7 +649,7 @@ class CellStyle:
         # itself resolves it within a single style declaration.
         self._border_top = self._border_bottom = self._border_left = self._border_right = None
         for style in chain:
-            cell_props = style.find("style:table-cell-properties")
+            cell_props = style.find("style:table-cell-properties", recursive=False)
             if cell_props is None or not any(a in cell_props.attrs for a in self._BORDER_ATTRS):
                 continue
             attrs = cell_props.attrs
@@ -665,10 +665,10 @@ class CellStyle:
         self.cell_properties: dict[str, str] = {}
         self.text_properties: dict[str, str] = {}
         for style in reversed(chain):
-            cell_props = style.find("style:table-cell-properties")
+            cell_props = style.find("style:table-cell-properties", recursive=False)
             if cell_props is not None:
                 self.cell_properties.update(cell_props.attrs)
-            text_props = style.find("style:text-properties")
+            text_props = style.find("style:text-properties", recursive=False)
             if text_props is not None:
                 self.text_properties.update(text_props.attrs)
 
@@ -693,7 +693,7 @@ class CellStyle:
         self._require_cell()
         tag = self._cell._ensure_own_style()
         if raw_value is None:
-            child = tag.find(props_tag_name)
+            child = tag.find(props_tag_name, recursive=False)
             if child is not None:
                 child.attrs.pop(attr, None)
             return
@@ -993,7 +993,7 @@ class RowStyle:
         self._sheet = sheet
         self._row = row
         self.name = tag.get("style:name") if tag is not None else None
-        props = tag.find("style:table-row-properties") if tag is not None else None
+        props = tag.find("style:table-row-properties", recursive=False) if tag is not None else None
         self._height = props.attrs.get("style:row-height") if props is not None else None
         self._optimal_height = props is not None and props.attrs.get("style:use-optimal-row-height") == "true"
         self._visible = props is None or props.attrs.get("table:visibility", "visible") == "visible"
@@ -1063,7 +1063,7 @@ class ColumnStyle:
         self._sheet = sheet
         self._col = col
         self.name = tag.get("style:name") if tag is not None else None
-        props = tag.find("style:table-column-properties") if tag is not None else None
+        props = tag.find("style:table-column-properties", recursive=False) if tag is not None else None
         self._width = props.attrs.get("style:column-width") if props is not None else None
         self._visible = props is None or props.attrs.get("table:visibility", "visible") == "visible"
 
@@ -1117,7 +1117,7 @@ class TableStyle:
     def __init__(self, tag: "Tag | None", sheet: "Sheet | None" = None) -> None:
         self._sheet = sheet
         self.name = tag.get("style:name") if tag is not None else None
-        props = tag.find("style:table-properties") if tag is not None else None
+        props = tag.find("style:table-properties", recursive=False) if tag is not None else None
         self._tab_color = props.attrs.get("table:tab-color") if props is not None else None
         self._visible = props is None or props.attrs.get("table:display", "true") != "false"
 
