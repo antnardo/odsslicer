@@ -15,9 +15,10 @@ still change between minor versions.
   does not recalculate. odsslicer read the paragraphs only, and writing a value or a formula left
   the attribute in place: LibreOffice went on showing the old value over the new one. Found on a
   pseudonymized gradebook whose cells read the pseudonym in odsslicer and the real name in
-  LibreOffice; 6,622 cells of 33 of 250 real files swept carry an attribute that disagrees with
-  their paragraphs, all of them formulas. `cell.value` and `cell.text` now give the attribute, and
-  writing a value or a formula removes it.
+  LibreOffice; a class list holds 18 formulas whose cached string disagrees with their paragraph.
+  `cell.value` and `cell.text` now give the attribute, and writing a value or a formula removes
+  it. A formula's error keeps reading as its paragraph (`Err:540`): ODF has no error type, and
+  LibreOffice writes one as an empty string value marked `calcext:value-type="error"`.
 
 ## [0.16.1] — 2026-10-17
 

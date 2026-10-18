@@ -385,9 +385,12 @@ class Cell:
         # A string cell may carry its value in `office:string-value` rather
         # than in its paragraphs - a formula's cached result, what some
         # producers write - and LibreOffice then shows that, over the
-        # paragraphs: so does odsslicer, value and text alike.
+        # paragraphs: so does odsslicer, value and text alike. But for an
+        # error: ODF has no such type, and LibreOffice writes a formula's
+        # error as an empty string marked `calcext:value-type="error"`,
+        # showing its paragraph, "Err:540".
         string_value = self.attrs.get("office:string-value") if self.format == "string" else None
-        if string_value is not None:
+        if string_value is not None and self.attrs.get("calcext:value-type") != "error":
             self.text = string_value
         # A value its declared type cannot be read from - a malformed date, a
         # type no reader knows (KeyError) - must not take the whole sheet

@@ -134,6 +134,7 @@ _FRAGMENT_NAMESPACES = {
     **_ODF_NAMESPACES,
     "draw": "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0",
     "svg": "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0",
+    "calcext": "urn:org:documentfoundation:names:experimental:calc:xmlns:calcext:1.0",
 }
 
 

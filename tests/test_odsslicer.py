@@ -717,6 +717,16 @@ class TestStringValue:
         sheet = ODSReader(ods_with_sheet(tmp_path / "sv.ods", table_row(_STRING_VALUE_CELL))).sheet("Sheet1")
         assert (sheet["A1"].value, sheet["A1"].text) == ("A", "A")
 
+    def test_a_formula_error_reads_as_libreoffice_shows_it(self, tmp_path):
+        # how LibreOffice writes a formula's error: an empty string value,
+        # marked as an error in its own namespace, the error in the paragraph
+        error = (
+            '<table:table-cell table:formula="of:=1/0" office:value-type="string" office:string-value=""'
+            ' calcext:value-type="error"><text:p>#DIV/0!</text:p></table:table-cell>'
+        )
+        sheet = ODSReader(ods_with_sheet(tmp_path / "err.ods", table_row(error))).sheet("Sheet1")
+        assert (sheet["A1"].value, sheet["A1"].text) == ("#DIV/0!", "#DIV/0!")
+
     def test_writing_a_value_leaves_only_what_was_written(self, tmp_path):
         r = ODSReader(ods_with_sheet(tmp_path / "sv.ods", table_row(_STRING_VALUE_CELL)))
         r.sheet("Sheet1")["A1"].value = "C"
