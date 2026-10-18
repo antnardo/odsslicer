@@ -26,7 +26,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SRC = REPO / "src" / "odsslicer"
-TESTS = ["tests/test_reader.py", "tests/test_odsslicer.py"]
+# every test but those that start LibreOffice, slow and in need of it alone
+TESTS = ["tests", "--ignore=tests/test_libreoffice_consistency.py"]
 
 
 # (label, file, text as written, text with the guard undone)
@@ -150,7 +151,13 @@ def main() -> None:
             )
         finally:
             path.write_text(original)
-        caught = run.returncode != 0
+        # 1 is a test failing; any other code - no test collected, a file
+        # not found - says nothing of the mutation
+        if run.returncode not in (0, 1):
+            stale.append(label)
+            print(f"  ?  {label}: pytest exited {run.returncode}, its tests are not there", flush=True)
+            continue
+        caught = run.returncode == 1
         if not caught:
             survivors.append(label)
         print(f"  {'ok' if caught else '!!'} {label}", flush=True)

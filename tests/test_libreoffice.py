@@ -1,4 +1,8 @@
-"""`recalculate()` through a temporary file and a rename (issue #9).
+"""Running LibreOffice: `recalculate()` and the public functions it starts
+LibreOffice with; the tests that need a real LibreOffice are in
+test_libreoffice_consistency.py.
+
+`recalculate()` goes through a temporary file and a rename (issue #9).
 
 LibreOffice saved the recalculated workbook by copying its result over it in
 place: a program reading the file meanwhile could get a partial zip. And a
@@ -424,3 +428,57 @@ def test_public_api_runs_libreoffice_for_a_conversion(workbook, tmp_path):
         ]
         subprocess.run(command, env=libreoffice_environment(), check=True, capture_output=True, timeout=120)
     assert (out / f"{workbook.stem}.csv").read_text(encoding="utf-8").strip()
+
+
+# ---------------------------------------------------------------------------
+# recalculate(): error paths that don't need LibreOffice installed
+# ---------------------------------------------------------------------------
+
+
+def test_recalculate_missing_file_raises(tmp_path):
+    from odsslicer import recalculate
+
+    with pytest.raises(FileNotFoundError):
+        recalculate(tmp_path / "does_not_exist.ods")
+
+
+def test_recalculate_explicit_nonexistent_executable_raises(writable_reader, tmp_path):
+    # an explicit absolute path that doesn't exist must error out, not fall
+    # back silently to whatever default install happens to be around
+    import odsslicer
+    from odsslicer import recalculate
+
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+    saved = odsslicer.LIBREOFFICE_COMMAND[0]
+    odsslicer.LIBREOFFICE_COMMAND[0] = str(tmp_path / "no" / "such" / "soffice")
+    try:
+        with pytest.raises(FileNotFoundError):
+            recalculate(out)
+    finally:
+        odsslicer.LIBREOFFICE_COMMAND[0] = saved
+
+
+def test_recalculate_bare_name_not_found_anywhere_raises(writable_reader, tmp_path, monkeypatch):
+    import odsslicer
+    from odsslicer import libreoffice, recalculate
+
+    out = tmp_path / "out.ods"
+    writable_reader.save(out)
+    monkeypatch.setattr(libreoffice, "_LIBREOFFICE_FALLBACKS", [])
+    saved = odsslicer.LIBREOFFICE_COMMAND[0]
+    odsslicer.LIBREOFFICE_COMMAND[0] = "definitely-not-a-real-binary-name"
+    try:
+        with pytest.raises(FileNotFoundError):
+            recalculate(out)
+    finally:
+        odsslicer.LIBREOFFICE_COMMAND[0] = saved
+
+
+def test_save_with_update_links_but_no_recalculate_raises(writable_reader, tmp_path):
+    # only the LibreOffice run updates links: asking for it without one must
+    # not pass silently, nor write the file first
+    out = tmp_path / "out.ods"
+    with pytest.raises(ValueError, match="recalculate=True"):
+        writable_reader.save(out, update_links=True)
+    assert not out.exists()

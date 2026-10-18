@@ -111,8 +111,8 @@ pip install -e ".[test]"
 pytest
 ```
 
-The main suite (`tests/test_odsslicer.py`) covers every feature above plus regression tests
-for the bugs fixed along the way; it runs on every push/PR via
+The suite - one file per module, `tests/test_<module>.py` - covers every feature above plus
+regression tests for the bugs fixed along the way; it runs on every push/PR via
 [GitHub Actions](https://github.com/antnardo/odsslicer/blob/master/.github/workflows/ci.yml) across Python 3.10 to 3.13.
 
 `tests/test_wild_files.py` confronts the API with real-world files written by *other*

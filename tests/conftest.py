@@ -15,7 +15,7 @@ import pytest
 from bs4 import BeautifulSoup
 from lxml import etree
 
-from odsslicer import ODSReader
+from odsslicer import ODSReader, xmltree
 from odsslicer.addresses import string_address
 from odsslicer.xmltree import NAMESPACES, child, qn, remove, unset
 
@@ -464,3 +464,177 @@ def ods_with_prefixes(src, dst, rebinding):
             stored = item.filename == "mimetype"
             zout.writestr(item, data, compress_type=zipfile.ZIP_STORED if stored else zipfile.ZIP_DEFLATED)
     return dst
+
+
+def _repeat(tag, attr):
+    """A `table:number-*-repeated` attribute of `tag`: 1 when absent - of
+    an element of the library's tree (lxml), or of a saved file's, as
+    `saved_table` parses it (bs4)."""
+    return int(tag.get(qn(attr) if isinstance(tag, etree._Element) else attr, "1"))
+
+
+# Every shape of cell element `load` decides on, as another application may
+# write it: `_holds_content` reads the element where `load` built a `Cell`
+CELL_ELEMENTS = [
+    "<table:table-cell/>",
+    '<table:table-cell table:style-name="ce1" table:number-columns-repeated="3"/>',
+    '<table:table-cell office:value-type="string"><text:p>a</text:p></table:table-cell>',
+    '<table:table-cell office:value-type="string"/>',
+    '<table:table-cell office:value-type=""/>',
+    '<table:table-cell office:value-type="float" office:value="1"/>',
+    '<table:table-cell office:value-type="date" office:date-value="2026-10-18"/>',
+    '<table:table-cell office:value-type="float"><text:p>1</text:p></table:table-cell>',
+    '<table:table-cell office:value="1"/>',
+    '<table:table-cell office:date-value="2026-10-18"/>',
+    '<table:table-cell office:boolean-value="true"/>',
+    '<table:table-cell table:formula="of:=1+1"/>',
+    "<table:table-cell><text:p/></table:table-cell>",
+    "<table:table-cell><text:p>a</text:p><text:p>b</text:p></table:table-cell>",
+    "<table:table-cell><!-- a comment --></table:table-cell>",
+    "<table:table-cell><!-- a comment --><text:p>a</text:p></table:table-cell>",
+    "<table:table-cell><text:span>a</text:span></table:table-cell>",
+    '<table:table-cell><text:p>a<text:s text:c="2"/>b</text:p></table:table-cell>',
+    "<table:table-cell><text:p>a</text:p><!-- a comment --></table:table-cell>",
+    "<table:table-cell><office:annotation><text:p>note</text:p></office:annotation></table:table-cell>",
+    '<table:table-cell><draw:rect draw:name="r"><text:p>in a shape</text:p></draw:rect></table:table-cell>',
+    '<table:covered-table-cell office:value-type="string"><text:p>a</text:p></table:covered-table-cell>',
+    "<table:covered-table-cell/>",
+]
+
+
+_GAP_COLUMNS_XML = '<table:table-column table:number-columns-repeated="26"/>' + table_row(
+    text_cell("a"), empty_cells(24), text_cell("z")
+)
+
+
+# 15 empty columns formatted past the data, as LibreOffice writes them: left
+# out of the grid, but not out of the file - D1 used to land in S1
+_FORMATTED_PAST_DATA_XML = '<table:table-column table:number-columns-repeated="18"/>'
+_FORMATTED_PAST_DATA_XML += "".join(
+    table_row(text_cell(text), text_cell(text), text_cell(text), empty_cells(15, "yellow"))
+    for text in ("x", "y")
+)
+_YELLOW_XML = (
+    '<style:style style:name="yellow" style:family="table-cell">'
+    '<style:table-cell-properties fo:background-color="#fff2cc"/></style:style>'
+)
+
+
+def _data_then_row_5(*cells):
+    """1, 2, 3 in A1:A3, row 4 empty and `cells` in row 5, as LibreOffice
+    writes a sheet whose last row holds no content: no filler after it."""
+    return (
+        '<table:table-column table:number-columns-repeated="3"/>'
+        + "".join(table_row(text_cell(str(v)), empty_cells(2)) for v in (1, 2, 3))
+        + table_row(empty_cells(3))
+        + table_row(*cells)
+    )
+
+
+def _is_shape(cell):
+    return cell.find("draw:rect", recursive=False) is not None
+
+
+def _is_yellow(cell):
+    return cell.get("table:style-name") == "yellow"
+
+
+def _is_note(cell):
+    return cell.find("office:annotation", recursive=False) is not None
+
+
+@pytest.fixture()
+def positional(monkeypatch):
+    """The elements of the documents opened from now on that something
+    looks up or inserts by position among their siblings - `index()` and
+    `insert()`, which walk the parent's children up to that position in
+    lxml, as bs4's `insert_after` did: a loop of them down a long sheet is
+    quadratic. Elements are recorded by local name; clear the list before
+    the edit to watch. lxml's own methods cannot be patched: the documents
+    are parsed, and new elements made, as a subclass of its element that
+    records the calls."""
+    recorded = []
+
+    class Recording(etree.ElementBase):
+        def index(self, child, start=None, stop=None):
+            recorded.append(etree.QName(child).localname)
+            return super().index(child, start, stop)
+
+        def insert(self, index, element):
+            recorded.append(etree.QName(element).localname)
+            return super().insert(index, element)
+
+    parser = etree.XMLParser(resolve_entities=False, no_network=True)
+    parser.set_element_class_lookup(etree.ElementDefaultClassLookup(element=Recording))
+    monkeypatch.setattr(
+        "odsslicer.package.parse", lambda markup: etree.ElementTree(etree.fromstring(markup, parser))
+    )
+    etree.set_default_parser(parser)  # what `etree.Element`, and so `xmltree.new`, makes
+    yield recorded
+    etree.set_default_parser(None)
+
+
+def _blank_document():
+    # a document freshly created with ODSReader.new() has exactly one
+    # cell, blank - genuinely nothing anywhere for _infer_*_display to
+    # learn from, unlike any sheet within TEST.ods (find_previous/
+    # find_next search the *whole* document, so even an unrelated
+    # sheet's plain numbers can accidentally supply a matching template)
+    return ODSReader.new()
+
+
+_RAW_VALUE_ATTRS = {"date": "office:date-value", "time": "office:time-value"}
+
+
+def _saved_with_raw_values(tmp_path, cells):
+    """Save a document with a plain label in A1, then from A2 down one cell
+    per `(value type, raw value, displayed text)`, written as another
+    application would have - odsslicer's own writer produces few of these."""
+    r = ODSReader.new()
+    s = r.sheet("Sheet1")
+    s["A1"].value = "label"
+    for row, (value_type, raw, text) in enumerate(cells, start=1):
+        cell = s[row, 0]
+        cell.value = text
+        cell.cell.set(qn("office:value-type"), value_type)
+        cell.cell.set(qn(_RAW_VALUE_ATTRS.get(value_type, "office:value")), raw)
+    path = tmp_path / "raw.ods"
+    r.save(path)
+    return path
+
+
+# Columns formatted as a whole, as LibreOffice writes them: the format is the
+# column's default cell style, and its cells have no style of their own
+_COLUMN_STYLES_XML = (
+    '<number:date-style style:name="Ndmy">'
+    '<number:day number:style="long"/><number:text>/</number:text>'
+    '<number:month number:style="long"/><number:text>/</number:text>'
+    '<number:year number:style="long"/></number:date-style>'
+    '<style:style style:name="money" style:family="table-cell">'
+    '<style:table-cell-properties fo:background-color="#fff2cc"/></style:style>'
+    '<style:style style:name="day" style:family="table-cell"'
+    ' style:data-style-name="Ndmy">'
+    '<style:table-cell-properties fo:background-color="#e2efda"/></style:style>'
+)
+_FORMATTED_COLUMNS_XML = (
+    '<table:table-column table:default-cell-style-name="money"/>'
+    '<table:table-column table:default-cell-style-name="day"/>'
+    + table_row(text_cell("Rate"), text_cell("Date"))
+    + table_row(empty_cells(2), repeat=3)
+    + table_row(text_cell("end"), empty_cells())
+)
+
+
+@pytest.fixture()
+def formatted_columns(tmp_path):
+    path = ods_with_sheet(tmp_path / "columns.ods", _FORMATTED_COLUMNS_XML, _COLUMN_STYLES_XML)
+    return ODSReader(path)
+
+
+def _defined_extent(sheet):
+    """(rows, columns) declared by the sheet's XML, repeats included - what
+    a spreadsheet application counts against its maximum grid size."""
+    rows = sum(_repeat(t, "table:number-rows-repeated") for t in every(sheet.table, "table:table-row"))
+    definitions = xmltree.children(sheet.table, "table:table-column")
+    cols = sum(_repeat(t, "table:number-columns-repeated") for t in definitions)
+    return rows, cols

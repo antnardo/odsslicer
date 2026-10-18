@@ -30,10 +30,22 @@ LAYERS = REPO / "src" / "odsslicer"
 TESTS = ["tests/test_xmltree.py"]
 # the code built on the layer has its tests elsewhere: the mutations of
 # those guards name the tests that hold them
-POSITIONAL = ["tests/test_odsslicer.py", "-k", "never_places"]
-NAMES = ["tests/test_odsslicer.py", "-k", "NamesByNamespace"]
-READ_FROM_ELEMENT = ["tests/test_odsslicer.py", "-k", "holds_content or paragraphs_joined"]
-COPIES = ["tests/test_odsslicer.py", "-k", "read_afresh or repeated_over_columns"]
+POSITIONAL = [
+    "tests/test_growth.py",
+    "tests/test_structure.py",
+    "tests/test_unrolling.py",
+    "tests/test_columns.py",
+    "-k",
+    "never_places",
+]
+NAMES = ["tests/test_loading.py", "-k", "NamesByNamespace"]
+READ_FROM_ELEMENT = [
+    "tests/test_gridxml.py",
+    "tests/test_cell.py",
+    "-k",
+    "holds_content or paragraphs_joined",
+]
+COPIES = ["tests/test_loading.py", "tests/test_cell.py", "-k", "read_afresh or repeated_over_columns"]
 
 
 def _by_index(reference: str, element: str, *, after: bool) -> str:
@@ -168,21 +180,27 @@ MUTATIONS = [
         '        number_tag = child(tag, "number:number")\n        if number_tag is None:\n'
         '            number_tag = child(tag, "number:boolean")\n',
         '        number_tag = child(tag, "number:number") or child(tag, "number:boolean")\n',
-        ["tests/test_odsslicer.py", "-k", "style_resolves or number_format"],
+        [
+            "tests/test_styles.py",
+            "tests/test_numberformat.py",
+            "tests/test_display.py",
+            "-k",
+            "style_resolves or number_format",
+        ],
     ),
     (
         "_StyleCatalog._find: `or` between the two parts",
         "catalog.py",
         "return found if found is not None else first(self._package.styles_data.getroot().iter(*tags))",
         "return found or first(self._package.styles_data.getroot().iter(*tags))",
-        ["tests/test_odsslicer.py", "tests/test_reader.py"],
+        ["tests", "--ignore=tests/test_libreoffice_consistency.py"],
     ),
     (
         "_Drawings: a drawing deleted with its cells still follows",
         "drawings.py",
         "        if not all(_root_of(tag) is root for tag in (*ended, *objects)):\n",
         "        if False:\n",
-        ["tests/test_odsslicer.py", "-k", "chart"],
+        ["tests/test_drawings.py", "tests/test_growth.py", "-k", "chart"],
     ),
     # gridxml.py, columns.py: an element is its namespace and local name, not its local name alone
     (
@@ -262,7 +280,7 @@ MUTATIONS = [
         "copying.py",
         "        return self._column_defaults[cell.col]\n",
         "        return next(iter(self._column_defaults.values()))\n",
-        ["tests/test_odsslicer.py", "-k", "sort"],
+        ["tests/test_copying.py", "-k", "sort"],
     ),
     # gridxml.py, growth.py, structure.py: next to a known element, never by index
     (
@@ -327,7 +345,13 @@ def main() -> None:
             )
         finally:
             path.write_text(original)
-        caught = run.returncode != 0
+        # 1 is a test failing; any other code - no test collected, a file
+        # not found - says nothing of the mutation
+        if run.returncode not in (0, 1):
+            stale.append(label)
+            print(f"  ?  {label}: pytest exited {run.returncode}, its tests are not there")
+            continue
+        caught = run.returncode == 1
         if not caught:
             survivors.append(label)
         print(f"  {'ok' if caught else '!!'} {label}")
