@@ -84,7 +84,7 @@ def test_write_growth_is_incremental_and_read_only_access_does_not_grow(writable
     assert s["A1"].value == "texte simple"
 
 
-def test_write_growth_coexists_with_repeated_and_merged_cells(writable_reader):
+def test_growing_a_sheet_keeps_its_repeated_and_merged_cells_writable(writable_reader):
     s = writable_reader.sheet("SheetFusion")
     assert s.size == (9, 4)
     s["F12"].value = "grown area"
@@ -97,7 +97,7 @@ def test_write_growth_coexists_with_repeated_and_merged_cells(writable_reader):
     assert s["A9"].value == 1.0 and s["B9"].value == 1.0 and s["D9"].value == 1.0
 
 
-def test_growing_the_only_sheet_of_a_document_with_nothing_to_copy_from():
+def test_growing_the_only_sheet_with_nothing_to_copy_from_writes_the_cells():
     # regression: growing a fully empty sheet that is the *only* sheet in the
     # whole document (nothing elsewhere to fall back on as a namespace
     # template) used to fail two different ways:
@@ -127,7 +127,7 @@ def test_growing_the_only_sheet_of_a_document_with_nothing_to_copy_from():
     assert sheet["C3"].value == 42
 
 
-def test_save_round_trip_after_growth(writable_reader, tmp_path):
+def test_a_grown_sheet_reads_back_after_a_save(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet1")
     s["C1"].value = "nouvelle colonne"
     s["A10"].value = "nouvelle ligne"
@@ -156,7 +156,7 @@ def test_growing_a_run_of_repeated_rows_widens_its_element_once(repeated_run_ods
 
 
 @pytest.mark.parametrize("address", ["A3", "B5", "A6", "A7", "C9"])
-def test_writing_into_or_below_a_trailing_run_of_empty_rows(tmp_path, address):
+def test_writing_into_or_below_a_trailing_run_of_empty_rows_lands_where_written(tmp_path, address):
     # regression: IndexError inside the run, and one row too low below it -
     # load() left the run's last row out of the grid, not out of the element.
     # Valid ODF, though LibreOffice itself writes such a run's last row apart.
@@ -511,7 +511,9 @@ def test_a_shape_far_below_the_data_stays_where_libreoffice_has_it(tmp_path, edi
         ),
     ],
 )
-def test_a_shape_below_the_data_in_a_group_of_rows(tmp_path, grouped, edit, shape_at, content):
+def test_a_shape_below_the_data_in_a_group_of_rows_stays_where_libreoffice_has_it(
+    tmp_path, grouped, edit, shape_at, content
+):
     # LibreOffice writes rows grouped with Data > Group inside an element of
     # their own: what lies past the grid is looked for across groups
     data = "".join(table_row(text_cell(str(v)), empty_cells(2)) for v in (1, 2, 3))

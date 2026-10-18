@@ -10,7 +10,7 @@ from odsslicer.xmltree import qn
 # ---------------------------------------------------------------------------
 
 
-def test_merged_and_hidden_cells(sheet_fusion):
+def test_cells_hidden_by_a_merge_read_their_own_values(sheet_fusion):
     assert sheet_fusion.size == (9, 4)
     assert sheet_fusion["A4"].value == 5  # hidden in cols
     assert sheet_fusion["B4"].value == 7  # not hidden
@@ -49,7 +49,7 @@ def test_write_covered_cell_unmerges_the_whole_range(writable_reader):
     assert s.size == (9, 4)
 
 
-def test_write_vertical_merge_covered_cell(writable_reader):
+def test_writing_a_covered_cell_of_a_vertical_merge_unmerges_it(writable_reader):
     s = writable_reader.sheet("SheetFusion")
     s["A5"].value = "bas de fusion verticale"
     assert s["A5"].value == "bas de fusion verticale"
@@ -58,7 +58,7 @@ def test_write_vertical_merge_covered_cell(writable_reader):
     assert s["A4"].value == 5.0
 
 
-def test_write_rectangular_merge_covered_cell(writable_reader):
+def test_writing_a_covered_cell_of_a_rectangular_merge_unmerges_it(writable_reader):
     s = writable_reader.sheet("SheetFusion")
     s["C7"].value = "coin de fusion rectangulaire"
     assert s["C7"].value == "coin de fusion rectangulaire"
@@ -82,7 +82,7 @@ def test_write_covered_cell_that_is_also_column_repeated(writable_reader):
     assert s.size == (9, 4)
 
 
-def test_save_round_trip_after_unrepeat_and_unmerge(writable_reader, tmp_path):
+def test_unrepeated_and_unmerged_cells_read_back_after_a_save(writable_reader, tmp_path):
     s = writable_reader.sheet("SheetFusion")
     s["C9"].value = "triple resolution"
     s["C1"].value = "cachee"
@@ -121,7 +121,7 @@ def test_unmerged_cell_reports_no_merge(sheet_fusion):
     assert c.merge_range is None
 
 
-def test_horizontal_merge_master_and_covered(sheet_fusion):
+def test_a_horizontal_merge_reports_its_master_and_covered_cells(sheet_fusion):
     master = sheet_fusion["A1"]
     assert master.is_merge_master is True
     assert master.is_covered is False
@@ -138,12 +138,12 @@ def test_horizontal_merge_master_and_covered(sheet_fusion):
     assert covered.merge_master.address == "A1"
 
 
-def test_vertical_merge_span(sheet_fusion):
+def test_a_vertical_merge_reports_its_span(sheet_fusion):
     assert sheet_fusion["A3"].merge_span == (3, 1)
     assert sheet_fusion["A5"].merge_range == "A3:A5"
 
 
-def test_rectangular_merge_span(sheet_fusion):
+def test_a_rectangular_merge_reports_its_span_and_master(sheet_fusion):
     assert sheet_fusion["A6"].merge_span == (2, 4)
     assert sheet_fusion["D7"].merge_range == "A6:D7"
     assert sheet_fusion["D7"].merge_master.address == "A6"
@@ -202,7 +202,7 @@ def test_merging_a_range_merged_the_same_way_again_leaves_it_as_it_is(writable_r
     assert s["C1"].is_covered and s["C1"].value == 3.0
 
 
-def test_unmerge_from_any_cell_in_the_range(writable_reader):
+def test_unmerging_from_a_covered_cell_undoes_the_whole_merge(writable_reader):
     s = writable_reader.sheet("SheetFusion")
     s.unmerge("C1")  # C1 is a covered cell of the A1:C1 merge, not the master
     assert s["A1"].is_merged is False
@@ -222,7 +222,7 @@ def test_unmerge_requires_a_single_cell_address(writable_reader):
         s.unmerge("A1:B1")
 
 
-def test_save_round_trip_after_merge(writable_reader, tmp_path):
+def test_a_merge_reads_back_after_a_save(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet1")
     s["C1"].value = "master"
     s.merge("C1:D2")

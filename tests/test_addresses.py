@@ -12,82 +12,76 @@ from odsslicer.addresses import _parse_address
 # ---------------------------------------------------------------------------
 
 
-def test_address_simple_cell():
-    assert _parse_address("A1", 1) == (0, 0)
-    assert _parse_address("Z2", 1) == (1, 25)
-    assert _parse_address("AA1", 1) == (0, 26)
+class TestParseAddress:
+    """`_parse_address`: what `sheet[...]` indexes for a text address."""
 
+    def test_a_cell_gives_its_row_and_column(self):
+        assert _parse_address("A1", 1) == (0, 0)
+        assert _parse_address("Z2", 1) == (1, 25)
+        assert _parse_address("AA1", 1) == (0, 26)
 
-def test_address_row_only():
-    assert _parse_address("1", 1) == 0
-    assert _parse_address("3", 1) == 2
+    def test_a_row_gives_its_index(self):
+        assert _parse_address("1", 1) == 0
+        assert _parse_address("3", 1) == 2
 
+    def test_a_column_gives_it_over_every_row(self):
+        row, col = _parse_address("A", 5)
+        assert col == 0
+        assert (row.start, row.stop, row.step) == (None, 5, None)
 
-def test_address_col_only():
-    row, col = _parse_address("A", 5)
-    assert col == 0
-    assert (row.start, row.stop, row.step) == (None, 5, None)
+    def test_a_range_down_a_column_gives_a_row_slice(self):
+        row, col = _parse_address("A1:A10", 1)
+        assert (row.start, row.stop, row.step) == (0, 10, None)
+        assert col == 0
 
+    def test_a_range_along_a_row_gives_a_column_slice(self):
+        row, col = _parse_address("A1:C1", 1)
+        assert row == 0
+        assert (col.start, col.stop, col.step) == (0, 3, None)
 
-def test_address_row_range():
-    row, col = _parse_address("A1:A10", 1)
-    assert (row.start, row.stop, row.step) == (0, 10, None)
-    assert col == 0
+    def test_a_block_gives_two_slices(self):
+        row, col = _parse_address("B2:C5", 1)
+        assert (row.start, row.stop, row.step) == (1, 5, None)
+        assert (col.start, col.stop, col.step) == (1, 3, None)
 
+    def test_a_single_cell_range_collapses_to_the_cell(self):
+        row, col = _parse_address("A1:A1", 1)
+        assert row == 0 and col == 0
 
-def test_address_col_range():
-    row, col = _parse_address("A1:C1", 1)
-    assert row == 0
-    assert (col.start, col.stop, col.step) == (0, 3, None)
+    def test_a_range_of_rows_gives_a_row_slice(self):
+        assert _parse_address("1:2", 1) == slice(0, 2)
 
+    @pytest.mark.parametrize(
+        "bad, says",
+        [
+            ("1A", "is not a cell or range address"),
+            ("A1=", "is not a cell or range address"),
+            ("a1", "is not a cell or range address"),
+            ("A1B2", "is not a cell or range address"),
+            ("", "is not a cell or range address"),
+            ("A1:", "is not a cell or range address"),
+            ("A1:B2:C3", "is not a cell or range address"),
+            ("A0", "rows are numbered from 1"),
+            ("0", "rows are numbered from 1"),
+            ("A1:B0", "rows are numbered from 1"),
+            ("A:2", "a range joins two cells"),
+            ("2:A", "a range joins two cells"),
+            ("A1:B", "a range joins two cells"),
+            ("A:B1", "a range joins two cells"),
+            ("1:B2", "a range joins two cells"),
+            ("B:A", "a range runs from its first row and column to its last"),
+            ("3:1", "a range runs from its first row and column to its last"),
+            ("B1:A2", "a range runs from its first row and column to its last"),
+            ("A3:B1", "a range runs from its first row and column to its last"),
+        ],
+    )
+    def test_an_invalid_address_raises_saying_what_is_wrong(self, bad, says):
+        with pytest.raises(ValueError, match=re.escape(f"{bad!r}") + ".*" + re.escape(says)):
+            _parse_address(bad, 1)
 
-def test_address_box_range():
-    row, col = _parse_address("B2:C5", 1)
-    assert (row.start, row.stop, row.step) == (1, 5, None)
-    assert (col.start, col.stop, col.step) == (1, 3, None)
-
-
-def test_address_single_cell_range_collapses():
-    row, col = _parse_address("A1:A1", 1)
-    assert row == 0 and col == 0
-
-
-def test_address_rows_range_only():
-    assert _parse_address("1:2", 1) == slice(0, 2)
-
-
-@pytest.mark.parametrize(
-    "bad, says",
-    [
-        ("1A", "is not a cell or range address"),
-        ("A1=", "is not a cell or range address"),
-        ("a1", "is not a cell or range address"),
-        ("A1B2", "is not a cell or range address"),
-        ("", "is not a cell or range address"),
-        ("A1:", "is not a cell or range address"),
-        ("A1:B2:C3", "is not a cell or range address"),
-        ("A0", "rows are numbered from 1"),
-        ("0", "rows are numbered from 1"),
-        ("A1:B0", "rows are numbered from 1"),
-        ("A:2", "a range joins two cells"),
-        ("2:A", "a range joins two cells"),
-        ("A1:B", "a range joins two cells"),
-        ("A:B1", "a range joins two cells"),
-        ("1:B2", "a range joins two cells"),
-        ("B:A", "a range runs from its first row and column to its last"),
-        ("3:1", "a range runs from its first row and column to its last"),
-        ("B1:A2", "a range runs from its first row and column to its last"),
-        ("A3:B1", "a range runs from its first row and column to its last"),
-    ],
-)
-def test_address_invalid_raises_saying_what_is_wrong(bad, says):
-    with pytest.raises(ValueError, match=re.escape(f"{bad!r}") + ".*" + re.escape(says)):
-        _parse_address(bad, 1)
-
-
-def test_address_single_column_and_row_ranges():
-    assert _parse_address("A:A", 4) == (slice(4), slice(0, 1))
-    assert _parse_address("2:2", 4) == slice(1, 2)
+    def test_a_single_column_or_row_range_keeps_its_slice(self):
+        assert _parse_address("A:A", 4) == (slice(4), slice(0, 1))
+        assert _parse_address("2:2", 4) == slice(1, 2)
 
 
 def test_sheet_indexed_with_a_malformed_address_raises_value_error(sheet1):
@@ -117,7 +111,7 @@ def test_sheet_indexed_with_a_malformed_address_raises_value_error(sheet1):
         (702, "AAA"),
     ],
 )
-def test_string_address_columns(col, expected):
+def test_string_address_spells_multi_letter_columns(col, expected):
     assert string_address(0, col) == f"{expected}1"
 
 

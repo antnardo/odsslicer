@@ -46,7 +46,7 @@ def test_writing_a_value_does_not_remove_an_existing_comment(writable_reader):
     assert s["A1"].comment.text == "Une note"
 
 
-def test_comment_author_date_and_visible(writable_reader):
+def test_comment_author_date_and_visibility_read_back_as_written(writable_reader):
     s = writable_reader.sheet("Sheet1")
     s["A1"].comment = "Une note"
     c = s["A1"].comment
@@ -96,7 +96,7 @@ def test_comment_on_a_repeated_cell_only_affects_that_cell(writable_reader):
     assert s["C1"].comment is None  # shared the same compressed element originally
 
 
-def test_save_round_trip_after_comment(writable_reader, tmp_path):
+def test_a_comment_reads_back_after_a_save(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet1")
     s["A1"].comment = "Une note"
     c = s["A1"].comment

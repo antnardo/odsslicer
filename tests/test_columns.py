@@ -90,7 +90,7 @@ def test_insert_columns_keeps_column_widths_with_their_columns(writable_reader):
     ("col", "expected"),
     [(1, {"A1": "a", "B1": "c"}), (2, {"A1": "a"})],
 )
-def test_deleting_a_column_past_the_declared_ones(tmp_path, col, expected):
+def test_deleting_a_column_past_the_declared_ones_keeps_the_other_cells(tmp_path, col, expected):
     # regression: AssertionError, no definition covering the column
     xml = "<table:table-column/>" + table_row(text_cell("a"))  # as LibreOffice writes it
     path = ods_with_sheet(tmp_path / "one.ods", xml)

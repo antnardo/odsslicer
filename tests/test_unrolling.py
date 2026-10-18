@@ -41,7 +41,7 @@ def test_write_already_individual_cell_is_a_no_op_split(writable_reader):
     assert s["F9"].value == 6.0
 
 
-def test_write_sequential_cells_in_the_same_former_repeat_block(writable_reader):
+def test_writing_cells_of_one_repeated_block_in_turn_keeps_each_value(writable_reader):
     s = writable_reader.sheet("Sheet2Repeat")
     s["A1"].value = "a"
     s["C1"].value = "c"
@@ -87,7 +87,9 @@ def test_writing_into_a_run_of_repeated_rows_changes_only_the_written_cells(
     assert cells_with_content(s) == {"A1": "a", "B1": "b", "A7": "end", **written}
 
 
-def test_writing_past_the_width_of_a_libreoffice_run_of_repeated_rows(writable_reader, tmp_path):
+def test_writing_past_the_width_of_a_libreoffice_run_of_repeated_rows_keeps_the_other_cells(
+    writable_reader, tmp_path
+):
     # Sheet2Repeat, saved by LibreOffice: rows 3 to 8 are one element whose
     # cells are one repeated element too, and F9 comes after them
     s = writable_reader.sheet("Sheet2Repeat")

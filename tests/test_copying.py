@@ -98,7 +98,7 @@ def test_sorting_across_formatted_columns_compares_each_cell_with_its_column(
 # ---------------------------------------------------------------------------
 
 
-def test_copy_a_single_cell(writable_reader):
+def test_copying_a_single_cell_carries_its_value_and_style(writable_reader):
     s = writable_reader.sheet("Sheet1")
     s["A1"].style.bold = True
     s.copy("A1", "C1")
@@ -152,7 +152,7 @@ def test_copy_an_empty_cell_clears_the_destination(writable_reader):
     assert s["C1"].value is None
 
 
-def test_save_round_trip_after_copy(writable_reader, tmp_path):
+def test_a_copy_reads_back_after_a_save(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet1")
     s["A1"].style.bold = True
     s["C1"].formula = "A2+A3"
@@ -187,7 +187,7 @@ def _fill_sort_table(s):
 # ---------------------------------------------------------------------------
 
 
-def test_sort_ascending_by_column(writable_reader):
+def test_sorting_by_a_column_orders_the_rows_ascending(writable_reader):
     s = writable_reader.sheet("Sheet1")
     _fill_sort_table(s)
     s.sort("A1:C4", by=1, ascending=True)
@@ -240,7 +240,7 @@ def test_sort_column_out_of_range_raises(writable_reader):
         s.sort("A1:C4", by=5)
 
 
-def test_save_round_trip_after_sort(writable_reader, tmp_path):
+def test_sorted_rows_read_back_after_a_save(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet1")
     _fill_sort_table(s)
     s.sort("A1:C4", by=1, ascending=True)

@@ -65,7 +65,7 @@ def test_document_properties_generator_has_no_setter(writable_reader):
         writable_reader.properties.generator = "odsslicer"
 
 
-def test_document_properties_custom_dict_access(writable_reader):
+def test_document_properties_custom_fields_read_and_delete_like_a_dict(writable_reader):
     p = writable_reader.properties
     p["Client"] = "Acme Corp"
     assert "Client" in p
@@ -79,7 +79,7 @@ def test_document_properties_custom_dict_access(writable_reader):
         del p["Client"]
 
 
-def test_document_properties_custom_typed_values(writable_reader):
+def test_document_properties_custom_fields_keep_their_types(writable_reader):
     p = writable_reader.properties
     p["as_text"] = "hello"
     p["as_float"] = 42.5
@@ -104,7 +104,7 @@ def test_document_properties_custom_invalid_type_raises(writable_reader):
         writable_reader.properties["bad"] = object()
 
 
-def test_save_round_trip_after_setting_document_properties(writable_reader, tmp_path):
+def test_document_properties_read_back_after_a_save(writable_reader, tmp_path):
     p = writable_reader.properties
     p.title = "Mon classeur"
     p.keywords = ["a", "b"]

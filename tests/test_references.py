@@ -124,7 +124,7 @@ def test_delete_row_does_not_touch_a_reference_to_a_third_sheet(writable_reader)
     assert s1["C1"].formula_friendly == "=SheetFusion.A1"
 
 
-def test_save_round_trip_after_delete_row_adjusts_formulas(writable_reader, tmp_path):
+def test_formulas_adjusted_by_delete_row_read_back_after_a_save(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet1")
     s["C5"].formula = "A6+A7"
     s.delete_row(3)
@@ -329,7 +329,7 @@ def test_insert_rows_clears_the_cached_value_of_a_rewritten_formula(writable_rea
         (3, "=SUM(A2:A3)"),  # just below its end: the range is untouched
     ],
 )
-def test_insert_row_and_a_formula_range(writable_reader, at, expected):
+def test_inserting_a_row_moves_or_stretches_a_formula_range(writable_reader, at, expected):
     s = writable_reader.sheet("Sheet1")
     assert s["A5"].formula_friendly == "=SUM(A2:A3)"
     s.insert_row(at)

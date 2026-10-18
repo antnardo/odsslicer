@@ -62,7 +62,7 @@ def test_create_pivot_table_no_computed_result_is_written(writable_reader):
     assert s["E1"].value is None
 
 
-def test_create_pivot_table_default_name(writable_reader):
+def test_create_pivot_table_names_each_table_in_turn_by_default(writable_reader):
     s = writable_reader.sheet("SheetEmpty")
     _fill_pivot_source(s)
     s.create_pivot_table("A1:C5", "E1", rows=["Category"], values={"Amount": "sum"})
@@ -101,7 +101,7 @@ def test_create_pivot_table_unknown_function_raises(writable_reader):
         s.create_pivot_table("A1:C5", "E1", values={"Amount": "bogus"})
 
 
-def test_create_pivot_table_cross_sheet_source(writable_reader):
+def test_create_pivot_table_reads_a_source_on_another_sheet(writable_reader):
     r = writable_reader
     source = r.sheet("SheetEmpty")
     _fill_pivot_source(source)
@@ -114,7 +114,7 @@ def test_create_pivot_table_cross_sheet_source(writable_reader):
     assert first(tag, "table:source-cell-range").get(qn("table:cell-range-address")) == "SheetEmpty.A1:C5"
 
 
-def test_save_round_trip_after_create_pivot_table(writable_reader, tmp_path):
+def test_a_pivot_table_reads_back_after_a_save(writable_reader, tmp_path):
     s = writable_reader.sheet("SheetEmpty")
     _fill_pivot_source(s)
     s.create_pivot_table(

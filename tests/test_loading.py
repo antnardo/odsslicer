@@ -33,11 +33,11 @@ from odsslicer.constants import TAG_CELL
 # ---------------------------------------------------------------------------
 
 
-def test_repeated_rows_and_cols_shape(sheet_repeat):
+def test_repeated_rows_and_columns_load_at_their_full_size(sheet_repeat):
     assert sheet_repeat.to_numpy().shape == sheet_repeat.size == (9, 6)
 
 
-def test_repeated_rows_and_cols_values(sheet_repeat):
+def test_repeated_rows_and_columns_read_their_value_at_every_position(sheet_repeat):
     assert sheet_repeat["A1:D2"].to_list() == [[1, 1, 1, 1], [1, 1, 1, 1]]
     assert sheet_repeat["F9"].value == 5
     assert sheet_repeat["F8"].value is None
@@ -252,7 +252,7 @@ def test_empty_rows_between_data_stay_in_the_grid(tmp_path):
         (0, (1, 1)),  # no row after the filler: the empty last row goes
     ],
 )
-def test_the_rows_around_the_filler_of_a_full_height_sheet(tmp_path, after_filler, size):
+def test_the_filler_of_a_full_height_sheet_is_left_out_of_the_grid(tmp_path, after_filler, size):
     xml = (
         "<table:table-column/>"
         + table_row(text_cell("a"))

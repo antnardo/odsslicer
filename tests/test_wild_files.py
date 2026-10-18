@@ -101,7 +101,7 @@ def wild_readers():
 
 
 @pytest.mark.parametrize("name", WILD_FILES)
-def test_sheets_and_sizes(wild_readers, name):
+def test_sheets_load_at_their_expected_sizes(wild_readers, name):
     sizes, _ = EXPECTED[name]
     reader = wild_readers[name]
     assert reader.sheets_names == list(sizes)
@@ -137,7 +137,7 @@ def test_save_roundtrip_preserves_values(tmp_path, name):
 
 
 @pytest.mark.parametrize("name", WILD_FILES)
-def test_write_into_wild_file(tmp_path, name):
+def test_writing_into_a_wild_file_reads_back(tmp_path, name):
     """Writing must work on foreign XML too: overwrite an existing cell and
     write past the sheet's extent (auto-growth), then read both back."""
     reader = ODSReader(WILD_DIR / name)

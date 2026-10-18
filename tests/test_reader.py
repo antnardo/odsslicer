@@ -784,7 +784,7 @@ def test_sheet_is_cached_between_calls(reader):
     assert reader.sheet("Sheet1") is reader.sheet("Sheet1")
 
 
-def test_save_round_trip(writable_reader, tmp_path):
+def test_written_values_read_back_after_a_save(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet1")
     s["A1"].value = "modifié"
     s["A3"].value = 42.5
@@ -830,7 +830,7 @@ def test_save_keeps_odf_mimetype_convention(writable_reader, tmp_path):
         assert z.read("mimetype") == b"application/vnd.oasis.opendocument.spreadsheet"
 
 
-def test_save_defaults_to_overwriting_source_file(writable_reader, tmp_path):
+def test_save_without_a_path_overwrites_the_source_file(writable_reader, tmp_path):
     import shutil
 
     copy_path = tmp_path / "inplace.ods"
@@ -848,90 +848,87 @@ def test_save_defaults_to_overwriting_source_file(writable_reader, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_add_sheet_creates_an_empty_sheet(writable_reader):
-    before = list(writable_reader.sheets_names)
-    s = writable_reader.add_sheet("NewSheet")
-    assert writable_reader.sheets_names == [*before, "NewSheet"]
-    assert s.size == (0, 0)
-    assert writable_reader.sheet("NewSheet") is s  # cached, same object
+class TestAddSheet:
+    """`ODSReader.add_sheet`."""
 
+    def test_a_new_sheet_is_empty(self, writable_reader):
+        before = list(writable_reader.sheets_names)
+        s = writable_reader.add_sheet("NewSheet")
+        assert writable_reader.sheets_names == [*before, "NewSheet"]
+        assert s.size == (0, 0)
+        assert writable_reader.sheet("NewSheet") is s  # cached, same object
 
-def test_add_sheet_rejects_empty_name(writable_reader):
-    with pytest.raises(ValueError):
-        writable_reader.add_sheet("")
+    def test_an_empty_name_is_rejected(self, writable_reader):
+        with pytest.raises(ValueError):
+            writable_reader.add_sheet("")
 
-
-def test_add_sheet_rejects_duplicate_name(writable_reader):
-    writable_reader.add_sheet("Dup")
-    with pytest.raises(ValueError):
+    def test_a_name_in_use_is_rejected(self, writable_reader):
         writable_reader.add_sheet("Dup")
+        with pytest.raises(ValueError):
+            writable_reader.add_sheet("Dup")
 
+    def test_a_new_sheet_is_writable_and_grows(self, writable_reader):
+        s = writable_reader.add_sheet("NewSheet")
+        s["A1"].value = "hello"
+        s["C3"].value = 42
+        assert s.size == (3, 3)
+        assert s["A1"].value == "hello"
+        assert s["C3"].value == 42
+        assert s["B2"].value is None
 
-def test_add_sheet_is_writable_and_grows(writable_reader):
-    s = writable_reader.add_sheet("NewSheet")
-    s["A1"].value = "hello"
-    s["C3"].value = 42
-    assert s.size == (3, 3)
-    assert s["A1"].value == "hello"
-    assert s["C3"].value == 42
-    assert s["B2"].value is None
+    def test_the_existing_sheets_are_left_as_they_are(self, writable_reader):
+        writable_reader.add_sheet("NewSheet")
+        s1 = writable_reader.sheet("Sheet1")
+        assert s1["A1"].value == "texte simple"
+        assert s1.size == (9, 2)
 
+    def test_an_added_sheet_reads_back_after_a_save(self, writable_reader, tmp_path):
+        # regression: a brand new sheet's lone blank row (needed for it to be a
+        # structurally valid ODF sheet) was physically left in the XML after
+        # load() discards it from the logical view; growing the sheet then
+        # appended new rows *after* that still-present phantom row without
+        # removing it, so a save/reload round trip surfaced it as an extra,
+        # wrongly-shaped row - see also test_save_round_trip_growing_from_empty.
+        s = writable_reader.add_sheet("NewSheet")
+        s["A1"].value = "hello"
+        s["C3"].value = 42
 
-def test_add_sheet_does_not_affect_existing_sheets(writable_reader):
-    writable_reader.add_sheet("NewSheet")
-    s1 = writable_reader.sheet("Sheet1")
-    assert s1["A1"].value == "texte simple"
-    assert s1.size == (9, 2)
+        out = tmp_path / "out.ods"
+        writable_reader.save(out)
 
+        reread = ODSReader(out)
+        assert reread.sheets_names[-1] == "NewSheet"
+        s2 = reread.sheet("NewSheet")
+        assert s2.size == (3, 3)
+        assert s2["A1"].value == "hello"
+        assert s2["C3"].value == 42
+        assert s2["B2"].value is None
+        # existing sheets are untouched, and the new table sits after them in the XML
+        assert reread.sheet("Sheet1")["A1"].value == "texte simple"
 
-def test_save_round_trip_after_add_sheet(writable_reader, tmp_path):
-    # regression: a brand new sheet's lone blank row (needed for it to be a
-    # structurally valid ODF sheet) was physically left in the XML after
-    # load() discards it from the logical view; growing the sheet then
-    # appended new rows *after* that still-present phantom row without
-    # removing it, so a save/reload round trip surfaced it as an extra,
-    # wrongly-shaped row - see also test_save_round_trip_growing_from_empty.
-    s = writable_reader.add_sheet("NewSheet")
-    s["A1"].value = "hello"
-    s["C3"].value = 42
+        import zipfile
 
-    out = tmp_path / "out.ods"
-    writable_reader.save(out)
+        with zipfile.ZipFile(out) as z:
+            content = z.read("content.xml").decode("utf-8")
+        idx_fusion = content.index('table:name="SheetFusion"')
+        idx_new = content.index('table:name="NewSheet"')
+        idx_named_expr = content.index("table:named-expressions")
+        assert idx_fusion < idx_new < idx_named_expr
 
-    reread = ODSReader(out)
-    assert reread.sheets_names[-1] == "NewSheet"
-    s2 = reread.sheet("NewSheet")
-    assert s2.size == (3, 3)
-    assert s2["A1"].value == "hello"
-    assert s2["C3"].value == 42
-    assert s2["B2"].value is None
-    # existing sheets are untouched, and the new table sits after them in the XML
-    assert reread.sheet("Sheet1")["A1"].value == "texte simple"
+    def test_an_added_sheet_grown_from_empty_reads_back_after_a_save(self, writable_reader, tmp_path):
+        # same phantom-row regression as above, but on a pre-existing empty sheet
+        # rather than one freshly created by add_sheet.
+        s = writable_reader.sheet("SheetEmpty")
+        assert s.size == (0, 0)
+        s["B3"].value = "from scratch"
 
-    import zipfile
+        out = tmp_path / "out.ods"
+        writable_reader.save(out)
 
-    with zipfile.ZipFile(out) as z:
-        content = z.read("content.xml").decode("utf-8")
-    idx_fusion = content.index('table:name="SheetFusion"')
-    idx_new = content.index('table:name="NewSheet"')
-    idx_named_expr = content.index("table:named-expressions")
-    assert idx_fusion < idx_new < idx_named_expr
-
-
-def test_save_round_trip_growing_from_empty(writable_reader, tmp_path):
-    # same phantom-row regression as above, but on a pre-existing empty sheet
-    # rather than one freshly created by add_sheet.
-    s = writable_reader.sheet("SheetEmpty")
-    assert s.size == (0, 0)
-    s["B3"].value = "from scratch"
-
-    out = tmp_path / "out.ods"
-    writable_reader.save(out)
-
-    reread = ODSReader(out).sheet("SheetEmpty")
-    assert reread.size == (3, 2)
-    assert reread["B3"].value == "from scratch"
-    assert reread["A1"].value is None
+        reread = ODSReader(out).sheet("SheetEmpty")
+        assert reread.size == (3, 2)
+        assert reread["B3"].value == "from scratch"
+        assert reread["A1"].value is None
 
 
 OPENFORMULA = "urn:oasis:names:tc:opendocument:xmlns:of:1.2"
@@ -1025,106 +1022,103 @@ class TestOpenFormulaPrefix:
 # ---------------------------------------------------------------------------
 
 
-def test_new_creates_a_single_empty_sheet():
-    doc = ODSReader.new()
-    assert doc.sheets_names == ["Sheet1"]
-    assert doc.sheet("Sheet1").size == (0, 0)
+class TestNewDocument:
+    """`ODSReader.new`: a document with no file behind it."""
+
+    def test_it_has_a_single_empty_sheet(self):
+        doc = ODSReader.new()
+        assert doc.sheets_names == ["Sheet1"]
+        assert doc.sheet("Sheet1").size == (0, 0)
+
+    def test_its_sheet_takes_the_name_given(self):
+        doc = ODSReader.new(sheet_name="Budget")
+        assert doc.sheets_names == ["Budget"]
+        assert doc.sheet("Budget").size == (0, 0)
+
+    def test_two_are_independent_of_each_other(self):
+        doc1 = ODSReader.new()
+        doc2 = ODSReader.new()
+        doc1.sheet("Sheet1")["A1"].value = "from doc1"
+        assert doc2.sheet("Sheet1")["A1"].value is None
+
+    def test_it_supports_writing_growing_formulas_and_add_sheet(self):
+        doc = ODSReader.new()
+        s = doc.sheet("Sheet1")
+        s["A1"].value = "Total"
+        s["B1"].formula = "SUM(A2:A10)"
+        assert s.size == (1, 2)
+        assert s["B1"].formula_friendly == "=SUM(A2:A10)"
+
+        s2 = doc.add_sheet("Data")
+        s2["A1:A3"].value = [10, 20, 30]
+        assert s2["A1:A3"].to_list() == [[10], [20], [30]]
+
+    def test_saving_it_without_a_path_raises(self, tmp_path):
+        doc = ODSReader.new()
+        doc.sheet("Sheet1")["A1"].value = "x"
+        with pytest.raises(ValueError):
+            doc.save()
+
+    def test_it_reads_back_after_a_save(self, tmp_path):
+        doc = ODSReader.new()
+        s = doc.sheet("Sheet1")
+        s["A1"].value = "Total"
+        s["B1"].formula = "SUM(A2:A10)"
+        doc.add_sheet("Data")["A1:A3"].value = [10, 20, 30]
+
+        out = tmp_path / "brand_new.ods"
+        doc.save(out)
+
+        reread = ODSReader(out)
+        assert reread.sheets_names == ["Sheet1", "Data"]
+        assert reread.sheet("Sheet1")["A1"].value == "Total"
+        assert reread.sheet("Sheet1")["B1"].formula_friendly == "=SUM(A2:A10)"
+        assert reread.sheet("Data")["A1:A3"].to_list() == [[10], [20], [30]]
+
+    def test_a_file_backed_reader_still_saves_to_its_own_file_without_a_path(self, writable_reader, tmp_path):
+        # regression guard: the save()-without-path guard must only trigger for
+        # documents created via ODSReader.new(), not regular file-backed ones
+        import shutil
+
+        copy_path = tmp_path / "inplace.ods"
+        shutil.copy(writable_reader.file, copy_path)
+        r = ODSReader(copy_path)
+        r.sheet("Sheet1")["A1"].value = "still works"
+        r.save()  # no path given -> overwrites r.file (== copy_path), must NOT raise
+        assert ODSReader(copy_path).sheet("Sheet1")["A1"].value == "still works"
 
 
-def test_new_accepts_a_custom_initial_sheet_name():
-    doc = ODSReader.new(sheet_name="Budget")
-    assert doc.sheets_names == ["Budget"]
-    assert doc.sheet("Budget").size == (0, 0)
+class TestDeleteSheet:
+    """`ODSReader.delete_sheet`."""
 
+    def test_a_deleted_sheet_is_gone(self, writable_reader):
+        r = writable_reader
+        r.add_sheet("Extra")
+        r.delete_sheet("Extra")
+        assert "Extra" not in r.sheets_names
+        with pytest.raises(KeyError):
+            r.sheet("Extra")
 
-def test_new_documents_are_independent_of_each_other():
-    doc1 = ODSReader.new()
-    doc2 = ODSReader.new()
-    doc1.sheet("Sheet1")["A1"].value = "from doc1"
-    assert doc2.sheet("Sheet1")["A1"].value is None
+    def test_an_unknown_sheet_raises(self, writable_reader):
+        with pytest.raises(KeyError):
+            writable_reader.delete_sheet("NoSuchSheet")
 
+    def test_the_last_remaining_sheet_raises(self, writable_reader):
+        r = writable_reader
+        for name in list(r.sheets_names)[:-1]:
+            r.delete_sheet(name)
+        assert len(r.sheets_names) == 1
+        with pytest.raises(ValueError):
+            r.delete_sheet(r.sheets_names[0])
 
-def test_new_document_supports_writing_growing_formulas_and_add_sheet():
-    doc = ODSReader.new()
-    s = doc.sheet("Sheet1")
-    s["A1"].value = "Total"
-    s["B1"].formula = "SUM(A2:A10)"
-    assert s.size == (1, 2)
-    assert s["B1"].formula_friendly == "=SUM(A2:A10)"
-
-    s2 = doc.add_sheet("Data")
-    s2["A1:A3"].value = [10, 20, 30]
-    assert s2["A1:A3"].to_list() == [[10], [20], [30]]
-
-
-def test_new_document_save_without_a_path_raises(tmp_path):
-    doc = ODSReader.new()
-    doc.sheet("Sheet1")["A1"].value = "x"
-    with pytest.raises(ValueError):
-        doc.save()
-
-
-def test_new_document_save_round_trip(tmp_path):
-    doc = ODSReader.new()
-    s = doc.sheet("Sheet1")
-    s["A1"].value = "Total"
-    s["B1"].formula = "SUM(A2:A10)"
-    doc.add_sheet("Data")["A1:A3"].value = [10, 20, 30]
-
-    out = tmp_path / "brand_new.ods"
-    doc.save(out)
-
-    reread = ODSReader(out)
-    assert reread.sheets_names == ["Sheet1", "Data"]
-    assert reread.sheet("Sheet1")["A1"].value == "Total"
-    assert reread.sheet("Sheet1")["B1"].formula_friendly == "=SUM(A2:A10)"
-    assert reread.sheet("Data")["A1:A3"].to_list() == [[10], [20], [30]]
-
-
-def test_new_document_regular_reader_still_defaults_save_to_its_own_file(writable_reader, tmp_path):
-    # regression guard: the save()-without-path guard must only trigger for
-    # documents created via ODSReader.new(), not regular file-backed ones
-    import shutil
-
-    copy_path = tmp_path / "inplace.ods"
-    shutil.copy(writable_reader.file, copy_path)
-    r = ODSReader(copy_path)
-    r.sheet("Sheet1")["A1"].value = "still works"
-    r.save()  # no path given -> overwrites r.file (== copy_path), must NOT raise
-    assert ODSReader(copy_path).sheet("Sheet1")["A1"].value == "still works"
-
-
-def test_delete_sheet(writable_reader):
-    r = writable_reader
-    r.add_sheet("Extra")
-    r.delete_sheet("Extra")
-    assert "Extra" not in r.sheets_names
-    with pytest.raises(KeyError):
-        r.sheet("Extra")
-
-
-def test_delete_unknown_sheet_raises(writable_reader):
-    with pytest.raises(KeyError):
-        writable_reader.delete_sheet("NoSuchSheet")
-
-
-def test_delete_the_last_remaining_sheet_raises(writable_reader):
-    r = writable_reader
-    for name in list(r.sheets_names)[:-1]:
-        r.delete_sheet(name)
-    assert len(r.sheets_names) == 1
-    with pytest.raises(ValueError):
-        r.delete_sheet(r.sheets_names[0])
-
-
-def test_save_round_trip_after_delete_sheet(writable_reader, tmp_path):
-    r = writable_reader
-    r.add_sheet("Extra")
-    r.delete_sheet("Extra")
-    out = tmp_path / "out.ods"
-    r.save(out)
-    reread = ODSReader(out)
-    assert "Extra" not in reread.sheets_names
+    def test_a_deleted_sheet_stays_deleted_after_a_save(self, writable_reader, tmp_path):
+        r = writable_reader
+        r.add_sheet("Extra")
+        r.delete_sheet("Extra")
+        out = tmp_path / "out.ods"
+        r.save(out)
+        reread = ODSReader(out)
+        assert "Extra" not in reread.sheets_names
 
 
 # ---------------------------------------------------------------------------
@@ -1132,141 +1126,130 @@ def test_save_round_trip_after_delete_sheet(writable_reader, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_rename_sheet_updates_names(writable_reader):
-    r = writable_reader
-    r.rename_sheet("Sheet1", "Renamed")
-    assert "Renamed" in r.sheets_names
-    assert "Sheet1" not in r.sheets_names
-    assert r.sheet("Renamed").name == "Renamed"
+class TestRenameSheet:
+    """`ODSReader.rename_sheet`, and `Sheet.name` following it."""
+
+    def test_the_sheet_names_follow(self, writable_reader):
+        r = writable_reader
+        r.rename_sheet("Sheet1", "Renamed")
+        assert "Renamed" in r.sheets_names
+        assert "Sheet1" not in r.sheets_names
+        assert r.sheet("Renamed").name == "Renamed"
+
+    def test_a_loaded_sheet_follows(self, writable_reader):
+        r = writable_reader
+        s = r.sheet("Sheet1")  # force construction before the rename
+        r.rename_sheet("Sheet1", "Renamed")
+        assert s.name == "Renamed"
+        assert r.sheet("Renamed") is s
+
+    def test_sheet_name_follows_every_renaming(self, writable_reader):
+        # the name is read on the sheet's element, no copy to keep up to date
+        r = writable_reader
+        s = r.sheet("Sheet1")
+        r.rename_sheet("Sheet1", "First")
+        r.rename_sheet("First", "Second")
+        assert s.name == s.table.get(qn("table:name")) == "Second"
+        assert "name='Second'" in repr(s)
+        assert r.sheet("Second") is s
+
+    def test_assigning_sheet_name_raises_attribute_error_naming_rename_sheet(self, writable_reader):
+        s = writable_reader.sheet("Sheet1")
+        with pytest.raises(AttributeError, match=r"rename_sheet\('Sheet1', 'Other'\)"):
+            s.name = "Other"
+        assert s.name == "Sheet1"
+        assert writable_reader.sheets_names[0] == "Sheet1"
+
+    def test_cross_sheet_formula_references_follow(self, writable_reader):
+        r = writable_reader
+        s2 = r.sheet("Sheet2Repeat")
+        s2["A1"].formula = "Sheet1.A2+Sheet1.A3"
+        r.rename_sheet("Sheet1", "Renamed")
+        assert s2["A1"].formula_friendly == "=Renamed.A2+Renamed.A3"
+
+    def test_a_name_with_spaces_is_quoted_in_references(self, writable_reader):
+        r = writable_reader
+        s2 = r.sheet("Sheet2Repeat")
+        s2["A1"].formula = "Sheet1.A2"
+        r.rename_sheet("Sheet1", "Mon Bilan")
+        assert s2["A1"].formula == "of:=['Mon Bilan'.A2]"
+
+    def test_an_unqualified_reference_in_its_own_formulas_is_left_alone(self, writable_reader):
+        r = writable_reader
+        s1 = r.sheet("Sheet1")
+        s1["C1"].formula = "A2+A3"
+        r.rename_sheet("Sheet1", "Renamed")
+        assert s1["C1"].formula_friendly == "=A2+A3"
+
+    def test_an_unknown_sheet_raises(self, writable_reader):
+        with pytest.raises(KeyError):
+            writable_reader.rename_sheet("NoSuchSheet", "x")
+
+    def test_a_name_in_use_raises(self, writable_reader):
+        with pytest.raises(ValueError):
+            writable_reader.rename_sheet("Sheet1", "Sheet2Repeat")
+
+    def test_an_empty_name_raises(self, writable_reader):
+        with pytest.raises(ValueError):
+            writable_reader.rename_sheet("Sheet1", "")
+
+    def test_its_own_name_is_a_no_op(self, writable_reader):
+        r = writable_reader
+        r.rename_sheet("Sheet1", "Sheet1")
+        assert r.sheets_names.count("Sheet1") == 1
+
+    def test_a_renamed_sheet_keeps_its_name_after_a_save(self, writable_reader, tmp_path):
+        r = writable_reader
+        s2 = r.sheet("Sheet2Repeat")
+        s2["A1"].formula = "Sheet1.A2"
+        r.rename_sheet("Sheet1", "Renamed")
+        out = tmp_path / "out.ods"
+        r.save(out)
+
+        reread = ODSReader(out)
+        assert "Renamed" in reread.sheets_names
+        assert reread.sheet("Sheet2Repeat")["A1"].formula_friendly == "=Renamed.A2"
+        assert reread.sheet("Renamed")["A1"].value == "texte simple"
 
 
-def test_rename_sheet_updates_an_already_constructed_sheet_object(writable_reader):
-    r = writable_reader
-    s = r.sheet("Sheet1")  # force construction before the rename
-    r.rename_sheet("Sheet1", "Renamed")
-    assert s.name == "Renamed"
-    assert r.sheet("Renamed") is s
+class TestMoveSheet:
+    """`ODSReader.move_sheet`."""
 
+    def test_a_sheet_moved_first_reorders_the_others(self, writable_reader):
+        r = writable_reader
+        r.move_sheet("SheetFusion", 0)
+        assert r.sheets_names == ["SheetFusion", "Sheet1", "Sheet2Repeat", "SheetEmpty"]
 
-def test_sheet_name_follows_every_rename_sheet(writable_reader):
-    # the name is read on the sheet's element, no copy to keep up to date
-    r = writable_reader
-    s = r.sheet("Sheet1")
-    r.rename_sheet("Sheet1", "First")
-    r.rename_sheet("First", "Second")
-    assert s.name == s.table.get(qn("table:name")) == "Second"
-    assert "name='Second'" in repr(s)
-    assert r.sheet("Second") is s
+    def test_the_last_index_puts_it_at_the_end(self, writable_reader):
+        r = writable_reader
+        r.move_sheet("Sheet1", 3)
+        assert r.sheets_names == ["Sheet2Repeat", "SheetEmpty", "SheetFusion", "Sheet1"]
 
+    def test_an_inner_index_puts_it_there(self, writable_reader):
+        r = writable_reader
+        r.move_sheet("SheetFusion", 1)
+        assert r.sheets_names == ["Sheet1", "SheetFusion", "Sheet2Repeat", "SheetEmpty"]
 
-def test_assigning_sheet_name_raises_attribute_error_naming_rename_sheet(writable_reader):
-    s = writable_reader.sheet("Sheet1")
-    with pytest.raises(AttributeError, match=r"rename_sheet\('Sheet1', 'Other'\)"):
-        s.name = "Other"
-    assert s.name == "Sheet1"
-    assert writable_reader.sheets_names[0] == "Sheet1"
+    def test_its_own_position_is_a_no_op(self, writable_reader):
+        r = writable_reader
+        before = list(r.sheets_names)
+        r.move_sheet("Sheet2Repeat", 1)
+        assert r.sheets_names == before
 
+    def test_an_unknown_sheet_raises(self, writable_reader):
+        with pytest.raises(KeyError):
+            writable_reader.move_sheet("NoSuchSheet", 0)
 
-def test_rename_sheet_updates_cross_sheet_formula_references(writable_reader):
-    r = writable_reader
-    s2 = r.sheet("Sheet2Repeat")
-    s2["A1"].formula = "Sheet1.A2+Sheet1.A3"
-    r.rename_sheet("Sheet1", "Renamed")
-    assert s2["A1"].formula_friendly == "=Renamed.A2+Renamed.A3"
+    def test_an_index_out_of_range_raises(self, writable_reader):
+        with pytest.raises(ValueError):
+            writable_reader.move_sheet("Sheet1", 99)
 
+    def test_a_moved_sheet_keeps_its_place_after_a_save(self, writable_reader, tmp_path):
+        r = writable_reader
+        r.move_sheet("SheetFusion", 0)
+        out = tmp_path / "out.ods"
+        r.save(out)
 
-def test_rename_sheet_quotes_a_name_with_spaces_in_references(writable_reader):
-    r = writable_reader
-    s2 = r.sheet("Sheet2Repeat")
-    s2["A1"].formula = "Sheet1.A2"
-    r.rename_sheet("Sheet1", "Mon Bilan")
-    assert s2["A1"].formula == "of:=['Mon Bilan'.A2]"
-
-
-def test_rename_sheet_does_not_touch_an_unqualified_reference_in_its_own_formulas(writable_reader):
-    r = writable_reader
-    s1 = r.sheet("Sheet1")
-    s1["C1"].formula = "A2+A3"
-    r.rename_sheet("Sheet1", "Renamed")
-    assert s1["C1"].formula_friendly == "=A2+A3"
-
-
-def test_rename_unknown_sheet_raises(writable_reader):
-    with pytest.raises(KeyError):
-        writable_reader.rename_sheet("NoSuchSheet", "x")
-
-
-def test_rename_sheet_to_an_existing_name_raises(writable_reader):
-    with pytest.raises(ValueError):
-        writable_reader.rename_sheet("Sheet1", "Sheet2Repeat")
-
-
-def test_rename_sheet_to_empty_name_raises(writable_reader):
-    with pytest.raises(ValueError):
-        writable_reader.rename_sheet("Sheet1", "")
-
-
-def test_rename_sheet_to_its_own_name_is_a_no_op(writable_reader):
-    r = writable_reader
-    r.rename_sheet("Sheet1", "Sheet1")
-    assert r.sheets_names.count("Sheet1") == 1
-
-
-def test_save_round_trip_after_rename_sheet(writable_reader, tmp_path):
-    r = writable_reader
-    s2 = r.sheet("Sheet2Repeat")
-    s2["A1"].formula = "Sheet1.A2"
-    r.rename_sheet("Sheet1", "Renamed")
-    out = tmp_path / "out.ods"
-    r.save(out)
-
-    reread = ODSReader(out)
-    assert "Renamed" in reread.sheets_names
-    assert reread.sheet("Sheet2Repeat")["A1"].formula_friendly == "=Renamed.A2"
-    assert reread.sheet("Renamed")["A1"].value == "texte simple"
-
-
-def test_move_sheet_reorders(writable_reader):
-    r = writable_reader
-    r.move_sheet("SheetFusion", 0)
-    assert r.sheets_names == ["SheetFusion", "Sheet1", "Sheet2Repeat", "SheetEmpty"]
-
-
-def test_move_sheet_to_the_end(writable_reader):
-    r = writable_reader
-    r.move_sheet("Sheet1", 3)
-    assert r.sheets_names == ["Sheet2Repeat", "SheetEmpty", "SheetFusion", "Sheet1"]
-
-
-def test_move_sheet_to_the_middle(writable_reader):
-    r = writable_reader
-    r.move_sheet("SheetFusion", 1)
-    assert r.sheets_names == ["Sheet1", "SheetFusion", "Sheet2Repeat", "SheetEmpty"]
-
-
-def test_move_sheet_to_its_own_position_is_a_no_op(writable_reader):
-    r = writable_reader
-    before = list(r.sheets_names)
-    r.move_sheet("Sheet2Repeat", 1)
-    assert r.sheets_names == before
-
-
-def test_move_unknown_sheet_raises(writable_reader):
-    with pytest.raises(KeyError):
-        writable_reader.move_sheet("NoSuchSheet", 0)
-
-
-def test_move_sheet_out_of_range_raises(writable_reader):
-    with pytest.raises(ValueError):
-        writable_reader.move_sheet("Sheet1", 99)
-
-
-def test_save_round_trip_after_move_sheet(writable_reader, tmp_path):
-    r = writable_reader
-    r.move_sheet("SheetFusion", 0)
-    out = tmp_path / "out.ods"
-    r.save(out)
-
-    reread = ODSReader(out)
-    assert reread.sheets_names == ["SheetFusion", "Sheet1", "Sheet2Repeat", "SheetEmpty"]
-    assert reread.sheet("Sheet1")["A1"].value == "texte simple"
+        reread = ODSReader(out)
+        assert reread.sheets_names == ["SheetFusion", "Sheet1", "Sheet2Repeat", "SheetEmpty"]
+        assert reread.sheet("Sheet1")["A1"].value == "texte simple"

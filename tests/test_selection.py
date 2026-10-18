@@ -13,7 +13,7 @@ from odsslicer import ODSReader
 # ---------------------------------------------------------------------------
 
 
-def test_array_values_dimension_and_size(sheet1):
+def test_a_row_or_a_block_reports_its_dimension_and_size(sheet1):
     row = sheet1["A1:B1"]
     assert row.dimension == 1
     assert row.size == (2,)
@@ -23,16 +23,16 @@ def test_array_values_dimension_and_size(sheet1):
     assert box.size == (3, 2)
 
 
-def test_array_values_to_list(sheet1):
+def test_to_list_gives_the_values(sheet1):
     assert sheet1["A1:B1"].to_list() == ["texte simple", "seconde colonne"]
 
 
-def test_array_values_to_numpy(sheet_repeat):
+def test_to_numpy_gives_an_array_of_the_values(sheet_repeat):
     arr = sheet_repeat["A1:D2"].to_numpy()
     assert arr.tolist() == [[1, 1, 1, 1], [1, 1, 1, 1]]
 
 
-def test_array_values_to_vector(sheet1):
+def test_to_vector_flattens_a_column(sheet1):
     column = sheet1[0:2, 0]  # (2 x 1) shape
     vector = column.to_vector()
     assert vector.to_list() == ["texte simple", 3.4]
@@ -119,7 +119,7 @@ def test_slice_formula_expands_placeholders_per_cell(writable_reader):
         assert s[row, 0].formula == f"of:=[.$A{row}]+1"
 
 
-def test_save_round_trip_after_slice_writes(writable_reader, tmp_path):
+def test_selection_writes_read_back_after_a_save(writable_reader, tmp_path):
     # regression: a formula-only cell (no cached value/text) was wrongly
     # treated as "empty" by Cell.is_empty, so if it ended up as the sheet's
     # last row, load()'s "trim a trailing empty row" cleanup silently

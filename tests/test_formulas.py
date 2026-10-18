@@ -220,7 +220,7 @@ def test_formula_friendly_is_none_without_a_formula(writable_reader):
     assert s["A1"].formula_friendly is None
 
 
-def test_formula_friendly_on_a_real_complex_formula():
+def test_formula_friendly_translates_a_real_complex_formula():
     # a real formula from bareme/examples/root_init/DS1/Notes.ods (MPX4!I3):
     # of:=IF(OFFSET([$Notes.$C$3];[.I$1];[.$A3]+[.$A$1])=0;"";
     #        OFFSET([$Notes.$C$3];[.I$1];[.$A3]+[.$A$1]))
@@ -301,7 +301,7 @@ def test_fill_formula_without_a_formula_raises(writable_reader):
         s["A1"].fill_formula("A2")
 
 
-def test_save_round_trip_after_fill_formula(writable_reader, tmp_path):
+def test_filled_formulas_read_back_after_a_save(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet1")
     s["B2"].formula = "$A1+1"
     s["B2"].fill_formula("B3:B5")

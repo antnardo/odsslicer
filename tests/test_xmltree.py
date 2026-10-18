@@ -822,7 +822,7 @@ class TestWrapContents:
 
 
 class TestNames:
-    def test_names_of_an_element(self, side):
+    def test_an_element_gives_its_local_name_name_and_namespace(self, side):
         row = side.kids(side.root("<table:table-row/>"))[0]
         assert side.layer.local_name(row) == "table-row"
         assert side.layer.name_of(row) == "table:table-row"

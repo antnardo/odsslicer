@@ -92,7 +92,7 @@ _DMY = [("day", "long"), ("text", "/"), ("month", "long"), ("text", "/")]
         ),
     ],
 )
-def test_format_code_components(code, components, elapsed):
+def test_a_format_code_gives_its_components(code, components, elapsed):
     assert _format_code_components(code) == (components, elapsed)
 
 
@@ -188,5 +188,5 @@ def test_standard_formats_show_as_in_libreoffice(tag, shown):
         ("duration", "en", "US", ("[HH]:MM:SS", None, None)),
     ],
 )
-def test_default_format_code(kind, language, country, expected):
+def test_the_default_format_code_is_the_locales_standard_one(kind, language, country, expected):
     assert _default_format_code(kind, language, country) == expected

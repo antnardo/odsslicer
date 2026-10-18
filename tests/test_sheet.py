@@ -5,7 +5,7 @@ from lxml import etree
 from odsslicer import ArrayValues, Sheet
 
 
-def test_indexing_equivalences(sheet1):
+def test_text_and_numeric_indexes_give_the_same_cells(sheet1):
     assert sheet1["A1"] == sheet1[0, 0]
     assert sheet1["1"] == sheet1[0]
     assert sheet1["A"] == sheet1[:, 0]
@@ -27,7 +27,7 @@ def test_cell_out_of_range_is_empty_not_an_error(sheet1):
 # ---------------------------------------------------------------------------
 
 
-def test_empty_sheet_shapes(sheet_empty):
+def test_every_cell_of_an_empty_sheet_reads_none(sheet_empty):
     assert sheet_empty["A1"].value is None
     assert sheet_empty["ZZ1"].value is None
     assert sheet_empty["ZZZ2222222"].value is None

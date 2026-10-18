@@ -358,7 +358,7 @@ def test_cell_style_nearest_ancestor_wins_on_conflicting_property():
     assert style.background_color == "#222222"
 
 
-def test_cell_style_font_underline_strikethrough_and_rotation():
+def test_cell_style_reads_font_underline_strikethrough_and_rotation():
     # real attribute names/values taken from tests/TEST.ods's styles.xml
     # (style:font-name="Liberation Sans") and the ODF spec for the rest,
     # since none of our fixture files happen to apply these to a real cell.
@@ -468,7 +468,7 @@ def test_cell_style_diagonal_none_is_not_a_border(reader):
     assert style.background_color == "#ffffcc"
 
 
-def test_cell_style_wrap_shrink_protection_and_text_position():
+def test_cell_style_reads_wrap_shrink_protection_and_text_position():
     xml = (
         '<root xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
         'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
@@ -621,7 +621,7 @@ def test_setting_bold_forks_off_an_existing_named_style_as_parent(writable_reade
     assert c.style.horizontal_align == before_align
 
 
-def test_underline_and_strikethrough(writable_reader):
+def test_writing_underline_and_strikethrough_reads_back(writable_reader):
     s = writable_reader.sheet("Sheet1")
     c = s["A1"]
     c.style.underline = True
@@ -633,7 +633,7 @@ def test_underline_and_strikethrough(writable_reader):
     assert c.style.strikethrough is True  # unrelated property untouched
 
 
-def test_colors_font_and_alignment(writable_reader):
+def test_writing_colors_font_and_alignment_reads_back(writable_reader):
     s = writable_reader.sheet("Sheet1")
     c = s["A1"]
     c.style.font_color = "#FF0000"
@@ -650,7 +650,7 @@ def test_colors_font_and_alignment(writable_reader):
     assert c.style.horizontal_align == "center"
 
 
-def test_rotation_writing_mode_wrap_shrink_protection(writable_reader):
+def test_writing_rotation_writing_mode_wrap_shrink_and_protection_reads_back(writable_reader):
     s = writable_reader.sheet("Sheet1")
     c = s["A1"]
     c.style.rotation = 90
@@ -668,7 +668,7 @@ def test_rotation_writing_mode_wrap_shrink_protection(writable_reader):
     assert c.style.rotation is None
 
 
-def test_text_position_and_super_subscript(writable_reader):
+def test_writing_superscript_or_subscript_sets_the_text_position(writable_reader):
     s = writable_reader.sheet("Sheet1")
     c = s["A1"]
     c.style.superscript = True
@@ -720,7 +720,7 @@ def test_border_side_set_to_none_writes_explicit_none(writable_reader):
     assert c.style.border_bottom is None
 
 
-def test_assign_existing_number_format(writable_reader):
+def test_assigning_an_existing_number_format_names_it(writable_reader):
     s = writable_reader.sheet("Sheet1")
     percentage_format = s["A6"].style.number_format
     assert percentage_format is not None
@@ -748,7 +748,7 @@ def test_style_write_without_owning_cell_raises(reader):
         style.bold = True
 
 
-def test_save_round_trip_after_style_writes(writable_reader, tmp_path):
+def test_cell_styles_read_back_after_a_save(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet1")
     c = s["A1"]
     c.style.bold = True
@@ -794,7 +794,7 @@ def test_row_style_write_carries_over_existing_properties(writable_reader):
     assert s.row_style(0).visible is False
 
 
-def test_row_style_visible_toggle(writable_reader):
+def test_row_style_visible_toggles_both_ways(writable_reader):
     s = writable_reader.sheet("Sheet1")
     s.row_style(0).visible = False
     assert s.row_style(0).visible is False
@@ -855,7 +855,7 @@ def test_style_write_without_owner_raises_for_row_column_table():
         TableStyle(tag=None).tab_color = "#000000"
 
 
-def test_save_round_trip_after_row_column_table_style_writes(writable_reader, tmp_path):
+def test_row_column_and_sheet_styles_read_back_after_a_save(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet1")
     s.row_style(0).height = "2cm"
     s.column_style(0).width = "5cm"

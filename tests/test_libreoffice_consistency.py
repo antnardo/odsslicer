@@ -1131,7 +1131,7 @@ def test_save_with_recalculate_materializes_pivot_tables(writable_reader, tmp_pa
 
 
 @requires_soffice
-def test_recalculate_function_on_an_existing_file(writable_reader, tmp_path):
+def test_recalculate_computes_the_formulas_of_an_existing_file(writable_reader, tmp_path):
     from odsslicer import recalculate
 
     _write_stale_formula_and_pivot(writable_reader)

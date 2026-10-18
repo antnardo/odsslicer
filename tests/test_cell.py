@@ -22,7 +22,7 @@ from odsslicer import Cell, ODSReader, xmltree
 from odsslicer.xmltree import qn
 
 
-def test_cell_values_and_formats(sheet1):
+def test_the_fixtures_cells_read_their_values_and_formats(sheet1):
     assert sheet1["A1"].value == "texte simple"
     assert sheet1["B1"].value == "seconde colonne"
     assert sheet1["A2"].value == 3.4
@@ -35,13 +35,13 @@ def test_cell_values_and_formats(sheet1):
     assert sheet1["A9"].value == dt.time(15, 0, 0)
 
 
-def test_cell_repr_and_str(sheet1):
+def test_repr_and_str_show_the_value(sheet1):
     cell = sheet1["A1"]
     assert repr(cell).startswith("Cell(")
     assert str(cell) == "texte simple"
 
 
-def test_cell_dunder_numeric_methods(sheet1):
+def test_numeric_operators_apply_to_the_value(sheet1):
     cell = sheet1["A2"]  # value == 3.4
     assert int(cell) == 3
     assert float(cell) == 3.4
@@ -73,7 +73,7 @@ def test_cell_address_matches_position(sheet1):
 # ---------------------------------------------------------------------------
 
 
-def test_write_string_float_date_time(writable_reader):
+def test_writing_a_string_float_date_or_time_reads_it_back_typed(writable_reader):
     s = writable_reader.sheet("Sheet1")
     s["A1"].value = "nouvelle valeur"
     s["A3"].value = 42.5
@@ -85,7 +85,7 @@ def test_write_string_float_date_time(writable_reader):
     assert s["A9"].value == dt.time(8, 30, 0) and s["A9"].format == "time"
 
 
-def test_write_into_previously_empty_cell(writable_reader):
+def test_writing_into_an_empty_cell_fills_it(writable_reader):
     s = writable_reader.sheet("Sheet1")
     assert s["B2"].value is None and s["B2"].is_empty
     s["B2"].value = "nouvelle cellule"
@@ -457,7 +457,7 @@ def test_write_value_clears_an_existing_formula(writable_reader):
     assert not s["A2"].is_formula
 
 
-def test_clearing_a_formula_with_none(writable_reader):
+def test_a_formula_set_to_none_is_removed(writable_reader):
     s = writable_reader.sheet("Sheet1")
     s["A2"].formula = "=[.A3]*2"
     s["A2"].formula = None
@@ -472,7 +472,7 @@ def test_write_empty_formula_raises(writable_reader):
         s["A2"].formula = ""
 
 
-def test_save_round_trip_after_writing_a_formula(writable_reader, tmp_path):
+def test_a_written_formula_reads_back_after_a_save(writable_reader, tmp_path):
     s = writable_reader.sheet("Sheet1")
     s["C1"].formula = "=[.A2]+[.A3]"
 
@@ -530,86 +530,81 @@ def test_assigning_an_invalid_style_value_raises(writable_reader):
 # ---------------------------------------------------------------------------
 
 
-def test_cell_with_no_hyperlink_is_none(reader):
-    s = reader.sheet("Sheet1")
-    assert s["A1"].hyperlink is None
+class TestHyperlink:
+    """`Cell.hyperlink`: a link wrapping the cell's text."""
 
+    def test_cell_with_no_hyperlink_is_none(self, reader):
+        s = reader.sheet("Sheet1")
+        assert s["A1"].hyperlink is None
 
-def test_setting_a_hyperlink_wraps_the_existing_text(writable_reader):
-    s = writable_reader.sheet("Sheet1")
-    s["A1"].hyperlink = "https://example.com"
-    assert s["A1"].hyperlink == "https://example.com"
-    assert s["A1"].value == "texte simple"  # text/value untouched
+    def test_setting_a_hyperlink_wraps_the_existing_text(self, writable_reader):
+        s = writable_reader.sheet("Sheet1")
+        s["A1"].hyperlink = "https://example.com"
+        assert s["A1"].hyperlink == "https://example.com"
+        assert s["A1"].value == "texte simple"  # text/value untouched
 
+    def test_setting_a_hyperlink_on_an_empty_cell_gives_it_empty_text(self, writable_reader):
+        s = writable_reader.sheet("Sheet1")
+        s["C1"].hyperlink = "https://example.com"
+        assert s["C1"].hyperlink == "https://example.com"
+        assert s["C1"].text == ""
 
-def test_setting_a_hyperlink_on_an_empty_cell_gives_it_empty_text(writable_reader):
-    s = writable_reader.sheet("Sheet1")
-    s["C1"].hyperlink = "https://example.com"
-    assert s["C1"].hyperlink == "https://example.com"
-    assert s["C1"].text == ""
+    def test_removing_a_hyperlink_keeps_the_text(self, writable_reader):
+        s = writable_reader.sheet("Sheet1")
+        s["A1"].hyperlink = "https://example.com"
+        s["A1"].hyperlink = None
+        assert s["A1"].hyperlink is None
+        assert s["A1"].value == "texte simple"
 
+    def test_removing_a_link_on_part_of_the_text_keeps_the_text_around_it(self, tmp_path):
+        # bs4's unwrap() kept the text after the link; lxml has no unwrap, and
+        # the obvious stand-in drops that text (see tests/test_xmltree.py)
+        path = ods_with_sheet(
+            tmp_path / "linked.ods",
+            table_row(
+                '<table:table-cell office:value-type="string"><text:p>Voir '
+                '<text:a xlink:href="https://example.com">ici</text:a> pour le détail</text:p>'
+                "</table:table-cell>"
+            ),
+        )
+        cell = ODSReader(path).sheet("Sheet1")["A1"]
+        assert cell.hyperlink == "https://example.com"
+        cell.hyperlink = None
+        assert cell.hyperlink is None
+        assert xmltree.text(first(cell.cell, "text:p")) == "Voir ici pour le détail"
 
-def test_removing_a_hyperlink_keeps_the_text(writable_reader):
-    s = writable_reader.sheet("Sheet1")
-    s["A1"].hyperlink = "https://example.com"
-    s["A1"].hyperlink = None
-    assert s["A1"].hyperlink is None
-    assert s["A1"].value == "texte simple"
+    def test_overwriting_the_value_clears_the_hyperlink(self, writable_reader):
+        s = writable_reader.sheet("Sheet1")
+        s["A1"].hyperlink = "https://example.com"
+        s["A1"].value = "new text"
+        assert s["A1"].hyperlink is None
+        assert s["A1"].value == "new text"
 
+    def test_setting_a_non_string_hyperlink_raises(self, writable_reader):
+        s = writable_reader.sheet("Sheet1")
+        with pytest.raises(TypeError):
+            s["A1"].hyperlink = 42
 
-def test_removing_a_link_on_part_of_the_text_keeps_the_text_around_it(tmp_path):
-    # bs4's unwrap() kept the text after the link; lxml has no unwrap, and
-    # the obvious stand-in drops that text (see tests/test_xmltree.py)
-    path = ods_with_sheet(
-        tmp_path / "linked.ods",
-        table_row(
-            '<table:table-cell office:value-type="string"><text:p>Voir '
-            '<text:a xlink:href="https://example.com">ici</text:a> pour le détail</text:p></table:table-cell>'
-        ),
-    )
-    cell = ODSReader(path).sheet("Sheet1")["A1"]
-    assert cell.hyperlink == "https://example.com"
-    cell.hyperlink = None
-    assert cell.hyperlink is None
-    assert xmltree.text(first(cell.cell, "text:p")) == "Voir ici pour le détail"
+    def test_setting_a_hyperlink_twice_replaces_the_url(self, writable_reader):
+        s = writable_reader.sheet("Sheet1")
+        s["A1"].hyperlink = "https://first.example"
+        s["A1"].hyperlink = "https://second.example"
+        assert s["A1"].hyperlink == "https://second.example"
+        assert s["A1"].value == "texte simple"  # text still there, not duplicated
 
+    def test_hyperlink_on_a_repeated_cell_only_affects_that_cell(self, writable_reader):
+        s = writable_reader.sheet("Sheet2Repeat")
+        s["A1"].hyperlink = "https://example.com"
+        assert s["A1"].hyperlink == "https://example.com"
+        assert s["C1"].hyperlink is None  # shared the same compressed element originally
 
-def test_overwriting_the_value_clears_the_hyperlink(writable_reader):
-    s = writable_reader.sheet("Sheet1")
-    s["A1"].hyperlink = "https://example.com"
-    s["A1"].value = "new text"
-    assert s["A1"].hyperlink is None
-    assert s["A1"].value == "new text"
+    def test_a_hyperlink_reads_back_after_a_save(self, writable_reader, tmp_path):
+        s = writable_reader.sheet("Sheet1")
+        s["C1"].value = "Anthropic"
+        s["C1"].hyperlink = "https://anthropic.com"
+        out = tmp_path / "out.ods"
+        writable_reader.save(out)
 
-
-def test_setting_a_non_string_hyperlink_raises(writable_reader):
-    s = writable_reader.sheet("Sheet1")
-    with pytest.raises(TypeError):
-        s["A1"].hyperlink = 42
-
-
-def test_setting_a_hyperlink_twice_replaces_the_url(writable_reader):
-    s = writable_reader.sheet("Sheet1")
-    s["A1"].hyperlink = "https://first.example"
-    s["A1"].hyperlink = "https://second.example"
-    assert s["A1"].hyperlink == "https://second.example"
-    assert s["A1"].value == "texte simple"  # text still there, not duplicated
-
-
-def test_hyperlink_on_a_repeated_cell_only_affects_that_cell(writable_reader):
-    s = writable_reader.sheet("Sheet2Repeat")
-    s["A1"].hyperlink = "https://example.com"
-    assert s["A1"].hyperlink == "https://example.com"
-    assert s["C1"].hyperlink is None  # shared the same compressed element originally
-
-
-def test_save_round_trip_after_hyperlink(writable_reader, tmp_path):
-    s = writable_reader.sheet("Sheet1")
-    s["C1"].value = "Anthropic"
-    s["C1"].hyperlink = "https://anthropic.com"
-    out = tmp_path / "out.ods"
-    writable_reader.save(out)
-
-    reread = ODSReader(out).sheet("Sheet1")
-    assert reread["C1"].value == "Anthropic"
-    assert reread["C1"].hyperlink == "https://anthropic.com"
+        reread = ODSReader(out).sheet("Sheet1")
+        assert reread["C1"].value == "Anthropic"
+        assert reread["C1"].hyperlink == "https://anthropic.com"
