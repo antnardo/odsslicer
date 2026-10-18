@@ -7,6 +7,8 @@ version (until 1.0, the API could change between minor versions).
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-10-18
+
 ### Fixed
 
 - **A sheet is indexed by any integer, as numpy is**: `sheet[np.int64(2), 0]`, `sheet[0, Column.B]`
@@ -884,7 +886,8 @@ typed cell values (text, number, percentage, currency, date, time, boolean), for
 repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
-[Unreleased]: https://github.com/antnardo/odsslicer/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/antnardo/odsslicer/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/antnardo/odsslicer/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/antnardo/odsslicer/compare/v0.16.1...v1.0.0
 [0.16.1]: https://github.com/antnardo/odsslicer/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/antnardo/odsslicer/compare/v0.15.1...v0.16.0
