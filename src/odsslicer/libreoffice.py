@@ -1,4 +1,13 @@
-"""Delegating formula recalculation and pivot refresh to a headless LibreOffice."""
+"""Delegating formula recalculation and pivot refresh to a headless LibreOffice.
+
+`recalculate()` is the one use odsslicer makes of LibreOffice. The three
+steps every run of LibreOffice from Python needs are public as well, for code
+that runs LibreOffice for something else - a macro of its own, a
+`--convert-to`: `find_libreoffice()` finds the executable,
+`libreoffice_command()` starts it headless on a profile of its own, and
+`libreoffice_environment()` keeps the caller's Python away from LibreOffice's.
+They were private until 1.0, and their callers imported them all the same.
+"""
 
 import contextlib
 import os
@@ -6,9 +15,18 @@ import shutil
 import signal
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 from .fileutils import _replacement
+
+__all__ = [
+    "LIBREOFFICE_COMMAND",
+    "find_libreoffice",
+    "libreoffice_command",
+    "libreoffice_environment",
+    "recalculate",
+]
 
 # ---------------------------------------------------------------------------
 # LibreOffice integration (see `recalculate()` / `ODSReader.save(recalculate=True)`)
@@ -154,10 +172,14 @@ g_exportedScripts = (recalculate,)
 """
 
 
-def _find_libreoffice() -> str:
+def find_libreoffice() -> str:
     """The LibreOffice executable to run: `LIBREOFFICE_COMMAND[0]` as-is if
-    it's a path that exists or a name found on PATH, else the first usual
-    install location that exists. Raises `FileNotFoundError` otherwise."""
+    it's an absolute path that exists, or the program of that name on PATH,
+    else the first of the usual install locations that exists (the macOS app
+    bundle, `/usr/bin`, `/usr/lib/libreoffice`, `/opt`, snap, Windows'
+    `Program Files`). Raises `FileNotFoundError` otherwise, and for an
+    absolute path that does not exist: an explicit path is never replaced by
+    another LibreOffice."""
     exe = LIBREOFFICE_COMMAND[0]
     if Path(exe).is_absolute():
         # an explicit path is taken at its word - no silent fallback elsewhere
@@ -196,11 +218,57 @@ def _path_without_foreign_pythons(path_value: str) -> str:
     executable removed, and (on POSIX) the standard system directories
     guaranteed present at the end - so the only interpreter LibreOffice's
     prefix discovery can find is the system one its own build links
-    against. See the environment note in `recalculate()`."""
+    against. See `libreoffice_environment()`."""
     keep = [d for d in path_value.split(os.pathsep) if d and not _ships_python(d)]
     if os.name == "posix":
         keep.extend(d for d in _SYSTEM_BIN_DIRS if d not in keep and Path(d).is_dir())
     return os.pathsep.join(keep)
+
+
+# What the calling process's Python leaves in the environment, and must not
+# reach LibreOffice's embedded interpreter
+_PYTHON_VARIABLES = ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "PYTHONPATH", "PYTHONHOME")
+
+
+def libreoffice_command(profile: "str | Path") -> list[str]:
+    """The command starting LibreOffice headless on the user profile in the
+    folder `profile`: the executable `find_libreoffice()` finds, the flags of
+    `LIBREOFFICE_COMMAND[1:]`, and `-env:UserInstallation=` the folder's URL.
+    Append what LibreOffice should do - a script's URL, `--convert-to` and
+    the files.
+
+    A profile of its own keeps the run off the user's LibreOffice profile,
+    and independent of a LibreOffice already open, which would otherwise
+    be handed the command. LibreOffice creates the profile in the folder if
+    it holds none; a folder in a `tempfile.TemporaryDirectory()` makes it a
+    throwaway one. Raises
+    `FileNotFoundError` when no LibreOffice can be found.
+    """
+    url = Path(profile).absolute().as_uri()
+    return [find_libreoffice(), *LIBREOFFICE_COMMAND[1:], f"-env:UserInstallation={url}"]
+
+
+def libreoffice_environment(environ: "Mapping[str, str] | None" = None) -> dict[str, str]:
+    """A copy of `environ` (`os.environ` by default) to start LibreOffice
+    with: without `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `PYTHONPATH` and
+    `PYTHONHOME`, and with a `PATH` that leaves out every folder holding a
+    `python3*` or `python.exe` program, and ends with the system's
+    `/usr/local/bin`, `/usr/bin` and `/bin` on macOS and Linux.
+
+    LibreOffice runs Python scripts through its own embedded Python, which
+    the calling process's must not reach: `PYTHONPATH`, `PYTHONHOME` and the
+    library paths poison it, and (verified on Ubuntu's builds) it derives
+    its prefix by looking `python3` up on `PATH` - a foreign interpreter
+    first on `PATH`, an active venv or GitHub's setup-python toolcache, makes
+    it load an incompatible standard library and crash with
+    `std::bad_alloc`. A run that executes no Python script loses nothing by
+    it.
+    """
+    env = dict(os.environ if environ is None else environ)
+    for variable in _PYTHON_VARIABLES:
+        env.pop(variable, None)
+    env["PATH"] = _path_without_foreign_pythons(env.get("PATH", ""))
+    return env
 
 
 def _run(cmd: list[str], env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
@@ -304,7 +372,8 @@ def recalculate(path: "str | Path", timeout: int = 120, *, update_links: bool = 
     path = Path(path).resolve()
     if not path.exists():
         raise FileNotFoundError(str(path))
-    exe = _find_libreoffice()
+    # first, for a missing LibreOffice to raise before anything is created
+    find_libreoffice()
     with (
         tempfile.TemporaryDirectory(prefix="odsslicer-lo-") as tmp,
         _replacement(path) as output,
@@ -314,26 +383,18 @@ def recalculate(path: "str | Path", timeout: int = 120, *, update_links: bool = 
         scripts = profile / "user" / "Scripts" / "python"
         scripts.mkdir(parents=True)
         (scripts / "odsslicer_recalc.py").write_text(_LIBREOFFICE_RECALC_SCRIPT, encoding="utf-8")
-        base = [exe, *LIBREOFFICE_COMMAND[1:], f"-env:UserInstallation={profile.as_uri()}"]
-        cmd = [*base, "vnd.sun.star.script:odsslicer_recalc.py$recalculate?language=Python&location=user"]
-        env = dict(
-            os.environ,
+        cmd = [
+            *libreoffice_command(profile),
+            "vnd.sun.star.script:odsslicer_recalc.py$recalculate?language=Python&location=user",
+        ]
+        env = libreoffice_environment()
+        env.update(
             ODSSLICER_RECALC_FILE=str(path),
             ODSSLICER_RECALC_OUTPUT=str(output),
             ODSSLICER_RECALC_REPORT=str(report),
             # set either way, so that it is never inherited from the caller
             ODSSLICER_RECALC_UPDATE_LINKS="1" if update_links else "0",
         )
-        # LibreOffice runs the script through its own Python, and the calling
-        # process's Python environment must not leak into it: PYTHONPATH/
-        # PYTHONHOME/LD_LIBRARY_PATH would poison the embedded interpreter,
-        # and (verified on Ubuntu builds) that interpreter derives its prefix
-        # by locating `python3` on PATH - a foreign interpreter first on PATH
-        # (an active venv, GitHub's setup-python toolcache) makes it load an
-        # incompatible stdlib and crash outright with std::bad_alloc.
-        for var in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "PYTHONPATH", "PYTHONHOME"):
-            env.pop(var, None)
-        env["PATH"] = _path_without_foreign_pythons(env.get("PATH", ""))
         unwritten = _signature(output)
         try:
             result = _run(cmd, env, timeout)

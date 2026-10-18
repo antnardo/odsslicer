@@ -16,14 +16,23 @@ import shlex
 import signal
 import stat
 import subprocess
+import tempfile
 import threading
 import time
 import zipfile
+from pathlib import Path
 
 import pytest
 
 from conftest import requires_soffice
-from odsslicer import ODSReader, libreoffice, recalculate
+from odsslicer import (
+    ODSReader,
+    find_libreoffice,
+    libreoffice,
+    libreoffice_command,
+    libreoffice_environment,
+    recalculate,
+)
 
 posix_only = pytest.mark.skipif(
     os.name != "posix", reason="shell scripts, and a process group killed as a whole"
@@ -295,3 +304,123 @@ def test_read_only_workbook_raises_permission_error_before_libreoffice_starts(
     assert not started.exists()
     assert workbook.read_bytes() == before
     assert _names(workbook.parent) == ["workbook.ods"]
+
+
+# ---------------------------------------------------------------------------
+# Running LibreOffice for something else: find_libreoffice,
+# libreoffice_command, libreoffice_environment (public since 1.0)
+# ---------------------------------------------------------------------------
+
+
+def _executable(folder, name="soffice"):
+    folder.mkdir(parents=True, exist_ok=True)
+    program = folder / name
+    program.write_text("#!/bin/sh\n")
+    program.chmod(0o755)
+    return program
+
+
+class TestFindLibreoffice:
+    def test_absolute_path_that_exists_is_returned_as_is(self, tmp_path, monkeypatch):
+        program = _executable(tmp_path / "bin")
+        monkeypatch.setattr(libreoffice, "LIBREOFFICE_COMMAND", [str(program), "--headless"])
+        assert find_libreoffice() == str(program)
+
+    def test_absolute_path_that_does_not_exist_raises_rather_than_fall_back(self, tmp_path, monkeypatch):
+        fallback = _executable(tmp_path / "fallback")
+        monkeypatch.setattr(libreoffice, "_LIBREOFFICE_FALLBACKS", [str(fallback)])
+        monkeypatch.setattr(libreoffice, "LIBREOFFICE_COMMAND", [str(tmp_path / "missing" / "soffice")])
+        with pytest.raises(FileNotFoundError, match="does not exist"):
+            find_libreoffice()
+
+    @posix_only
+    def test_bare_name_is_looked_up_on_path(self, tmp_path, monkeypatch):
+        program = _executable(tmp_path / "bin", "my-soffice")
+        monkeypatch.setenv("PATH", str(program.parent))
+        monkeypatch.setattr(libreoffice, "LIBREOFFICE_COMMAND", ["my-soffice"])
+        assert find_libreoffice() == str(program)
+
+    def test_bare_name_off_path_falls_back_to_the_usual_locations(self, tmp_path, monkeypatch):
+        fallback = _executable(tmp_path / "fallback")
+        monkeypatch.setattr(libreoffice, "_LIBREOFFICE_FALLBACKS", [str(tmp_path / "none"), str(fallback)])
+        monkeypatch.setattr(libreoffice, "LIBREOFFICE_COMMAND", ["definitely-not-a-real-binary-name"])
+        assert find_libreoffice() == str(fallback)
+
+    def test_nothing_found_raises_file_not_found(self, monkeypatch):
+        monkeypatch.setattr(libreoffice, "_LIBREOFFICE_FALLBACKS", [])
+        monkeypatch.setattr(libreoffice, "LIBREOFFICE_COMMAND", ["definitely-not-a-real-binary-name"])
+        with pytest.raises(FileNotFoundError, match="LIBREOFFICE_COMMAND"):
+            find_libreoffice()
+
+
+def test_libreoffice_command_starts_headless_on_the_profile_given(tmp_path, monkeypatch):
+    program = _executable(tmp_path / "bin")
+    monkeypatch.setattr(libreoffice, "LIBREOFFICE_COMMAND", [str(program), "--headless", "--norestore"])
+    monkeypatch.chdir(tmp_path)
+    command = libreoffice_command("profile")  # a relative folder, made absolute
+    assert command == [
+        str(program),
+        "--headless",
+        "--norestore",
+        f"-env:UserInstallation={(tmp_path / 'profile').as_uri()}",
+    ]
+
+
+class TestLibreofficeEnvironment:
+    def _environ(self, tmp_path):
+        venv = _executable(tmp_path / "venv" / "bin", "python3").parent
+        plain = _executable(tmp_path / "tools", "tool").parent
+        environ = {
+            "PATH": os.pathsep.join([str(venv), str(plain)]),
+            "PYTHONPATH": "/somewhere",
+            "PYTHONHOME": "/elsewhere",
+            "LD_LIBRARY_PATH": "/lib/here",
+            "DYLD_LIBRARY_PATH": "/lib/there",
+            "LANG": "fr_FR.UTF-8",
+        }
+        return environ, venv, plain
+
+    def test_python_variables_are_removed_and_the_rest_kept(self, tmp_path):
+        environ, _, _ = self._environ(tmp_path)
+        env = libreoffice_environment(environ)
+        assert {"PYTHONPATH", "PYTHONHOME", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"}.isdisjoint(env)
+        assert env["LANG"] == "fr_FR.UTF-8"
+        assert environ["PYTHONPATH"] == "/somewhere"  # a copy: the mapping given is left as it was
+
+    def test_path_leaves_out_folders_holding_a_python(self, tmp_path):
+        environ, venv, plain = self._environ(tmp_path)
+        folders = libreoffice_environment(environ)["PATH"].split(os.pathsep)
+        assert str(venv) not in folders
+        assert folders[0] == str(plain)
+
+    @posix_only
+    def test_path_ends_with_the_system_folders(self, tmp_path):
+        environ, _, _ = self._environ(tmp_path)
+        folders = libreoffice_environment(environ)["PATH"].split(os.pathsep)
+        system = [d for d in ("/usr/local/bin", "/usr/bin", "/bin") if Path(d).is_dir()]
+        assert folders[-len(system) :] == system
+
+    def test_default_is_a_copy_of_the_process_environment(self, monkeypatch):
+        monkeypatch.setenv("ODSSLICER_TEST_VARIABLE", "kept")
+        monkeypatch.setenv("PYTHONPATH", "/somewhere")
+        env = libreoffice_environment()
+        assert env["ODSSLICER_TEST_VARIABLE"] == "kept"
+        assert "PYTHONPATH" not in env
+        assert os.environ["PYTHONPATH"] == "/somewhere"
+
+
+@requires_soffice
+def test_public_api_runs_libreoffice_for_a_conversion(workbook, tmp_path):
+    # DOCS.md, section 7, "Running LibreOffice yourself", as written there
+    out = tmp_path / "out"
+    with tempfile.TemporaryDirectory() as tmp:
+        command = [
+            *libreoffice_command(Path(tmp) / "profile"),
+            "--convert-to",
+            "csv",
+            "--outdir",
+            str(out),
+            str(workbook),
+        ]
+        subprocess.run(command, env=libreoffice_environment(), check=True, capture_output=True, timeout=120)
+    assert (out / f"{workbook.stem}.csv").read_text(encoding="utf-8").strip()

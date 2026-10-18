@@ -49,6 +49,7 @@ sheet = table.sheet("Sheet1")
    - [Formula references follow structural edits](#formula-references-follow-structural-edits)
 6. [Pivot tables](#6-pivot-tables)
 7. [Recalculating with LibreOffice](#7-recalculating-with-libreoffice)
+   - [Running LibreOffice yourself](#running-libreoffice-yourself)
    - [From the command line](#from-the-command-line)
    - [Which one to use](#which-one-to-use)
    - [References to other workbooks](#references-to-other-workbooks)
@@ -923,6 +924,45 @@ seconds by default), or runs but doesn't save the result (which is how a silentl
 script shows up — e.g. when another LibreOffice instance already owns the profile). When the
 script itself raised, the `RuntimeError` gives its traceback.
 
+### Running LibreOffice yourself
+
+What `recalculate()` does to start LibreOffice is public, for code that runs it for something
+else — a macro of its own, a conversion:
+
+- `find_libreoffice()` returns the executable, found as described above from
+  `LIBREOFFICE_COMMAND[0]`, and raises `FileNotFoundError` if there is none;
+- `libreoffice_command(profile)` returns the command starting it headless on a user profile of
+  its own, in the folder `profile`: the executable, the flags of `LIBREOFFICE_COMMAND[1:]`, and
+  `-env:UserInstallation=` the folder's URL. LibreOffice creates the profile if the folder holds
+  none. Append what it should do;
+- `libreoffice_environment(environ=None)` returns a copy of `environ` (`os.environ` by default)
+  shielded as described above: without `PYTHONPATH`, `PYTHONHOME`, `LD_LIBRARY_PATH` and
+  `DYLD_LIBRARY_PATH`, and with a `PATH` that leaves out every folder holding a `python3`, and
+  ends with the system's `/usr/local/bin`, `/usr/bin` and `/bin` on macOS and Linux.
+
+```python
+import subprocess
+import tempfile
+from pathlib import Path
+
+from odsslicer import libreoffice_command, libreoffice_environment
+
+with tempfile.TemporaryDirectory() as tmp:          # a throwaway profile
+    command = [*libreoffice_command(Path(tmp) / "profile"),
+               "--convert-to", "csv", "--outdir", "csv", "workbook.ods"]
+    subprocess.run(command, env=libreoffice_environment(), check=True, timeout=120)
+```
+
+A Python macro of your own runs as `recalculate()` runs its: written into the profile's
+`user/Scripts/python` folder before LibreOffice starts, and named on the command line by its URL,
+`vnd.sun.star.script:<file>.py$<function>?language=Python&location=user`. It takes no
+arguments: pass them in variables of the environment `libreoffice_environment()` returns.
+`soffice` exits with status 0 even when the macro raises, or does not run: have the macro write
+a report to a file, and read it. And on a timeout, `subprocess.run()` kills the process it
+started, on some installs a wrapper script (Homebrew's `soffice` is one), not LibreOffice: start
+it in a session of its own (`start_new_session=True`) and kill its process group, as
+`recalculate()` does.
+
 ### From the command line
 
 LibreOffice's own command line does a similar round trip without Python: `--convert-to` loads
@@ -1528,6 +1568,10 @@ steps 4 and 6, and the audit before 1.0):
   saying what is wrong, where `Sheet.address` raised it without a message, raised `TypeError` on
   `"A1:B"`, and read `"A:B1"` as `"A:B"` and `"A0"` as the cell in
   column A of the last row.
+- **Running LibreOffice is public**: `find_libreoffice()`, `libreoffice_command(profile)` and
+  `libreoffice_environment()` (see [Running LibreOffice yourself](#running-libreoffice-yourself))
+  replace the private `_find_libreoffice` and `_path_without_foreign_pythons` code outside
+  odsslicer had to call to start LibreOffice as `recalculate()` does.
 - **Flags are passed by name.** Every boolean parameter of the public API is keyword-only, and
   so is every parameter after one: `ODSReader(path, verbose=True)`, `ODSReader.new(verbose=True)`,
   `save(path, recalculate=True, timeout=60, update_links=True)`, `export_content_xml(pretty=False)`,
@@ -1587,6 +1631,19 @@ steps 4 and 6, and the audit before 1.0):
 
 What code written for 0.x has to change, break by break - nothing, if it uses only the high-level
 API. Each pair below is the 0.x line, then its 1.0 equivalent.
+
+**Running LibreOffice** goes through public functions:
+
+```python
+from odsslicer.libreoffice import LIBREOFFICE_COMMAND, _find_libreoffice, _path_without_foreign_pythons
+command = [_find_libreoffice(), *LIBREOFFICE_COMMAND[1:], f"-env:UserInstallation={profile.as_uri()}"]
+env = dict(os.environ)                                          # 0.x, then popping the Python
+env["PATH"] = _path_without_foreign_pythons(env.get("PATH", ""))   # variables one by one
+
+from odsslicer import libreoffice_command, libreoffice_environment
+command = libreoffice_command(profile)                          # 1.0
+env = libreoffice_environment()
+```
 
 **Flags by position** raise `TypeError`: name them.
 

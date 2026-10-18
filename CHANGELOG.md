@@ -14,6 +14,15 @@ no duplicate accessors on `Sheet`; flags passed by name. What indexing a sheet, 
 underneath and those few names; DOCS.md, section 15, gives the 1.0 equivalent of each 0.x line
 ("Upgrading from 0.x"). From 1.0 on, a breaking change waits for the next major version.
 
+### Added
+
+- **`find_libreoffice()`, `libreoffice_command(profile)` and `libreoffice_environment()`**: how
+  `recalculate()` starts LibreOffice, for code that runs it for something else - the executable,
+  the headless command on a profile of its own, and the environment without the caller's Python
+  in it. Code outside odsslicer called the private `_find_libreoffice` and
+  `_path_without_foreign_pythons` for that. `recalculate()` uses them itself (DOCS.md, "Running
+  LibreOffice yourself").
+
 ### Removed
 
 - **BeautifulSoup is no longer a dependency**; `lxml` 5.0 or later is. Code that imports `bs4`

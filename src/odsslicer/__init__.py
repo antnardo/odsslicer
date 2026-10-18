@@ -13,7 +13,8 @@
 `Cell`, or an `ArrayValues` of them for a range. Styles, number formats,
 comments and the document's properties are read and written through the
 classes below. odsslicer has no calculation engine: `recalculate` hands a
-file to a local LibreOffice.
+file to a local LibreOffice, and `find_libreoffice`, `libreoffice_command`
+and `libreoffice_environment` let other code run it the same way.
 
 Everything public is importable from here, and the submodules are the
 implementation, but for `xmltree`: its `qn` spells the namespaced names to
@@ -25,7 +26,13 @@ an example.
 from .addresses import string_address, string_to_col
 from .cell import ArrayValues, Cell, Comment
 from .constants import FORMATS
-from .libreoffice import LIBREOFFICE_COMMAND, recalculate
+from .libreoffice import (
+    LIBREOFFICE_COMMAND,
+    find_libreoffice,
+    libreoffice_command,
+    libreoffice_environment,
+    recalculate,
+)
 from .properties import DocumentProperties
 from .reader import EncryptedDocumentError, MalformedDocumentError, ODSReader
 from .sheet import Sheet
@@ -48,6 +55,9 @@ __all__ = [
     "RowStyle",
     "Sheet",
     "TableStyle",
+    "find_libreoffice",
+    "libreoffice_command",
+    "libreoffice_environment",
     "recalculate",
     "string_address",
     "string_to_col",
