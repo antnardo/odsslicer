@@ -1,5 +1,10 @@
-"""Low-level XML helpers built on `xmltree`: reading the manifest, and the
-style helpers the modules share."""
+"""Three helpers on parsed XML that the package, the catalog and the
+style views share, kept apart from `xmltree` because they know about ODF
+documents rather than about lxml: which parts a manifest declares
+encrypted, the properties child of a style, and whether a style name is
+one odsslicer made for a single owner.
+
+Nothing here is public (`__all__` is empty)."""
 
 import re
 

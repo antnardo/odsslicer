@@ -1,5 +1,29 @@
-"""ODF formula machinery: friendly <-> ODF syntax translation, reference
-shifting for fills/copies/deletions/renames, {r}/{c} templating."""
+"""Formulas as text: translated between the ordinary syntax a user writes
+(`=SUM(A1:B3, Sheet2.C1)`) and ODF's (`of:=SUM([.A1:.B3]; [Sheet2.C1])`),
+their references shifted by a fill or a copy, remapped after rows or
+columns are inserted or deleted, renamed after a sheet is, and `{r}`/`{c}`
+templates expanded per cell.
+
+Regular expressions over the formula, not a parser of OpenFormula: what
+odsslicer rewrites is references, and a reference is a bracketed
+`[Sheet.A1:.B3]` in ODF syntax, which no other part of a formula can be
+mistaken for - string literals aside, which every pass splits off first.
+A parser would also have to know every function and operator the
+formulas of real files use, for none of which odsslicer has a use. The
+other direction, ordinary syntax into ODF's, has no brackets to go by: a
+reference is recognised by its shape, a function name like `LOG10(` told
+apart by the parenthesis after it, and a formula already holding a `[` is
+taken as ODF syntax and left alone - the escape hatch for what the
+translation does not cover. A template's placeholder is evaluated as a
+Python expression restricted to arithmetic on `r` and `c`, checked node by
+node before it runs.
+
+A structural edit and a renaming reach every formula of the document:
+`references` applies these functions to them, and `drawings` to the ranges
+charts and shapes hold (`_remap_range_list`). Nothing here is public
+(`__all__` is empty): its API is `Cell.formula`, `Cell.formula_friendly`
+and `Cell.fill_formula`, and the edits that keep formulas pointing at their
+cells."""
 
 import ast
 import bisect

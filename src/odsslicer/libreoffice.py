@@ -1,12 +1,28 @@
 """Delegating formula recalculation and pivot refresh to a headless LibreOffice.
 
-`recalculate()` is the one use odsslicer makes of LibreOffice. The three
-steps every run of LibreOffice from Python needs are public as well, for code
-that runs LibreOffice for something else - a macro of its own, a
-`--convert-to`: `find_libreoffice()` finds the executable,
+odsslicer has no calculation engine: it writes formulas and pivot table
+definitions and leaves computing them to a real spreadsheet application.
+`recalculate()` - `ODSReader.save(recalculate=True)` - hands the saved file
+to a local LibreOffice, run headless, and is the one use odsslicer makes of
+it. The three steps every run of LibreOffice from Python needs are public as
+well, for code that runs LibreOffice for something else - a macro of its
+own, a `--convert-to`: `find_libreoffice()` finds the executable,
 `libreoffice_command()` starts it headless on a profile of its own, and
-`libreoffice_environment()` keeps the caller's Python away from LibreOffice's.
-They were private until 1.0, and their callers imported them all the same.
+`libreoffice_environment()` keeps the caller's Python away from
+LibreOffice's. They were private until 1.0, and their callers imported them
+all the same.
+
+`LIBREOFFICE_COMMAND` is the executable and the flags every headless run
+gets; a throwaway user profile and the script are appended per call. Set
+its first element where `soffice` is not on the PATH, or to run a
+particular build:
+
+    import odsslicer
+    odsslicer.LIBREOFFICE_COMMAND[0] = "/opt/libreoffice/program/soffice"
+
+Each run gets a throwaway profile of its own: it keeps the run off the
+user's LibreOffice profile, and independent of a LibreOffice already open,
+which would otherwise be handed the command.
 """
 
 import contextlib
@@ -28,21 +44,7 @@ __all__ = [
     "recalculate",
 ]
 
-# ---------------------------------------------------------------------------
-# LibreOffice integration (see `recalculate()` / `ODSReader.save(recalculate=True)`)
-#
-# odsslicer itself has no calculation engine: it writes formulas and pivot
-# table *definitions* and leaves computing them to a real spreadsheet
-# application. `recalculate()` delegates exactly that to a local LibreOffice,
-# run headless. Override this list if `soffice` isn't on your PATH (or you
-# want a specific build), e.g.:
-#
-#     import odsslicer
-#     odsslicer.LIBREOFFICE_COMMAND[0] = "/opt/libreoffice/program/soffice"
-#
-# The first element is the executable; the rest are the flags every headless
-# run gets. A throwaway user profile and the script URL are appended per call.
-# ---------------------------------------------------------------------------
+# the executable, then the flags of every headless run (see the module's docstring)
 LIBREOFFICE_COMMAND = ["soffice", "--headless", "--norestore", "--nologo", "--nodefault"]
 
 # Where to look for the executable when LIBREOFFICE_COMMAND[0] is a bare name

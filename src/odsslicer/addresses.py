@@ -1,5 +1,14 @@
-"""Spreadsheet address arithmetic: bijective base-26 column letters <-> 0-indexed columns,
-and the text addresses `sheet[...]` accepts ("A1", "A1:B3", "A:B", "1:2") <-> indexes and slices."""
+"""Spreadsheet addresses: column letters and column numbers, and the text
+addresses `sheet[...]` accepts ("A1", "A1:B3", "A:B", "1:2") read as the
+indexes and slices it takes.
+
+Columns are numbered in bijective base 26 - "Z" is followed by "AA", there
+is no digit zero - which is why `string_to_col` and `string_address` are
+not a plain change of base. `string_address` and `string_to_col` are public,
+exported by the package; `_parse_address` is what indexing a sheet with
+text calls, and raises `ValueError` saying what is wrong with an address,
+where `Sheet.address`, until 1.0, misread some and raised without a
+message."""
 
 import re
 from typing import Any

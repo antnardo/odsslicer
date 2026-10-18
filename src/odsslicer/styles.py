@@ -3,10 +3,20 @@
 # guarded by runtime checks mypy can't see through - silencing that one error
 # class here beats dozens of value-free asserts/casts. Every other error
 # class, and all signatures, remain fully checked.)
-"""Resolved ODF styles: Border, CellStyle, RowStyle, ColumnStyle, TableStyle -
-views of the style elements behind a cell, a row, a column or a sheet, read
-and written through. The number formats a cell style names are
-`numberformat`'s."""
+"""Resolved ODF styles: `Border`, `CellStyle`, `RowStyle`, `ColumnStyle`,
+`TableStyle` - views of the style elements behind a cell, a row, a column
+or a sheet, read and written through.
+
+A view holds no state: each property is declared once (`_StyleProperty`)
+and read from the XML on every access, walking the style's inheritance
+chain to the nearest style that sets it, and the style it starts from is
+the one its owner names now. Until 1.0 a view resolved every property when
+it was made and kept the copy, which a write through another view of the
+same style left behind (ROADMAP.md, audit part B1). A write goes to the
+owner's own style, forked by the catalog the first time something writes
+through a style the owner shares, so that changing one cell's look never
+changes another's. The number formats a cell style names are
+`numberformat`'s, and the text a written value shows is `display`'s."""
 
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Protocol, TypeVar, cast, overload

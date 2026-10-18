@@ -1,12 +1,14 @@
-"""DocumentProperties: structured, writable access to meta.xml.
+"""DocumentProperties: the document's metadata in `meta.xml` - title,
+subject, description, authors, keywords, the generator, and the
+user-defined fields with their types - read and written in place.
 
-The first module on lxml alone (see `xmltree`), as the feasibility study's
-prototype: `meta.xml` is read by nothing else, so its tree changes library
-with this module and with the two lines of `ODSReader` that parse and
-serialise it - a module moves with the part it reads, not on its own.
-
-Elements are looked for among the children of `<office:meta>`, where ODF
-puts them, rather than anywhere below it as bs4's `find` did."""
+`meta.xml` is read by nothing else, which is why its view can stand alone
+over the part's tree: `ODSReader.properties` makes one, and `save()` writes
+`meta.xml` from that tree. It was the first module on lxml, the prototype
+of the migration (ROADMAP.md). Elements are looked for among the children
+of `<office:meta>`, where ODF puts them, rather than anywhere below it as
+bs4's `find` did; a field set to `None` is removed rather than written
+empty."""
 
 import datetime as dt
 from typing import TYPE_CHECKING

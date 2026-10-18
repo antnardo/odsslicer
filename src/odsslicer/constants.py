@@ -1,6 +1,15 @@
-"""Shared constants: ODF cell-type conversions, the cell element names, the
-blank cell a position past the sheet reads from, and the thresholds past which
-`Sheet.load` leaves the trailing filler of a sheet out of its grid."""
+"""What several modules read alike: how a cell's value attribute reads
+by `office:value-type` (`FORMATS`), the names of the elements that are
+cells, the blank cell a position past the sheet reads from, and the
+thresholds past which the loader leaves the padding of a sheet out of its
+grid.
+
+They live together because they sit below everything else - `loading`,
+`gridxml`, `cell` and `sheet` import them, and this imports nothing of the
+package but `datetimes` and `xmltree` - not because they are of one kind.
+`FORMATS` alone is public, exported by the package; the other names are
+the package's own, kept unprefixed from the time it was one module and
+listed by no `__all__`: they stopped being exported at 1.0."""
 
 from collections.abc import Callable
 from typing import Any
