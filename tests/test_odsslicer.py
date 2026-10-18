@@ -965,6 +965,24 @@ def test_write_unsupported_type_raises_typeerror(writable_reader):
         s["A1"].value = Foo()
 
 
+def test_write_unsupported_type_leaves_the_cell_as_it_was(writable_reader):
+    # regression: it raised once the cell had lost its value attributes
+    s = writable_reader.sheet("Sheet1")
+    s["A1"].value = 3.0
+    with pytest.raises(TypeError):
+        s["A1"].value = [1, 2]
+    assert (s["A1"].value, s["A1"].cell.get(qn("office:value"))) == (3.0, "3.0")
+
+
+def test_write_unsupported_type_past_the_sheet_leaves_it_its_size(writable_reader):
+    # regression: the sheet grew to the cell before the value was refused
+    s = writable_reader.sheet("Sheet1")
+    size = s.size
+    with pytest.raises(TypeError):
+        s[s.n_rows + 5, s.n_cols + 5].value = object()
+    assert s.size == size
+
+
 # ---------------------------------------------------------------------------
 # Values from numpy - and so pandas - or a database (issue #11): written as
 # the value they stand for, as Python types; NaN is a missing value
@@ -5114,6 +5132,14 @@ def test_table_style_write_forks_and_reuses(writable_reader):
     assert s.style.name == forked_name  # reused, not re-forked
     assert s.style.tab_color == "#123456"  # carried over
     assert s.style.visible is False
+
+
+def test_stylename_after_a_table_style_write_names_the_fork(writable_reader):
+    # regression: a copy taken on loading, which named the style the sheet
+    # had before its own was forked
+    s = writable_reader.sheet("Sheet1")
+    s.style.tab_color = "#123456"
+    assert s.stylename == s.style.name == s.table.get(qn("table:style-name"))
 
 
 def test_style_write_without_owner_raises_for_row_column_table():
