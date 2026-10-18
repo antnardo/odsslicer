@@ -335,8 +335,10 @@ propriétés obscures, peu utilisées, et le paquet n'a pas d'utilisateurs à m�
 **Où en est-on : la 1.0 se termine par un audit de son API publique, avant de la figer.** Les six
 étapes du plan sont faites, sur `claude/lxml-study`, la branche de la 1.0. L'audit avant la 1.0
 (section du même nom, plus bas) se fait par parties, chacune dans une branche partie de la 1.0 :
-**la partie A, l'API publique, est faite** sur `claude/audit-a`, à relire et fusionner dans
-`claude/lxml-study`. **Prochaine : B1, `CellStyle` sans état double.**
+**la partie A, l'API publique, est faite** sur `claude/audit-a`, et **la partie B1, les styles
+sans état double**, sur `claude/audit-b1` : toutes deux à relire et fusionner dans
+`claude/lxml-study`. **Prochaine : B2–B5, le découpage de ce qui est trop long** — `Sheet`,
+`Cell`, `ODSReader`, et les fonctions longues.
 
 **Ce qui reste à décider pour publier** :
 
@@ -935,7 +937,43 @@ deux côtés).
 `string_address`, `sheet.address` dans `overall_export.py`, `capacities.py`, `roster.py`),
 sncf-ods (`Sheet.string_address`).
 
-**Partie B1 — `CellStyle` sans état double** : la prochaine.
+**Partie B1 — les styles sans état double : faite le 2026-10-18** (`claude/audit-b1`, à relire
+et fusionner). `CellStyle` recopiait chaque propriété résolue dans un attribut à sa création, et
+chaque setter écrivait le XML puis sa copie : deux vues d'un même style divergeaient dès que
+l'une écrivait (`a = cell.style; b = cell.style; b.bold = True` laissait `a.bold` à `False`).
+Corrigé en simplifiant :
+
+1. *Une propriété, une déclaration* : `_StyleProperty` (élément de propriétés, attribut,
+   lecture, écriture), lue à chaque accès en remontant la chaîne d'héritage, paresseusement
+   (elle s'arrête au style le plus proche qui la pose) ; écrite par `_write_attrs`, sur le style
+   propre de la cellule comme avant. Vingt propriétés de `CellStyle` le sont ainsi ; les quatre
+   côtés de bordure sont des `_BorderSide`, résolus et écrits en bloc (`_borders`,
+   `_write_border_sides`) ; `underline` (trois attributs), `superscript`/`subscript`,
+   `number_format`, `cell_properties`/`text_properties` sont des propriétés qui lisent le XML.
+   Plus aucun état dans `__init__` : une vue de cellule lit sur la cellule le nom de son style
+   (elle suit donc un fork fait par une autre vue) et sa valeur (un format conditionnel se
+   résout contre la valeur actuelle).
+2. *`RowStyle`, `ColumnStyle`, `TableStyle`* recopiaient de même : ils partagent
+   `_SheetPartStyle`, qui lit le style que pointe maintenant leur ligne, colonne ou feuille
+   (`Sheet._row_style_tag`, `_column_style_tag`, `_table_style_tag`).
+3. *Docstrings* sur chaque propriété (`help(CellStyle)`), et `tests/test_styles.py` : le défaut,
+   puis pour chaque propriété « une vue écrit, une autre lit » (42 tests, tous en échec sur
+   l'ancien code).
+
+Vitesse : une vue lisant trois propriétés (`bold`, `background_color`, `number_format`) sur
+10 000 cellules coûte environ deux fois plus (0,50 → 1,04 s sur un classeur synthétique,
+1,7 → 3,0 s sur NotesReference.ods) : la chaîne se parcourt à chaque propriété, et la recherche
+d'un style par son nom est linéaire ; une vue par propriété (`cell.style.bold`, l'usage courant)
+coûte moins (1,49 → 1,06 s ; 5,1 → 3,0 s). La recherche (`_find_in_styles`) est passée d'un
+`all()` sur un générateur à une boucle, un tiers de moins. L'ouverture ne change pas
+(`time_open.py`, 9,3 ms des deux côtés). Un index des styles par nom rendrait la lecture bien
+plus rapide, mais ce serait un cache à tenir à jour : écarté.
+
+Vérifié : pytest (1 429 tests, suite LibreOffice comprise), mypy, ruff, `mutate_layers.py` et
+`mutate_flags.py` entièrement attrapées ; balayage de 250 vrais fichiers contre
+`claude/lxml-study` à zéro partout (4 illisibles des deux côtés), `edit_parts.py` sans écart sur
+les fixtures, et toutes les propriétés de style lues sur 88 503 cellules de 69 fichiers
+identiques entre les deux versions.
 
 ### À décider
 
