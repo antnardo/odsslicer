@@ -62,6 +62,10 @@ underneath and those few names; DOCS.md, section 15, gives the 1.0 equivalent of
 - **`Sheet.create_pivot_table(source, target, *, rows, columns, values, name)`**: the fields
   and the name are keyword-only. `create_pivot_table("A1:C5", "E1", ["Category"], None,
   {"Amount": "sum"})` raises `TypeError`; write `rows=["Category"], values={"Amount": "sum"}`.
+- **`Sheet.name` is a read-only property** reading the sheet's `table:name`, where it was an
+  attribute copied on loading that `ODSReader.rename_sheet` updated. `sheet.name = "New"`, which
+  renamed the object and not the file, raises `AttributeError` saying to call
+  `reader.rename_sheet(old, new)`.
 - **The escape hatches to the XML are lxml trees and elements**: `reader.data`,
   `reader.styles_data`, `reader.meta_data` and `reader.settings_data` are
   `lxml.etree._ElementTree`s, `reader.tables` a list of elements, `sheet.table` and `cell.cell`

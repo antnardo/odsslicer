@@ -6729,6 +6729,25 @@ def test_rename_sheet_updates_an_already_constructed_sheet_object(writable_reade
     assert r.sheet("Renamed") is s
 
 
+def test_sheet_name_follows_every_rename_sheet(writable_reader):
+    # the name is read on the sheet's element, no copy to keep up to date
+    r = writable_reader
+    s = r.sheet("Sheet1")
+    r.rename_sheet("Sheet1", "First")
+    r.rename_sheet("First", "Second")
+    assert s.name == s.table.get(qn("table:name")) == "Second"
+    assert "name='Second'" in repr(s)
+    assert r.sheet("Second") is s
+
+
+def test_assigning_sheet_name_raises_attribute_error_naming_rename_sheet(writable_reader):
+    s = writable_reader.sheet("Sheet1")
+    with pytest.raises(AttributeError, match=r"rename_sheet\('Sheet1', 'Other'\)"):
+        s.name = "Other"
+    assert s.name == "Sheet1"
+    assert writable_reader.sheets_names[0] == "Sheet1"
+
+
 def test_rename_sheet_updates_cross_sheet_formula_references(writable_reader):
     r = writable_reader
     s2 = r.sheet("Sheet2Repeat")

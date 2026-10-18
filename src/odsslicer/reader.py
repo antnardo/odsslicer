@@ -356,10 +356,8 @@ class ODSReader:
         idx = self.sheets_names.index(old_name)
         self.tables[idx].set(qn("table:name"), new_name)
         self.sheets_names[idx] = new_name
-        sheet_obj = self._sheets.pop(old_name, None)
-        if sheet_obj is not None:
-            sheet_obj.name = new_name
-        self._sheets[new_name] = sheet_obj
+        # a loaded sheet reads its name on its element, renamed above
+        self._sheets[new_name] = self._sheets.pop(old_name, None)
 
         references.rename(old_name, new_name)
 

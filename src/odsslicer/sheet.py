@@ -31,7 +31,7 @@ and a sheet's grid is never in two places.
 
 import logging
 from collections.abc import Iterable, Iterator
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from lxml import etree
 
@@ -58,6 +58,8 @@ __all__ = ["Sheet"]
 
 logger = logging.getLogger("odsslicer")
 
+_TABLE_NAME = qn("table:name")
+
 
 class Sheet:
     def __init__(
@@ -69,7 +71,6 @@ class Sheet:
         self._log_level = logging.INFO if verbose else logging.DEBUG
         self.reader = reader
         self.table: etree._Element = table
-        self.name: str = cast(str, table.attrib[qn("table:name")])
         self.rows = self.load(table)
         if len(self.rows) > 0:
             rows_len = [len(row) for row in self.rows]
@@ -79,6 +80,22 @@ class Sheet:
         else:
             self.n_rows, self.n_cols = 0, 0
         logger.log(self._log_level, "    %r", self)
+
+    @property
+    def name(self) -> str:
+        """The sheet's name, its `table:name` - read from the element, where
+        it used to be a copy taken on loading, which `ODSReader.rename_sheet`
+        had to keep up to date. Renamed through `rename_sheet` alone, which
+        also rewrites the formulas and charts that name the sheet."""
+        return cast(str, self.table.get(_TABLE_NAME))
+
+    @name.setter
+    def name(self, value: NoReturn) -> NoReturn:
+        # typed NoReturn, so that a type checker rejects the assignment too
+        raise AttributeError(
+            f"a sheet is renamed by reader.rename_sheet({self.name!r}, {value!r}), "
+            "which also rewrites the formulas and charts that name it"
+        )
 
     @property
     def size(self) -> "tuple[int, int]":

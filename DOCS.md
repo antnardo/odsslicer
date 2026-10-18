@@ -1601,6 +1601,11 @@ steps 4 and 6, and the audit before 1.0):
 - **`Sheet.create_pivot_table` takes its fields by name**: `rows`, `columns`, `values` and `name`
   are keyword-only, after `source` and `target`. Four lists and a dict in a row said nothing of
   which was which at the call.
+- **`Sheet.name` is read from the sheet's element** (`table:name`), as `Sheet.stylename` and
+  `Sheet.size` are: it was a copy taken on loading, which `ODSReader.rename_sheet` kept up to
+  date. It cannot be assigned: `sheet.name = "New"` raises `AttributeError`, saying to call
+  `rename_sheet`, which also rewrites the formulas and charts that name the sheet - assigning
+  the copy renamed nothing in the file.
 - **`Cell.attrs` and `Sheet.attrs` are removed.** They were the element's own attribute
   dictionary, with the file's prefixed keys, and writing to them bypassed everything the library
   keeps consistent. Their one common use has a property of its own: `cell.attrs.get("table:style-name")`
@@ -1716,6 +1721,14 @@ they raise `TypeError`:
 sheet.create_pivot_table("A1:C5", "E1", ["Category"], ["Region"], {"Amount": "sum"})   # 0.x
 sheet.create_pivot_table("A1:C5", "E1", rows=["Category"], columns=["Region"],
                          values={"Amount": "sum"})                                   # 1.0
+```
+
+**`Sheet.name`** is read only; rename a sheet through its reader:
+
+```python
+sheet.name = "Totals"                       # 0.x: the Sheet object's copy alone, not the file
+reader.rename_sheet(sheet.name, "Totals")   # 1.0, and 0.x: the file, its formulas and charts
+sheet.name                                  # "Totals"
 ```
 
 **`Cell.attrs` and `Sheet.attrs`.** What they were read for has a property:
