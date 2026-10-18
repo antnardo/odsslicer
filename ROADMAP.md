@@ -332,15 +332,13 @@ propriétés obscures, peu utilisées, et le paquet n'a pas d'utilisateurs à m�
 
 ### Pour démarrer (état au 2026-10-18)
 
-**Où en est-on : la 1.0 se termine par un audit de son API publique, avant de la figer.** Les six
-étapes du plan sont faites, sur `claude/lxml-study`, la branche de la 1.0. L'audit avant la 1.0
-(section du même nom, plus bas) se fait par parties, chacune dans une branche partie de la 1.0 :
-**la partie A, l'API publique**, et **la partie B1, les styles sans état double**, sont dans
-`claude/lxml-study` ; **les parties B2–B5, le découpage de ce qui était trop long** (`Sheet`,
-`Cell`, `ODSReader`, les fonctions longues), sont faites sur `claude/audit-b2`, à relire et
-fusionner. **Prochaine : la partie C**, sur ce découpage — les tests répartis en un fichier par
-module, `__all__` dans les modules qui n'en déclarent pas encore, les docstrings minces des
-modules que B2–B5 n'ont pas touchés.
+**Où en est-on : la 1.0 est prête à publier.** Les six étapes du plan sont faites, sur
+`claude/lxml-study`, la branche de la 1.0, et l'audit avant la 1.0 (section du même nom, plus
+bas) aussi, par parties : **A, l'API publique**, **B1, les styles sans état double**, et **B2–B5,
+le découpage de ce qui était trop long**, sont dans `claude/lxml-study` ; **les trois ruptures
+que B2–B5 proposaient et la partie C, les conventions**, sont faites sur `claude/audit-c`, à
+relire et fusionner. Il ne reste que des décisions, ci-dessous, et la migration des projets de
+l'auteur.
 
 **Ce qui reste à décider pour publier** :
 
@@ -358,15 +356,12 @@ modules que B2–B5 n'ont pas touchés.
   compta, devoir_utils, copiedouble et sncf-ods (la liste est dans « Audit avant la 1.0 »). Les
   migrer, puis, avant de monter `~/Envs/main` en 1.0, relancer leurs suites contre elle
   (`uv run --frozen --with 'odsslicer==1.0.0'`).
-- **Ce que B2–B5 proposent de casser, sans l'avoir fait** (la 1.0 est le moment) :
-  `NumberFormat.create` garde ses 9 paramètres, que `_NumberFormatSpec` regroupe déjà en
-  interne — la spécification pourrait devenir publique, `NumberFormat.create(reader, spec)` ;
-  `Sheet.create_pivot_table` garde les 6 siens — `rows`, `columns`, `values`, `name` pourraient
-  devenir nommés obligatoires, ou un `PivotFields` public ; `Sheet.name` est encore une copie de
-  `table:name`, que `rename_sheet` tient à jour des deux côtés — une propriété comme `stylename`
-  la supprimerait, mais `sheet.name = ...` lèverait. Changé sans rupture : `Sheet.size`,
-  `Sheet.stylename`, et les octets des parties sur `ODSReader` (`content`, `styles`…) sont des
-  propriétés en lecture seule.
+- **Les projets de l'auteur, après la publication** : compta, copiedouble, devoir_utils et
+  sncf-ods, chacun à migrer de son côté, puis à verrouiller sur la 1.0.0 — les ruptures qui
+  touchent chacun sont dans « Audit avant la 1.0 », partie A, et sncf-ods appelle aussi trois
+  fois `NumberFormat.create` (`src/sncf_ods/classeur.py`, `_format`), à écrire
+  `NumberFormat.create(lecteur, NumberFormatSpec(...))`. Aucun n'assigne `sheet.name` ni ne
+  passe les champs d'un tableau croisé par position.
 
 **Ce qui vient après la 1.0** : les autres pistes de cette feuille de route, aucune n'attendant
 plus la bascule — les plages nommées et les références 3D dans la syntaxe des formules
@@ -396,8 +391,9 @@ src tests benchmarks`, ruff 0.16.x épinglé), sinon le job `lint` échoue.
 
 - **Jamais d'insertion par indice en lxml** : `insert(i)` et `index()` y parcourent la liste. Tout
   `sheet.py` place désormais à côté d'un élément connu (`_insert_chain`, `insert_before`) ; des
-  tests l'enregistrent (`positional`, dans `tests/test_odsslicer.py`), quatre mutations le
-  vérifient.
+  tests l'enregistrent (la fixture `positional`, dans `tests/conftest.py`, et ses tests dans
+  `test_growth.py`, `test_structure.py`, `test_unrolling.py`, `test_columns.py`), quatre
+  mutations le vérifient.
 - **Un élément sans enfant est faux en lxml** : jamais `a or b` entre deux éléments, toujours
   `is None` (`xmltree.child` le rappelle). Trois sites l'avaient (`NumberFormat`,
   `_find_in_styles`, `_new_text_paragraph`), les deux premiers gardés par une mutation ; la suite
@@ -1054,8 +1050,9 @@ Fonctions raccourcies (B5), complexité ruff avant → après (`C901`, `PLR0912`
 table des attributs de valeur par type) ; `_plain_value` 12 → sa part numpy à part ;
 `xmltree.set_paragraph_text` 12 → `_encoded_whitespace`, `_write_after` ; les 6 paramètres de
 `_normalize_row_width` → un `_RowMeasure` figé, ceux de `styles._flag` → 5 (`_line` pour le
-barré). Restent les signatures publiques de `NumberFormat.create` (9) et
-`Sheet.create_pivot_table` (6) : voir « Ce qui reste à décider ».
+barré). Restaient les signatures publiques de `NumberFormat.create` (9) et
+`Sheet.create_pivot_table` (6) : changées ensuite, avec `Sheet.name`, sur `claude/audit-c`
+(ci-dessous).
 
 Vitesse, contre `claude/lxml-study`, en alternant les versions : `bench.py` à 10 000 et
 100 000 lignes, deux tours, sans écart mesurable (chargement de la feuille 93–97 ms contre
@@ -1077,6 +1074,62 @@ erreurs nouvelles (4 illisibles des deux côtés) ; `edit_parts.py` sans écart 
 fixtures (48 éditions) et sur les 614 fichiers du corpus de LibreOffice (3 366 éditions, 59 777
 parties identiques à l'octet, 24 erreurs identiques des deux côtés, un fichier au-delà de
 `--timeout 120`).
+
+**Les trois ruptures que B2–B5 proposaient, et la partie C — les conventions : faites le
+2026-10-18** (`claude/audit-c`, un commit par point, à relire et fusionner ; ne casse rien
+d'autre).
+
+Les ruptures, validées par l'auteur, chacune dans le CHANGELOG et dans DOCS.md, section 15
+(« Upgrading from 0.x ») :
+
+1. *`NumberFormat.create(reader, spec)`* : `NumberFormatSpec`, la spécification interne
+   devenue publique et exportée, remplace les neuf paramètres ; figée, vérifiée à sa création,
+   hachable, `components` gardé en tuple mais accepté en liste. L'appel de la 0.x lève
+   `TypeError`, qui, sur la famille seule, dit d'écrire `NumberFormatSpec(...)`.
+2. *`Sheet.create_pivot_table(source, target, *, rows, columns, values, name)`* : les champs
+   et le nom, nommés obligatoires.
+3. *`Sheet.name`* lit `table:name` sur l'élément de la feuille : c'était une copie, que
+   `rename_sheet` tenait à jour ; `sheet.name = ...` lève `AttributeError` en renvoyant vers
+   `rename_sheet` (le setter est typé `NoReturn`, que mypy refuse aussi).
+
+La partie C, en conventions de CLAUDE.md :
+
+1. *`__all__` partout* : `constants` (`FORMATS` seul), `properties` (`DocumentProperties`),
+   et vide dans `datetimes`, `dateformats`, `datenames`, `formulas`, `xmlutils` ; chaque module
+   à `__all__` vide le dit dans sa docstring. `tests/test_imports.py` vérifie que tout module
+   en déclare un, sans nom privé, et que le paquet exporte les noms publics de chacun (sauf
+   `xmltree`).
+2. *Docstrings de module* réécrites pour dire le pourquoi : `constants`, `formulas` (des
+   expressions régulières sur les références plutôt qu'un analyseur d'OpenFormula),
+   `xmlutils`, `addresses`, `styles` (des vues sans état), `properties`, `libreoffice`
+   (l'exemple de `LIBREOFFICE_COMMAND`, sorti d'un commentaire qu'ERA001 prenait pour du code).
+3. *Un fichier de test par module* : `tests/test_odsslicer.py` (841 tests, 7 100 lignes) est
+   réparti en 25 fichiers, `test_<module>.py`, par un script qui déplace chaque test tel quel et
+   met une aide partagée dans `conftest.py` ; les 1 474 identifiants collectés avant et après
+   sont les mêmes, au chemin près. Restent à part, transverses : `test_libreoffice_consistency.py`,
+   `test_wild_files.py`, `test_imports.py`. N'ont pas de fichier : `constants`, `fileutils`,
+   `xmlutils` et `package` (dont `test_reader.py` teste l'écriture par `save`).
+4. *Noms et paramètres* : 156 tests renommés `test_<scénario>_<résultat>` (la famille
+   `test_save_round_trip_after_*` devient `..._reads_back_after_a_save`), dont 83 en passant
+   dans l'une des onze classes `Test<Unité>` qui rangent 96 tests (`TestParseAddress`,
+   `TestCreate`, `TestRenameSheet`…), la liste complète dans le message du commit ; cinq
+   boucles de cas deviennent des paramètres (1 474 tests deviennent 1 655). Une boucle qui construit des données, ou qui vérifie chaque cellule
+   d'un seul résultat, reste. Les en-têtes et la docstring en français passent en anglais.
+5. *Menus défauts* : l'argument inutilisé de `formulas._insertion_remap` (`_edge`, et pourquoi),
+   celui du lecteur du type absent de `FORMATS`, les deux `NotImplementedError` sans message de
+   `styles._SheetPartStyle`. ERA001 ne trouve plus rien dans `src` ; ses quatre relevés dans les
+   tests sont des en-têtes.
+
+Les scripts de mutation nomment les fichiers où leurs tests sont passés, et ne comptent plus
+pour attrapée qu'une mutation qui fait échouer un test (code 1) : un fichier de tests disparu
+les aurait toutes données pour attrapées.
+
+Vérifié à chaque commit : pytest (suite LibreOffice comprise, `-W error::FutureWarning`, relancée
+seule quand une autre session lançait LibreOffice), mypy, ruff, `mutate_layers.py` (41) et
+`mutate_flags.py` (14) entièrement attrapées. Comportement : balayage de 250 vrais fichiers
+contre `claude/lxml-study` (557 feuilles, 146 écrits et relus), à la fin, à zéro partout —
+lecture, grille, écriture-relecture, parties recopiées, erreurs nouvelles (4 illisibles des deux
+côtés).
 
 ### À décider
 

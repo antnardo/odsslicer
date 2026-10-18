@@ -9,7 +9,9 @@ version (until 1.0, the API could change between minor versions).
 
 odsslicer 1.0 reads and writes every part of the package with lxml alone: BeautifulSoup is gone.
 It also settles the public API before freezing it: one place to import it from, `odsslicer`;
-no duplicate accessors on `Sheet`; flags passed by name. What indexing a sheet, `Cell`,
+no duplicate accessors on `Sheet`; flags and a pivot table's fields passed by name; a new number
+format described by one `NumberFormatSpec`; `Sheet.name` read from the document, renamed through
+`rename_sheet` alone. What indexing a sheet, `Cell`,
 `CellStyle`, values, styles and formulas do is unchanged. What breaks is the access to the XML
 underneath and those few names; DOCS.md, section 15, gives the 1.0 equivalent of each 0.x line
 ("Upgrading from 0.x"). From 1.0 on, a breaking change waits for the next major version.
