@@ -34,7 +34,7 @@ from odsslicer.libreoffice import (
     libreoffice_environment,
     recalculate,
 )
-from odsslicer.numberformat import NumberFormat
+from odsslicer.numberformat import NumberFormat, NumberFormatSpec
 from odsslicer.package import EncryptedDocumentError, MalformedDocumentError
 from odsslicer.properties import DocumentProperties
 from odsslicer.reader import ODSReader
@@ -55,6 +55,7 @@ __all__ = [
     "EncryptedDocumentError",
     "MalformedDocumentError",
     "NumberFormat",
+    "NumberFormatSpec",
     "ODSReader",
     "RowStyle",
     "Sheet",

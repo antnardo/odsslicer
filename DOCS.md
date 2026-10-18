@@ -465,7 +465,7 @@ that applies wins — except for dates and times, which try the second one first
    ```python
    table = ODSReader.new()             # a blank document: nothing anywhere to learn from
    sheet = table.sheet("Sheet1")
-   fmt = NumberFormat.create(table, "currency", decimal_places=2, currency_symbol="$", grouping=True)
+   fmt = NumberFormat.create(table, NumberFormatSpec("currency", 2, currency_symbol="$", grouping=True))
    sheet["A1"].style.number_format = fmt
    sheet["A1"].value = 1234.5
    sheet["A1"].text                     # "1,234.50 $" — read from the real format, not guessed
@@ -1213,21 +1213,30 @@ Assign an existing one (from another cell, or by style name), or build one from 
 ```python
 sheet["B1"].style.number_format = sheet["A7"].style.number_format   # or = "N108"
 
-pct = NumberFormat.create(table, "percentage", decimal_places=1)
-eur = NumberFormat.create(table, "currency", decimal_places=2, currency_symbol="€", grouping=True)
-dmy = NumberFormat.create(table, "date", components=[
+from odsslicer import NumberFormat, NumberFormatSpec
+
+pct = NumberFormat.create(table, NumberFormatSpec("percentage", 1))
+eur = NumberFormat.create(table, NumberFormatSpec("currency", 2, currency_symbol="€", grouping=True))
+dmy = NumberFormat.create(table, NumberFormatSpec("date", components=[
     ("day", "long"), ("text", "/"), ("month", "long"), ("text", "/"), ("year", "long"),
-])
-hm = NumberFormat.create(table, "time", components=[("hours", "long"), ("text", "h"), ("minutes", "long")])
-hours = NumberFormat.create(table, "time", components=[("hours", "long"), ("text", ":"),
-                                                       ("minutes", "long")], elapsed=True)
+]))
+hm = NumberFormat.create(table, NumberFormatSpec("time", components=[
+    ("hours", "long"), ("text", "h"), ("minutes", "long"),
+]))
+hours = NumberFormat.create(table, NumberFormatSpec("time", components=[
+    ("hours", "long"), ("text", ":"), ("minutes", "long"),
+], elapsed=True))
 sheet["C1"].style.number_format = pct
 ```
 
-`create(reader, family, ...)` accepts `decimal_places`/`grouping`/`min_integer_digits` for
+`create(reader, spec)` builds the format a `NumberFormatSpec` describes: its `family`, then
+`decimal_places` (by position or by name) and, by name, `grouping`/`min_integer_digits` for
 numeric families, `currency_symbol` (required for `"currency"`), `components` (required for
-`"date"`/`"time"`), `elapsed=True` for a `"time"` format counting in full — `[HH]:MM`, where
-26 hours show as 26:00 rather than 02:00 — and `font_color` for any family. A percentage's
+`"date"`/`"time"`, any sequence of pairs, kept as a tuple), `elapsed=True` for a `"time"`
+format counting in full — `[HH]:MM`, where 26 hours show as 26:00 rather than 02:00 — and
+`font_color` for any family. The spec checks itself when it is made, so a currency without its
+symbol raises `ValueError` before anything is written; it is immutable, and can be kept and
+reused for several documents. A percentage's
 sign goes where LibreOffice's standard format for the document's locale puts it: `50%` in
 en-US, `50 %` in fr-FR, a no-break space before it in de-DE, `%50` in tr-TR, and bare after
 the number for a locale LibreOffice does not know. `sheet["C1"].style.number_format = None`
@@ -1250,8 +1259,8 @@ Write one with `.add_condition(condition, target)` — `target` applies whenever
 (ODF's `"value()>=0"`-style syntax) matches:
 
 ```python
-positive = NumberFormat.create(table, "currency", decimal_places=2, currency_symbol="€")
-negative = NumberFormat.create(table, "currency", decimal_places=2, currency_symbol="€", font_color="#FF0000")
+positive = NumberFormat.create(table, NumberFormatSpec("currency", 2, currency_symbol="€"))
+negative = NumberFormat.create(table, NumberFormatSpec("currency", 2, currency_symbol="€", font_color="#FF0000"))
 positive.add_condition("value()<0", negative)
 sheet["A1"].style.number_format = positive
 ```
@@ -1582,9 +1591,13 @@ steps 4 and 6, and the audit before 1.0):
 - **Flags are passed by name.** Every boolean parameter of the public API is keyword-only, and
   so is every parameter after one: `ODSReader(path, verbose=True)`, `ODSReader.new(verbose=True)`,
   `save(path, recalculate=True, timeout=60, update_links=True)`, `export_content_xml(pretty=False)`,
-  `sort(source, by, ascending=False)`, `NumberFormat.create(reader, family, decimal_places,
+  `sort(source, by, ascending=False)`, `NumberFormatSpec(family, decimal_places,
   grouping=True, ...)`, `recalculate(path, timeout, update_links=True)`. A `True` passed by
   position said nothing at the call of what it switched on; it now raises `TypeError`.
+- **`NumberFormat.create(reader, spec)` takes a `NumberFormatSpec`**, new and exported, in place
+  of its nine parameters: the same fields, in the same order, in an immutable record that checks
+  itself when it is made (`ValueError` for a currency without its symbol, say) and can be kept
+  and reused. `components` may still be given as a list; the spec keeps it as a tuple.
 - **`Cell.attrs` and `Sheet.attrs` are removed.** They were the element's own attribute
   dictionary, with the file's prefixed keys, and writing to them bypassed everything the library
   keeps consistent. Their one common use has a property of its own: `cell.attrs.get("table:style-name")`
@@ -1666,11 +1679,32 @@ table.export_content_xml(False)                         # 0.x
 table.export_content_xml(pretty=False)                  # 1.0
 sheet.sort("A2:C10", 1, False)                          # 0.x
 sheet.sort("A2:C10", 1, ascending=False)                # 1.0
-NumberFormat.create(table, "number", 2, True)           # 0.x
-NumberFormat.create(table, "number", 2, grouping=True)  # 1.0, and every parameter after it by name
 recalculate("out.ods", 120, True)                       # 0.x
 recalculate("out.ods", 120, update_links=True)          # 1.0
 ```
+
+**`NumberFormat.create`** takes the format's description as one `NumberFormatSpec`, whose
+fields are `create`'s former parameters, `family` and `decimal_places` by position, the others
+by name:
+
+```python
+from odsslicer import NumberFormat, NumberFormatSpec
+
+NumberFormat.create(table, "number", 2, True)                                    # 0.x
+NumberFormat.create(table, NumberFormatSpec("number", 2, grouping=True))         # 1.0
+
+NumberFormat.create(table, "currency", decimal_places=2, currency_symbol="€")    # 0.x
+NumberFormat.create(table, NumberFormatSpec("currency", 2, currency_symbol="€")) # 1.0
+
+NumberFormat.create(table, "time", components=[("hours", "long"), ("text", ":"),
+                                               ("minutes", "long")], elapsed=True)       # 0.x
+NumberFormat.create(table, NumberFormatSpec("time", components=[("hours", "long"), ("text", ":"),
+                                                                ("minutes", "long")], elapsed=True))  # 1.0
+```
+
+The old call raises `TypeError` - the family alone, `NumberFormat.create(table, "number")`,
+with a message saying to wrap it in a `NumberFormatSpec`. A spec is checked when it is made
+and is immutable, so one can be built once and given to `create` for several documents.
 
 **`Cell.attrs` and `Sheet.attrs`.** What they were read for has a property:
 

@@ -46,7 +46,7 @@ from conftest import (
     text_cell,
     with_chart,
 )
-from odsslicer import Border, NumberFormat, ODSReader
+from odsslicer import Border, NumberFormat, NumberFormatSpec, ODSReader
 
 
 @requires_soffice
@@ -208,8 +208,10 @@ def test_libreoffice_reads_back_a_created_number_format_and_conditional_formatti
     writable_reader, tmp_path, libreoffice_export
 ):
     r = writable_reader
-    negative = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€", font_color="#FF0000")
-    base = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€")
+    negative = NumberFormat.create(
+        r, NumberFormatSpec("currency", decimal_places=2, currency_symbol="€", font_color="#FF0000")
+    )
+    base = NumberFormat.create(r, NumberFormatSpec("currency", decimal_places=2, currency_symbol="€"))
     base.add_condition("value()<0", negative)
 
     s = r.sheet("Sheet1")
@@ -451,9 +453,12 @@ def test_libreoffice_shows_created_elapsed_and_percentage_formats_as_odsslicer_w
     table = document_in("en", "US")
     sheet = table.sheet("Sheet1")
     hours = NumberFormat.create(
-        table, "time", components=[("hours", "long"), ("text", ":"), ("minutes", "long")], elapsed=True
+        table,
+        NumberFormatSpec(
+            "time", components=[("hours", "long"), ("text", ":"), ("minutes", "long")], elapsed=True
+        ),
     )
-    percent = NumberFormat.create(table, "percentage", decimal_places=1)
+    percent = NumberFormat.create(table, NumberFormatSpec("percentage", decimal_places=1))
     sheet["A1"].style.number_format = hours
     sheet["A1"].value = dt.timedelta(hours=26, minutes=15)
     sheet["B1"].style.number_format = percent
@@ -785,7 +790,9 @@ def test_libreoffice_opens_a_value_rendered_from_a_real_format_with_no_example(t
     # entirely from _render_number_from_format reading the real NumberFormat
     r = ODSReader.new()
     s = r.sheet("Sheet1")
-    fmt = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="$", grouping=True)
+    fmt = NumberFormat.create(
+        r, NumberFormatSpec("currency", decimal_places=2, currency_symbol="$", grouping=True)
+    )
     s["A1"].style.number_format = fmt
     s["A1"].value = 1234.5
     out = tmp_path / "out.ods"
@@ -924,31 +931,35 @@ def test_odsslicer_reads_back_date_times_and_durations_as_libreoffice_saves_them
     s = r.sheet("Sheet1")
     dmy_hms = NumberFormat.create(
         r,
-        "date",
-        components=[
-            ("day", "long"),
-            ("text", "/"),
-            ("month", "long"),
-            ("text", "/"),
-            ("year", "long"),
-            ("text", " "),
-            ("hours", "long"),
-            ("text", ":"),
-            ("minutes", "long"),
-            ("text", ":"),
-            ("seconds", "long"),
-        ],
+        NumberFormatSpec(
+            "date",
+            components=[
+                ("day", "long"),
+                ("text", "/"),
+                ("month", "long"),
+                ("text", "/"),
+                ("year", "long"),
+                ("text", " "),
+                ("hours", "long"),
+                ("text", ":"),
+                ("minutes", "long"),
+                ("text", ":"),
+                ("seconds", "long"),
+            ],
+        ),
     )
     hms = NumberFormat.create(
         r,
-        "time",
-        components=[
-            ("hours", "long"),
-            ("text", ":"),
-            ("minutes", "long"),
-            ("text", ":"),
-            ("seconds", "long"),
-        ],
+        NumberFormatSpec(
+            "time",
+            components=[
+                ("hours", "long"),
+                ("text", ":"),
+                ("minutes", "long"),
+                ("text", ":"),
+                ("seconds", "long"),
+            ],
+        ),
     )
     values = [
         (dmy_hms, dt.datetime(2023, 11, 30, 13, 0, 0, 500_000)),

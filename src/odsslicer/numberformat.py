@@ -5,13 +5,14 @@ Split from `styles` at the 1.0 audit: a number format is no style of a cell
 but a format its style names, read by the style views and by the inference of
 the text a written value shows, and made by the style catalog for a date
 written into a cell with no format. What `NumberFormat.create` is asked for
-is a `_NumberFormatSpec`, checked once, from which `_number_format_element`
+is a `NumberFormatSpec`, checked once, from which `_number_format_element`
 builds the element: the checks and the building used to share one function
 of a hundred lines and nine parameters.
 """
 
 import re
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import KW_ONLY, dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from lxml import etree
@@ -22,7 +23,7 @@ from odsslicer.xmltree import child, elements, insert_before, new, qn, set_text,
 if TYPE_CHECKING:
     from odsslicer.reader import ODSReader
 
-__all__ = ["NumberFormat"]
+__all__ = ["NumberFormat", "NumberFormatSpec"]
 
 _NUMBER_STYLE_TAGS = [
     "number:number-style",
@@ -149,7 +150,7 @@ class NumberFormat:
     document order, and `.resolve(value)` follows them to the `NumberFormat`
     that actually applies to a given value (itself, if none match).
 
-    Writable: `NumberFormat.create(reader, family, ...)` builds a brand new
+    Writable: `NumberFormat.create(reader, spec)` builds a brand new
     format from scratch (for when no existing one in the document already
     has the layout you want); `.add_condition(condition, target)` appends
     a conditional variant to an existing format."""
@@ -213,60 +214,27 @@ class NumberFormat:
         return self
 
     @classmethod
-    def create(
-        cls,
-        reader: "ODSReader",
-        family: str,
-        decimal_places: "int | None" = None,
-        *,
-        grouping: bool = False,
-        min_integer_digits: int = 1,
-        currency_symbol: "str | None" = None,
-        components: "list[tuple[str, str]] | None" = None,
-        font_color: "str | None" = None,
-        elapsed: bool = False,
-    ) -> "NumberFormat":
-        """Build a brand new `<number:*-style>` from scratch and register
-        it in the document's automatic styles, returning a `NumberFormat`
-        bound to it.
+    def create(cls, reader: "ODSReader", spec: "NumberFormatSpec") -> "NumberFormat":
+        """Build the brand new `<number:*-style>` `spec` describes (see
+        `NumberFormatSpec`) and register it in the document's automatic
+        styles, returning a `NumberFormat` bound to it:
 
-        `family` is one of `"number"`/`"percentage"`/`"currency"`/
-        `"date"`/`"time"`/`"boolean"`. `decimal_places`/`grouping`/
-        `min_integer_digits` apply to `"number"`/`"percentage"`/
-        `"currency"`; `currency_symbol` is required for `"currency"`.
-        `"date"`/`"time"` take `components` - the same ordered
-        `[(component, style_or_text), ...]` list `.components` itself
-        already exposes on read, e.g. `[("day", "long"), ("text", "/"),
-        ("month", "long"), ("text", "/"), ("year", "long")]` (a `"text"`
-        entry is a literal separator - its second element is the literal
-        text itself, rather than a component style). `"boolean"` takes
-        none of the above. `font_color` works for any family - the
-        classic use is the "positive/negative" pair behind conditional
-        formatting (see `add_condition`): a plain black format for the
-        base, and a `font_color="#FF0000"` variant applied when
-        `"value()<0"` matches.
+            eur = NumberFormat.create(reader, NumberFormatSpec("currency", 2, currency_symbol="€"))
+            sheet["A1"].style.number_format = eur
 
-        `elapsed=True` makes a `"time"` format count the time in full, as
-        LibreOffice's `[HH]:MM` does, where it wraps it around the clock: a
-        duration of 26 hours shows as 26:00, not 02:00 (issue #17). A
-        percentage's sign sits where the document's locale puts it in
+        A percentage's sign sits where the document's locale puts it in
         LibreOffice's standard format - `50%` in en-US, `50 %` in fr-FR,
         with a no-break space in de-DE - bare after the number for a locale
         LibreOffice does not know.
         """
-        spec = _NumberFormatSpec(
-            family,
-            decimal_places,
-            grouping=grouping,
-            min_integer_digits=min_integer_digits,
-            currency_symbol=currency_symbol,
-            components=tuple(components or ()),
-            font_color=font_color,
-            elapsed=elapsed,
-        )
+        if not isinstance(spec, NumberFormatSpec):
+            raise TypeError(
+                f"NumberFormat.create takes a NumberFormatSpec, got {type(spec).__name__}: "
+                f"NumberFormat.create(reader, NumberFormatSpec({spec!r}, ...))"
+            )
         catalog = reader._catalog
         # the locale is looked up for a percentage alone: it walks styles.xml
-        affixes = _percent_affixes(*catalog.document_locale()) if family == "percentage" else ("", "")
+        affixes = _percent_affixes(*catalog.document_locale()) if spec.family == "percentage" else ("", "")
         tag = _number_format_element(spec, catalog.new_style_name("N"), affixes)
         catalog.automatic_styles().append(tag)
         return cls(tag, reader=reader)
@@ -306,22 +274,55 @@ _NUMERIC_FAMILIES = frozenset({"number", "percentage", "currency"})
 
 
 @dataclass(frozen=True, slots=True)
-class _NumberFormatSpec:
-    """What a new number format is to be - `NumberFormat.create`'s
-    arguments, which say what each means - checked on creation, before
-    anything is written: a family odsslicer can build, a currency with its
-    symbol, a date or a time with its components, `elapsed` for a time."""
+class NumberFormatSpec:
+    """What a new number format is to be, for `NumberFormat.create` -
+    checked when it is made, before anything is written:
+
+        NumberFormatSpec("number", 2, grouping=True)               # 1,234.50
+        NumberFormatSpec("percentage", 1)                          # 25.6%, 25.6 % in fr-FR
+        NumberFormatSpec("currency", 2, currency_symbol="€")       # 1234.50 €
+        NumberFormatSpec("date", components=[("day", "long"), ("text", "/"),
+                                             ("month", "long"), ("text", "/"),
+                                             ("year", "long")])    # 05/03/2026
+        NumberFormatSpec("time", components=[("hours", "long"), ("text", ":"),
+                                             ("minutes", "long")], elapsed=True)  # [HH]:MM
+
+    `family` is one of `"number"`/`"percentage"`/`"currency"`/`"date"`/
+    `"time"`/`"boolean"`. `decimal_places`/`grouping`/`min_integer_digits`
+    apply to `"number"`/`"percentage"`/`"currency"`; `currency_symbol` is
+    required for `"currency"`. `"date"`/`"time"` require `components` -
+    the same ordered `(component, style_or_text)` pairs `.components`
+    exposes on read, a `"text"` entry being a literal separator whose
+    second element is the text itself rather than a component style;
+    given as any sequence, a list say, they are kept as a tuple, so that a
+    spec is immutable and hashable. `"boolean"` takes none of the above.
+    `font_color` works for any family - the classic use is the
+    "positive/negative" pair behind conditional formatting (see
+    `NumberFormat.add_condition`): a plain format for the base, and a
+    `font_color="#FF0000"` variant applied when `"value()<0"` matches.
+
+    `elapsed=True` makes a `"time"` format count the time in full, as
+    LibreOffice's `[HH]:MM` does, where it wraps it around the clock: a
+    duration of 26 hours shows as 26:00, not 02:00 (issue #17).
+
+    Raises `ValueError` for a family odsslicer cannot build, a currency
+    without its symbol, a date or a time without components, `elapsed`
+    for anything but a time.
+    """
 
     family: str
     decimal_places: "int | None" = None
+    _: KW_ONLY
     grouping: bool = False
     min_integer_digits: int = 1
     currency_symbol: "str | None" = None
-    components: "tuple[tuple[str, str], ...]" = ()
+    components: "Sequence[tuple[str, str]]" = ()
     font_color: "str | None" = None
     elapsed: bool = False
 
     def __post_init__(self) -> None:
+        # frozen: the one assignment a spec makes to itself, on creation
+        object.__setattr__(self, "components", tuple(tuple(pair) for pair in self.components))
         if self.family not in _FAMILY_TAGS:
             raise ValueError(
                 f"unknown number format family {self.family!r} - expected one of {sorted(_FAMILY_TAGS)}"
@@ -335,7 +336,7 @@ class _NumberFormatSpec:
 
 
 def _number_format_element(
-    spec: _NumberFormatSpec, name: str, percent_affixes: "tuple[str, str]"
+    spec: NumberFormatSpec, name: str, percent_affixes: "tuple[str, str]"
 ) -> etree._Element:
     """The `<number:*-style>` element `spec` describes, named `name`, not
     yet in any document; `percent_affixes` is the text around a
@@ -362,7 +363,7 @@ def _literal(value: str) -> etree._Element:
     return element
 
 
-def _append_number(tag: etree._Element, spec: _NumberFormatSpec, percent_affixes: "tuple[str, str]") -> None:
+def _append_number(tag: etree._Element, spec: NumberFormatSpec, percent_affixes: "tuple[str, str]") -> None:
     """The number of a number, percentage or currency format, and the text
     around it: a percentage's sign, a currency's symbol."""
     number_child = new("number:number")
@@ -387,7 +388,7 @@ def _append_number(tag: etree._Element, spec: _NumberFormatSpec, percent_affixes
         tag.append(symbol_child)
 
 
-def _append_date_time(tag: etree._Element, spec: _NumberFormatSpec) -> None:
+def _append_date_time(tag: etree._Element, spec: NumberFormatSpec) -> None:
     """The components of a date or time format, in order."""
     if spec.elapsed:
         tag.set(qn("number:truncate-on-overflow"), "false")

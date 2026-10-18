@@ -26,7 +26,7 @@ from typing import cast
 from lxml import etree
 
 from odsslicer.dateformats import _default_format_code, _format_code_components
-from odsslicer.numberformat import _NUMBER_STYLE_TAGS, _number_format_element, _NumberFormatSpec
+from odsslicer.numberformat import _NUMBER_STYLE_TAGS, NumberFormatSpec, _number_format_element
 from odsslicer.package import _Package
 from odsslicer.xmltree import (
     NAMESPACES,
@@ -307,7 +307,7 @@ class _StyleCatalog:
         code, language, country = _default_format_code(kind, *self.document_locale())
         components, elapsed = _format_code_components(code)
         family = "time" if kind in ("time", "duration") else "date"
-        spec = _NumberFormatSpec(family, components=tuple(components))
+        spec = NumberFormatSpec(family, components=components)
         tag = _number_format_element(spec, self.new_style_name("N"), ("", ""))
         self.automatic_styles().append(tag)
         if language is not None:

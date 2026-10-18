@@ -48,9 +48,17 @@ underneath and those few names; DOCS.md, section 15, gives the 1.0 equivalent of
 - **Flags are keyword-only**, and so is every parameter after one: `ODSReader(path, *, verbose)`,
   `ODSReader.new(sheet_name, *, verbose)`, `save(path, *, recalculate, timeout, update_links)`,
   `export_content_xml(*, pretty)`, `Sheet.sort(source, by, *, ascending)`,
-  `NumberFormat.create(reader, family, decimal_places, *, grouping, ...)`,
+  `NumberFormatSpec(family, decimal_places, *, grouping, ...)`,
   `recalculate(path, timeout, *, update_links)` and `Sheet(table, *, verbose, reader)`. A `True`
   passed by position now raises `TypeError`; ruff's `FBT` rules keep it that way.
+- **`NumberFormat.create(reader, spec)` takes a `NumberFormatSpec`** in place of its nine
+  parameters: `NumberFormatSpec`, new and exported, is the format's description - `family`,
+  `decimal_places`, then by name `grouping`, `min_integer_digits`, `currency_symbol`,
+  `components`, `font_color`, `elapsed` - immutable, checked when it is made (`ValueError` for a
+  currency without its symbol, a date without components), and reusable. `components` may be
+  given as a list and is kept as a tuple. The 0.x call raises `TypeError`, and
+  `NumberFormat.create(reader, "number")` says what to write instead:
+  `NumberFormat.create(reader, NumberFormatSpec("number"))`.
 - **The escape hatches to the XML are lxml trees and elements**: `reader.data`,
   `reader.styles_data`, `reader.meta_data` and `reader.settings_data` are
   `lxml.etree._ElementTree`s, `reader.tables` a list of elements, `sheet.table` and `cell.cell`

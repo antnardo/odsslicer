@@ -61,6 +61,7 @@ from odsslicer import (
     CellStyle,
     MalformedDocumentError,
     NumberFormat,
+    NumberFormatSpec,
     ODSReader,
     Sheet,
     string_address,
@@ -2695,7 +2696,9 @@ def _blank_document():
 def test_number_display_reads_the_real_format_with_no_example_anywhere():
     r = _blank_document()
     s = r.sheet("Sheet1")
-    fmt = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="$", grouping=True)
+    fmt = NumberFormat.create(
+        r, NumberFormatSpec("currency", decimal_places=2, currency_symbol="$", grouping=True)
+    )
     s["A1"].style.number_format = fmt  # no prior .value write - a truly virgin cell
     s["A1"].value = 1234.5
     assert s["A1"].text == "1,234.50 $"
@@ -2704,7 +2707,7 @@ def test_number_display_reads_the_real_format_with_no_example_anywhere():
 def test_percentage_display_reads_the_real_format_with_no_example_anywhere():
     r = _blank_document()
     s = r.sheet("Sheet1")
-    fmt = NumberFormat.create(r, "percentage", decimal_places=1)
+    fmt = NumberFormat.create(r, NumberFormatSpec("percentage", decimal_places=1))
     s["A1"].style.number_format = fmt
     s["A1"].value = 0.256
     assert s["A1"].text == "25.6 %"
@@ -2715,8 +2718,10 @@ def test_date_display_reads_the_real_format_with_no_example_anywhere():
     s = r.sheet("Sheet1")
     fmt = NumberFormat.create(
         r,
-        "date",
-        components=[("year", "long"), ("text", "-"), ("month", "long"), ("text", "-"), ("day", "long")],
+        NumberFormatSpec(
+            "date",
+            components=[("year", "long"), ("text", "-"), ("month", "long"), ("text", "-"), ("day", "long")],
+        ),
     )
     s["A1"].style.number_format = fmt
     s["A1"].value = dt.date(2026, 3, 5)
@@ -2726,7 +2731,9 @@ def test_date_display_reads_the_real_format_with_no_example_anywhere():
 def test_time_display_reads_the_real_format_with_no_example_anywhere():
     r = _blank_document()
     s = r.sheet("Sheet1")
-    fmt = NumberFormat.create(r, "time", components=[("hours", "long"), ("text", "h"), ("minutes", "long")])
+    fmt = NumberFormat.create(
+        r, NumberFormatSpec("time", components=[("hours", "long"), ("text", "h"), ("minutes", "long")])
+    )
     s["A1"].style.number_format = fmt
     s["A1"].value = dt.time(9, 5)
     assert s["A1"].text == "09h05"
@@ -2743,7 +2750,9 @@ def test_display_falls_back_to_plain_conversion_with_no_example_and_no_style():
 def test_number_format_with_an_unsupported_date_component_falls_back_safely():
     r = _blank_document()
     s = r.sheet("Sheet1")
-    fmt = NumberFormat.create(r, "date", components=[("quarter", "long"), ("text", " "), ("day", "long")])
+    fmt = NumberFormat.create(
+        r, NumberFormatSpec("date", components=[("quarter", "long"), ("text", " "), ("day", "long")])
+    )
     s["A1"].style.number_format = fmt
     s["A1"].value = dt.date(2026, 3, 5)
     assert s["A1"].text == "2026-03-05"  # isoformat() fallback, not a partial/garbled render
@@ -3018,7 +3027,9 @@ def test_an_aware_datetime_is_written_in_utc(writable_reader):
 def test_date_time_display_reads_the_real_format_with_no_example_anywhere():
     r = _blank_document()
     s = r.sheet("Sheet1")
-    s["A1"].style.number_format = NumberFormat.create(r, "date", components=[*_DMY, ("text", " "), *_HMS])
+    s["A1"].style.number_format = NumberFormat.create(
+        r, NumberFormatSpec("date", components=[*_DMY, ("text", " "), *_HMS])
+    )
     s["A1"].value = dt.datetime(2023, 11, 30, 13, 5, 9)
     assert s["A1"].text == "30/11/2023 13:05:09"
 
@@ -3027,7 +3038,9 @@ def test_a_date_in_a_date_time_format_displays_as_its_midnight():
     # used to raise AttributeError: a date has no .hour to render
     r = _blank_document()
     s = r.sheet("Sheet1")
-    s["A1"].style.number_format = NumberFormat.create(r, "date", components=[*_DMY, ("text", " "), *_HMS])
+    s["A1"].style.number_format = NumberFormat.create(
+        r, NumberFormatSpec("date", components=[*_DMY, ("text", " "), *_HMS])
+    )
     s["A1"].value = dt.date(2023, 11, 30)
     assert s["A1"].text == "30/11/2023 00:00:00"
 
@@ -3046,9 +3059,7 @@ def test_a_date_in_a_date_time_format_displays_as_its_midnight():
 def test_duration_display_follows_the_real_format_like_libreoffice(elapsed, value, text):
     r = _blank_document()
     s = r.sheet("Sheet1")
-    fmt = NumberFormat.create(r, "time", components=_HMS)
-    if elapsed:  # NumberFormat.create has no switch for it
-        fmt._tag.set(qn("number:truncate-on-overflow"), "false")
+    fmt = NumberFormat.create(r, NumberFormatSpec("time", components=_HMS, elapsed=elapsed))
     s["A1"].style.number_format = fmt
     s["A1"].value = value
     assert s["A1"].text == text
@@ -3057,8 +3068,12 @@ def test_duration_display_follows_the_real_format_like_libreoffice(elapsed, valu
 def test_an_elapsed_minutes_format_counts_the_hours_in_the_minutes():
     r = _blank_document()
     s = r.sheet("Sheet1")
-    fmt = NumberFormat.create(r, "time", components=[("minutes", "long"), ("text", ":"), ("seconds", "long")])
-    fmt._tag.set(qn("number:truncate-on-overflow"), "false")
+    fmt = NumberFormat.create(
+        r,
+        NumberFormatSpec(
+            "time", components=[("minutes", "long"), ("text", ":"), ("seconds", "long")], elapsed=True
+        ),
+    )
     s["A1"].style.number_format = fmt
     # within a day, so it reads back as a time of day
     s["A1"].value = dt.timedelta(hours=2, minutes=5, seconds=3)
@@ -3078,7 +3093,7 @@ def test_date_time_and_duration_display_fall_back_to_a_plain_rendering(value, te
     # LibreOffice, and no date or time layout applies to it
     r = _blank_document()
     s = r.sheet("Sheet1")
-    s["A1"].style.number_format = NumberFormat.create(r, "number", decimal_places=2)
+    s["A1"].style.number_format = NumberFormat.create(r, NumberFormatSpec("number", decimal_places=2))
     s["A1"].value = value
     assert s["A1"].text == text
 
@@ -3089,7 +3104,7 @@ def _date_formatted(path, *addresses):
     `addresses` has to be learnt from another cell of that format, A2's."""
     r = ODSReader(path)
     s = r.sheet("Sheet1")
-    fmt = NumberFormat.create(r, "date", components=[("quarter", "long")])
+    fmt = NumberFormat.create(r, NumberFormatSpec("date", components=[("quarter", "long")]))
     for address in ("A2", *addresses):
         s[address].style.number_format = fmt
     return s
@@ -3163,7 +3178,7 @@ def test_an_am_pm_format_counts_the_hours_on_a_12_hour_clock(value, text):
     r = _blank_document()
     s = r.sheet("Sheet1")
     s["A1"].style.number_format = NumberFormat.create(
-        r, "time", components=[*_HMS[:3], ("text", " "), ("am-pm", "")]
+        r, NumberFormatSpec("time", components=[*_HMS[:3], ("text", " "), ("am-pm", "")])
     )
     s["A1"].value = value
     assert s["A1"].text == text
@@ -3242,7 +3257,7 @@ def test_a_cell_formatted_for_dates_keeps_its_format(writable_reader):
 def test_a_cell_formatted_for_numbers_keeps_its_format_as_in_libreoffice():
     r = _blank_document()
     s = r.sheet("Sheet1")
-    eur = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€")
+    eur = NumberFormat.create(r, NumberFormatSpec("currency", decimal_places=2, currency_symbol="€"))
     s["A1"].style.number_format = eur
     s["A1"].value = dt.date(2022, 3, 7)
     assert s["A1"].style.number_format.name == eur.name
@@ -5310,7 +5325,7 @@ def test_assigning_an_invalid_style_value_raises(writable_reader):
 
 def test_create_a_number_format(writable_reader):
     r = writable_reader
-    fmt = NumberFormat.create(r, "number", decimal_places=3, grouping=True)
+    fmt = NumberFormat.create(r, NumberFormatSpec("number", decimal_places=3, grouping=True))
     assert fmt.family == "number"
     assert fmt.decimal_places == 3
     assert fmt.grouping is True
@@ -5322,7 +5337,7 @@ def test_create_a_number_format(writable_reader):
 
 
 def test_create_a_percentage_format(writable_reader):
-    fmt = NumberFormat.create(writable_reader, "percentage", decimal_places=1)
+    fmt = NumberFormat.create(writable_reader, NumberFormatSpec("percentage", decimal_places=1))
     assert fmt.family == "percentage"
     assert fmt.decimal_places == 1
 
@@ -5343,7 +5358,7 @@ def test_create_a_percentage_format(writable_reader):
 def test_a_percentage_format_puts_its_sign_where_the_locale_does(language, country, text):
     # regression: a space before the sign in every document, 50 % in en-US
     r = document_in(language, country)
-    fmt = NumberFormat.create(r, "percentage", decimal_places=0)
+    fmt = NumberFormat.create(r, NumberFormatSpec("percentage", decimal_places=0))
     cell = r.sheet("Sheet1")["A1"]
     cell.style.number_format = fmt
     cell.value = 0.5
@@ -5369,7 +5384,10 @@ def test_create_an_elapsed_time_format():
     # regression: no way to make [HH]:MM - 26 hours showed as 02:00
     r = ODSReader.new()
     fmt = NumberFormat.create(
-        r, "time", components=[("hours", "long"), ("text", ":"), ("minutes", "long")], elapsed=True
+        r,
+        NumberFormatSpec(
+            "time", components=[("hours", "long"), ("text", ":"), ("minutes", "long")], elapsed=True
+        ),
     )
     assert fmt.elapsed
     cell = r.sheet("Sheet1")["A1"]
@@ -5377,58 +5395,83 @@ def test_create_an_elapsed_time_format():
     cell.value = dt.timedelta(hours=26)
     assert cell.text == "26:00"
     wrapping = NumberFormat.create(
-        r, "time", components=[("hours", "long"), ("text", ":"), ("minutes", "long")]
+        r, NumberFormatSpec("time", components=[("hours", "long"), ("text", ":"), ("minutes", "long")])
     )
     assert not wrapping.elapsed
 
 
 def test_only_a_time_format_is_elapsed():
     with pytest.raises(ValueError):
-        NumberFormat.create(ODSReader.new(), "date", components=[("day", "long")], elapsed=True)
+        NumberFormat.create(
+            ODSReader.new(), NumberFormatSpec("date", components=[("day", "long")], elapsed=True)
+        )
 
 
 def test_create_a_currency_format(writable_reader):
-    fmt = NumberFormat.create(writable_reader, "currency", decimal_places=2, currency_symbol="$")
+    fmt = NumberFormat.create(
+        writable_reader, NumberFormatSpec("currency", decimal_places=2, currency_symbol="$")
+    )
     assert fmt.family == "currency"
     assert fmt.currency_symbol == "$"
 
 
 def test_create_currency_without_symbol_raises(writable_reader):
     with pytest.raises(ValueError):
-        NumberFormat.create(writable_reader, "currency")
+        NumberFormat.create(writable_reader, NumberFormatSpec("currency"))
+
+
+def test_spec_components_given_as_a_list_are_kept_as_a_tuple():
+    spec = NumberFormatSpec("date", components=[["day", "long"], ("text", "/"), ("month", "long")])
+    assert spec.components == (("day", "long"), ("text", "/"), ("month", "long"))
+    # immutable, so equal specs hash alike
+    assert hash(spec) == hash(NumberFormatSpec("date", components=spec.components))
+
+
+def test_spec_flags_by_position_raise_type_error():
+    with pytest.raises(TypeError):
+        NumberFormatSpec("number", 2, True)
+
+
+def test_create_with_the_0x_parameters_raises_type_error_naming_the_spec():
+    with pytest.raises(TypeError, match="NumberFormatSpec"):
+        NumberFormat.create(ODSReader.new(), "number")
 
 
 def test_create_a_date_format_from_components(writable_reader):
     components = [("day", "long"), ("text", "-"), ("month", "long"), ("text", "-"), ("year", "long")]
-    fmt = NumberFormat.create(writable_reader, "date", components=components)
+    fmt = NumberFormat.create(writable_reader, NumberFormatSpec("date", components=components))
     assert fmt.family == "date"
     assert fmt.components == components
 
 
 def test_create_date_without_components_raises(writable_reader):
     with pytest.raises(ValueError):
-        NumberFormat.create(writable_reader, "date")
+        NumberFormat.create(writable_reader, NumberFormatSpec("date"))
 
 
 def test_create_a_boolean_format(writable_reader):
-    fmt = NumberFormat.create(writable_reader, "boolean")
+    fmt = NumberFormat.create(writable_reader, NumberFormatSpec("boolean"))
     assert fmt.family == "boolean"
 
 
 def test_create_unknown_family_raises(writable_reader):
     with pytest.raises(ValueError):
-        NumberFormat.create(writable_reader, "fraction")
+        NumberFormat.create(writable_reader, NumberFormatSpec("fraction"))
 
 
 def test_create_with_font_color(writable_reader):
-    fmt = NumberFormat.create(writable_reader, "currency", currency_symbol="€", font_color="#FF0000")
+    fmt = NumberFormat.create(
+        writable_reader, NumberFormatSpec("currency", currency_symbol="€", font_color="#FF0000")
+    )
     assert fmt.font_color == "#FF0000"
 
 
 def test_add_condition_wires_up_conditional_resolution(writable_reader):
     r = writable_reader
-    negative = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€", font_color="#FF0000")
-    base = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€")
+    negative = NumberFormat.create(
+        r, NumberFormatSpec("currency", decimal_places=2, currency_symbol="€", font_color="#FF0000")
+    )
+    base = NumberFormat.create(r, NumberFormatSpec("currency", decimal_places=2, currency_symbol="€"))
     base.add_condition("value()<0", negative)
 
     assert base.resolve(-5).name == negative.name
@@ -5438,15 +5481,17 @@ def test_add_condition_wires_up_conditional_resolution(writable_reader):
 
 
 def test_add_condition_with_non_number_format_target_raises(writable_reader):
-    fmt = NumberFormat.create(writable_reader, "number")
+    fmt = NumberFormat.create(writable_reader, NumberFormatSpec("number"))
     with pytest.raises(TypeError):
         fmt.add_condition("value()<0", "not a NumberFormat")
 
 
 def test_save_round_trip_after_creating_and_assigning_a_number_format(writable_reader, tmp_path):
     r = writable_reader
-    negative = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€", font_color="#FF0000")
-    base = NumberFormat.create(r, "currency", decimal_places=2, currency_symbol="€")
+    negative = NumberFormat.create(
+        r, NumberFormatSpec("currency", decimal_places=2, currency_symbol="€", font_color="#FF0000")
+    )
+    base = NumberFormat.create(r, NumberFormatSpec("currency", decimal_places=2, currency_symbol="€"))
     base.add_condition("value()<0", negative)
 
     s = r.sheet("Sheet1")

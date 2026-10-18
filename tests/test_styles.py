@@ -4,7 +4,16 @@ tests still live in test_odsslicer.py."""
 
 import pytest
 
-from odsslicer import Border, CellStyle, ColumnStyle, NumberFormat, ODSReader, RowStyle, TableStyle
+from odsslicer import (
+    Border,
+    CellStyle,
+    ColumnStyle,
+    NumberFormat,
+    NumberFormatSpec,
+    ODSReader,
+    RowStyle,
+    TableStyle,
+)
 
 
 @pytest.fixture()
@@ -61,7 +70,7 @@ def test_one_view_writes_another_view_of_the_same_style_reads_it(sheet, name, va
 
 
 def test_a_view_reads_the_number_format_another_view_assigned(sheet):
-    percent = NumberFormat.create(sheet.reader, "percentage", 1)
+    percent = NumberFormat.create(sheet.reader, NumberFormatSpec("percentage", 1))
     a = sheet["A1"].style
     sheet["A1"].style.number_format = percent
     assert a.number_format.name == percent.name
@@ -70,8 +79,8 @@ def test_a_view_reads_the_number_format_another_view_assigned(sheet):
 
 
 def test_a_view_resolves_a_conditional_format_against_the_cells_value_now(sheet):
-    positive = NumberFormat.create(sheet.reader, "number", 2)
-    negative = NumberFormat.create(sheet.reader, "number", 2, font_color="#FF0000")
+    positive = NumberFormat.create(sheet.reader, NumberFormatSpec("number", 2))
+    negative = NumberFormat.create(sheet.reader, NumberFormatSpec("number", 2, font_color="#FF0000"))
     positive.add_condition("value()<0", negative)
     sheet["A1"].style.number_format = positive
     view = sheet["A1"].style
