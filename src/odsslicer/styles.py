@@ -16,7 +16,7 @@ from lxml import etree
 from .dateformats import _STANDARD_FORMATS
 from .datenames import _date_names
 from .datetimes import _ONE_DAY, _as_datetime, _as_timedelta, _clock_parts
-from .xmltree import attributes, child, elements, insert_before, local_name, new, qn, set_text, text, unset
+from .xmltree import attributes, child, elements, insert_before, new, qn, set_text, text, unset
 from .xmlutils import _ensure_style_child
 
 if TYPE_CHECKING:
@@ -49,6 +49,31 @@ _DATE_TIME_COMPONENT_NAMES = (
     "text",
 )
 _TIME_OF_DAY_COMPONENT_NAMES = frozenset({"hours", "minutes", "seconds", "am-pm"})
+# A number format's family by its element: "number:date-style" -> "date"
+_NUMBER_STYLE_FAMILIES = {qn(name): name[len("number:") : -len("-style")] for name in _NUMBER_STYLE_TAGS}
+# The parts a number format is laid out in, by element, named by their local
+# name: the elements of the number namespace that hold a component, the number
+# or the currency symbol, and LibreOffice's `<loext:text>`. LibreOffice writes
+# that one in a `number:number-style`, next to a fill character (307 of the
+# author's 2,112 real files, 27 of LibreOffice's own test files:
+# benchmarks/namespace_scan.py), and shows it as `<number:text>`, literal text
+# the displayed text inferred on write has to keep. Until 1.0, parts were
+# compared by local name, which took an element of any namespace for one;
+# compared by URI, as every element is elsewhere in the package, these alone
+# are.
+_FORMAT_PARTS = {
+    **{qn(f"number:{kind}"): kind for kind in (*_DATE_TIME_COMPONENT_NAMES, "number", "currency-symbol")},
+    qn("loext:text"): "text",
+}
+
+
+def _part(element: etree._Element) -> "str | None":
+    """Which part of its number format `element` is - "text", "number",
+    "day"... (see `_FORMAT_PARTS`) - `None` for an element that is none,
+    `style:map` or `style:text-properties` say."""
+    return _FORMAT_PARTS.get(cast(str, element.tag))
+
+
 _STYLE_NAME = qn("style:name")
 
 # The text around the sign of LibreOffice's standard percentage format, by
@@ -145,8 +170,7 @@ class NumberFormat:
         self._tag = tag
         self._reader = reader
         self.name = tag.get(qn("style:name"))
-        name = local_name(tag)
-        self.family = name[: -len("-style")] if name.endswith("-style") else name
+        self.family = _NUMBER_STYLE_FAMILIES[cast(str, tag.tag)]
         # `is None`, not `or`: an element with no children is false in lxml
         number_tag = child(tag, "number:number")
         if number_tag is None:
@@ -169,13 +193,11 @@ class NumberFormat:
         if self.family in ("date", "time"):
             self.components = [
                 (
-                    local_name(component),
-                    text(component)
-                    if local_name(component) == "text"
-                    else component.get(qn("number:style"), "short"),
+                    kind,
+                    text(component) if kind == "text" else component.get(qn("number:style"), "short"),
                 )
                 for component in elements(tag)
-                if local_name(component) in _DATE_TIME_COMPONENT_NAMES
+                if (kind := _part(component)) in _DATE_TIME_COMPONENT_NAMES
             ]
 
         _seen = _seen or set()
@@ -367,9 +389,9 @@ def _render_number_from_format(number_format: "NumberFormat | None", value: floa
     rendered = f"{value * scale:,.{decimals}f}" if number_format.grouping else f"{value * scale:.{decimals}f}"
     parts = []
     for component in elements(number_format._tag):
-        if local_name(component) == "number":
+        if _part(component) == "number":
             parts.append(rendered)
-        elif local_name(component) in ("text", "currency-symbol"):
+        elif _part(component) in ("text", "currency-symbol"):
             parts.append(text(component))
     return "".join(parts) if rendered in parts else rendered
 
@@ -416,20 +438,18 @@ def _render_date_time_from_format(
     # one set in its regional settings. Nothing here can render that.
     if tag.get(qn("number:format-source")) == "language":
         return None
-    children = [
-        component for component in elements(tag) if local_name(component) in _DATE_TIME_COMPONENT_NAMES
-    ]
-    kinds = {local_name(component) for component in children}
+    children = [component for component in elements(tag) if _part(component) in _DATE_TIME_COMPONENT_NAMES]
+    kinds = {kind for component in children if (kind := _part(component)) is not None}
     named = any(
-        local_name(component) == "day-of-week"
-        or (local_name(component) == "month" and component.get(qn("number:textual")) == "true")
+        _part(component) == "day-of-week"
+        or (_part(component) == "month" and component.get(qn("number:textual")) == "true")
         for component in children
     )
     decimals = max(
         (
             int(component.get(qn("number:decimal-places"), "0"))
             for component in children
-            if local_name(component) == "seconds"
+            if _part(component) == "seconds"
         ),
         default=0,
     )
@@ -463,7 +483,7 @@ def _render_date_time_from_format(
         fraction = fields.microsecond
     parts = []
     for component in children:
-        kind, style = local_name(component), component.get(qn("number:style"), "short")
+        kind, style = _part(component), component.get(qn("number:style"), "short")
         if kind == "text":
             parts.append(text(component))
         elif kind == "am-pm":

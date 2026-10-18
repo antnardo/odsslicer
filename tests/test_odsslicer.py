@@ -69,6 +69,7 @@ from odsslicer import (
 )
 from odsslicer.addresses import _parse_address
 from odsslicer.constants import TAG_CELL
+from odsslicer.styles import _render_number_from_format
 from odsslicer.xmltree import qn
 
 
@@ -4601,6 +4602,38 @@ def test_number_format_resolves_conditional_currency_by_value(reader):
     resolved = s["A7"].style.number_format
     assert resolved.name == "N108P0"
     assert resolved.font_color is None
+
+
+def _number_style(family, children):
+    """A `NumberFormat` over a `<number:{family}-style>` holding `children`,
+    with the `loext` namespace and an unknown one, `x`, declared."""
+    xml = (
+        f'<number:{family}-style xmlns:number="{xmltree.NAMESPACES["number"]}"'
+        f' xmlns:style="{xmltree.NAMESPACES["style"]}" xmlns:loext="{xmltree.NAMESPACES["loext"]}"'
+        f' xmlns:x="urn:example:other" style:name="N1">{children}</number:{family}-style>'
+    )
+    return NumberFormat(etree.fromstring(xml))
+
+
+@pytest.mark.parametrize("name", ["number:text", "loext:text"])
+def test_number_format_text_is_rendered_whether_number_or_loext(name):
+    # LibreOffice writes <loext:text> next to a fill character, and shows it
+    # as text: the displayed text inferred on write keeps it either way
+    fmt = _number_style("number", f'<number:number number:decimal-places="1"/><{name}> pcs</{name}>')
+    assert _render_number_from_format(fmt, 3.0) == "3.0 pcs"
+
+
+def test_number_format_element_of_another_namespace_is_no_part():
+    fmt = _number_style("number", '<number:number number:decimal-places="1"/><x:text> pcs</x:text>')
+    assert _render_number_from_format(fmt, 3.0) == "3.0"
+
+
+def test_date_format_components_read_loext_text_and_skip_other_namespaces():
+    fmt = _number_style(
+        "date", "<number:day/><loext:text>/</loext:text><x:month/><x:text>-</x:text><number:year/>"
+    )
+    assert fmt.family == "date"
+    assert fmt.components == [("day", "short"), ("text", "/"), ("year", "short")]
 
 
 def test_number_format_condition_and_manual_resolve(reader):

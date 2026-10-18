@@ -5,8 +5,9 @@ behind 1.0's decision to compare element names by URI (ROADMAP.md, step 6).
 Until 1.0, odsslicer recognised a row, a group of rows or columns, a column,
 a covered cell, and the parts of a number format by their local name alone
 (`etree.QName(element).localname`): an element of any namespace named
-`table-row` was a row. Since 1.0 the table elements are compared by
-`{URI}local`. This counts, in `content.xml` and `styles.xml`:
+`table-row` was a row. Since 1.0 the table elements, and the parts of a
+number format, are compared by `{URI}local`. This counts, in `content.xml`
+and `styles.xml`:
 
 - **table**: an element whose local name is one of the table structure's
   but whose namespace is not the table namespace, anywhere;
@@ -17,7 +18,9 @@ a covered cell, and the parts of a number format by their local name alone
 It found no table element in 2,112 of the author's files and 611 of
 LibreOffice's test files, and `<loext:text>` in the number formats of 307
 and 27 of them: LibreOffice writes it before a fill character, and shows it
-as text. That is why number formats still compare local names.
+as text. Number formats kept comparing local names for it until the audit
+before 1.0, which compares them by URI too, to `number:text` and
+`loext:text` both (`styles._FORMAT_PARTS`).
 
     python benchmarks/namespace_scan.py                       # the home directory, by Spotlight
     python benchmarks/namespace_scan.py promotion/corpus/libreoffice-core

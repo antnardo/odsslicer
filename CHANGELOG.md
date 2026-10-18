@@ -71,8 +71,10 @@ underneath and those few names; DOCS.md, section 15, gives the 1.0 equivalent of
   of another namespace sharing its local name with a row, a group of rows or columns, a column or
   a covered cell was taken for one: a `<x:table-row>` a file holds among its rows read as a row of
   the sheet. LibreOffice skips such an element, and odsslicer now does too. None of 2,112 real
-  files and 611 of LibreOffice's test files holds one. Number formats still read their parts by
-  local name: LibreOffice writes `<loext:text>` among them, and shows it as text.
+  files and 611 of LibreOffice's test files holds one. The parts of a number format are read by
+  namespace too: `<number:text>` and LibreOffice's `<loext:text>`, which it writes next to a fill
+  character and shows as text, are its text, and the displayed text inferred on write keeps both;
+  an element of another namespace is no part of the format.
 - **A formula is written with the prefix the document binds to OpenFormula** (`of:=` in every
   file LibreOffice writes), and a document that binds it to none gets `of` declared on the root
   of `content.xml`: `of:=...` went in with no declaration, which only LibreOffice's leniency

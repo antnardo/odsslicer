@@ -1626,7 +1626,9 @@ steps 4 and 6, and the audit before 1.0):
   `export_content_xml(pretty=True)` indents with lxml.
 - **An element is known by its namespace and local name**, not its local name alone: an element of
   another namespace that a file writes among the rows - a `<x:table-row>` - read as a row of the
-  sheet, where LibreOffice skips it, as odsslicer now does.
+  sheet, where LibreOffice skips it, as odsslicer now does. Likewise the parts of a number format:
+  `<number:text>` and LibreOffice's `<loext:text>` are its text, an element of another namespace
+  no part of it.
 - **lxml 5.0 or later** is required, and BeautifulSoup no longer is.
 
 ### Upgrading from 0.x
