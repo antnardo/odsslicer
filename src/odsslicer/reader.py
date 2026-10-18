@@ -323,9 +323,15 @@ class ODSReader:
         tags = [qn(name) for name in ([names] if isinstance(names, str) else names)]
         wanted = [(qn(key), value) for key, value in attrs.items()]
 
+        # a loop, not `all()` over a generator: a cell's style is looked up
+        # along its whole chain on every read of one of its properties, and
+        # building a generator per element compared took a third of the time
         def first(candidates: "Iterator[etree._Element]") -> "etree._Element | None":
             for element in candidates:
-                if all(element.get(key) == value for key, value in wanted):
+                for key, value in wanted:
+                    if element.get(key) != value:
+                        break
+                else:
                     return element
             return None
 
