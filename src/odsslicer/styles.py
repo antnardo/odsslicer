@@ -136,7 +136,7 @@ def _render_date_time_from_format(
         locale = (
             (language, tag.get(qn("number:country")))
             if language
-            else number_format._reader._document_locale()
+            else number_format._reader._catalog.document_locale()
             if number_format._reader is not None
             else (None, None)
         )
@@ -448,12 +448,12 @@ class CellStyle:
         cut where it closes. Lazily: a property the nearest style sets
         looks no parent up."""
         seen = set()
-        current = self._reader._find_style(self.name, family="table-cell")
+        current = self._reader._catalog.find_style(self.name, family="table-cell")
         while current is not None and current.get(_STYLE_NAME) not in seen:
             seen.add(current.get(_STYLE_NAME))
             yield current
             parent = current.get(qn("style:parent-style-name"))
-            current = self._reader._find_style(parent, family="table-cell") if parent else None
+            current = self._reader._catalog.find_style(parent, family="table-cell") if parent else None
 
     def _resolve(self, element: str, attribute: str) -> "str | None":
         """The text of `attribute` on the `element` properties of the
@@ -629,7 +629,7 @@ class CellStyle:
         name, to change it; `None` removes the cell's own."""
         data_style = qn("style:data-style-name")
         name = next((s.get(data_style) for s in self._chain() if s.get(data_style)), None)
-        tag = self._reader._find_number_style(name)
+        tag = self._reader._catalog.find_number_style(name)
         if tag is None:
             return None
         base = NumberFormat(tag, reader=self._reader)
@@ -650,7 +650,7 @@ class CellStyle:
             name = fmt
         else:
             raise TypeError(f"number_format must be a NumberFormat, str, or None, got {type(fmt)!r}")
-        if self._cell.sheet.reader._find_number_style(name) is None:
+        if self._cell.sheet.reader._catalog.find_number_style(name) is None:
             raise ValueError(f"no number format named {name!r} exists in this document")
         tag.set(qn("style:data-style-name"), cast(str, name))
         self._cell._read_by_format()

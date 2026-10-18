@@ -1926,7 +1926,7 @@ def positional(monkeypatch):
     parser = etree.XMLParser(resolve_entities=False, no_network=True)
     parser.set_element_class_lookup(etree.ElementDefaultClassLookup(element=Recording))
     monkeypatch.setattr(
-        "odsslicer.reader.parse", lambda markup: etree.ElementTree(etree.fromstring(markup, parser))
+        "odsslicer.package.parse", lambda markup: etree.ElementTree(etree.fromstring(markup, parser))
     )
     etree.set_default_parser(parser)  # what `etree.Element`, and so `xmltree.new`, makes
     yield recorded
@@ -4394,12 +4394,15 @@ def test_cell_style_walks_parent_inheritance_chain():
     )
     soup = etree.fromstring(xml)
 
-    class StubReader:
-        def _find_style(self, name, family=None):
+    class StubCatalog:
+        def find_style(self, name, family=None):
             return first(soup, "style:style", style_name=name) if name else None
 
-        def _find_number_style(self, name):
+        def find_number_style(self, name):
             return None
+
+    class StubReader:
+        _catalog = StubCatalog()
 
     style = CellStyle(StubReader(), "Error")
     assert style.bold is True  # set directly on Error
@@ -4425,12 +4428,15 @@ def test_cell_style_nearest_ancestor_wins_on_conflicting_property():
     )
     soup = etree.fromstring(xml)
 
-    class StubReader:
-        def _find_style(self, name, family=None):
+    class StubCatalog:
+        def find_style(self, name, family=None):
             return first(soup, "style:style", style_name=name) if name else None
 
-        def _find_number_style(self, name):
+        def find_number_style(self, name):
             return None
+
+    class StubReader:
+        _catalog = StubCatalog()
 
     style = CellStyle(StubReader(), "Child")
     assert style.background_color == "#222222"
@@ -4453,12 +4459,15 @@ def test_cell_style_font_underline_strikethrough_and_rotation():
     )
     soup = etree.fromstring(xml)
 
-    class StubReader:
-        def _find_style(self, name, family=None):
+    class StubCatalog:
+        def find_style(self, name, family=None):
             return first(soup, "style:style", style_name=name) if name else None
 
-        def _find_number_style(self, name):
+        def find_number_style(self, name):
             return None
+
+    class StubReader:
+        _catalog = StubCatalog()
 
     style = CellStyle(StubReader(), "ce1")
     assert style.font_family == "Liberation Sans"
@@ -4481,12 +4490,15 @@ def test_cell_style_border_shorthand_applies_to_every_side():
     )
     soup = etree.fromstring(xml)
 
-    class StubReader:
-        def _find_style(self, name, family=None):
+    class StubCatalog:
+        def find_style(self, name, family=None):
             return first(soup, "style:style", style_name=name) if name else None
 
-        def _find_number_style(self, name):
+        def find_number_style(self, name):
             return None
+
+    class StubReader:
+        _catalog = StubCatalog()
 
     style = CellStyle(StubReader(), "ce1")
     for border in (style.border_top, style.border_bottom, style.border_left, style.border_right):
@@ -4508,12 +4520,15 @@ def test_cell_style_border_specific_side_overrides_shorthand():
     )
     soup = etree.fromstring(xml)
 
-    class StubReader:
-        def _find_style(self, name, family=None):
+    class StubCatalog:
+        def find_style(self, name, family=None):
             return first(soup, "style:style", style_name=name) if name else None
 
-        def _find_number_style(self, name):
+        def find_number_style(self, name):
             return None
+
+    class StubReader:
+        _catalog = StubCatalog()
 
     style = CellStyle(StubReader(), "ce1")
     assert style.border_top == Border("2.49pt solid #000000")
@@ -4549,12 +4564,15 @@ def test_cell_style_wrap_shrink_protection_and_text_position():
     )
     soup = etree.fromstring(xml)
 
-    class StubReader:
-        def _find_style(self, name, family=None):
+    class StubCatalog:
+        def find_style(self, name, family=None):
             return first(soup, "style:style", style_name=name) if name else None
 
-        def _find_number_style(self, name):
+        def find_number_style(self, name):
             return None
+
+    class StubReader:
+        _catalog = StubCatalog()
 
     style = CellStyle(StubReader(), "ce1")
     assert style.wrap_text is True
@@ -4576,12 +4594,15 @@ def test_cell_style_diagonal_border_parses_like_a_regular_border():
     )
     soup = etree.fromstring(xml)
 
-    class StubReader:
-        def _find_style(self, name, family=None):
+    class StubCatalog:
+        def find_style(self, name, family=None):
             return first(soup, "style:style", style_name=name) if name else None
 
-        def _find_number_style(self, name):
+        def find_number_style(self, name):
             return None
+
+    class StubReader:
+        _catalog = StubCatalog()
 
     style = CellStyle(StubReader(), "ce1")
     assert style.diagonal_tl_br.color == "#ff0000"
@@ -4637,7 +4658,7 @@ def test_date_format_components_read_loext_text_and_skip_other_namespaces():
 
 
 def test_number_format_condition_and_manual_resolve(reader):
-    number_tag = reader._find_number_style("N108")
+    number_tag = reader._catalog.find_number_style("N108")
     from odsslicer import NumberFormat
 
     base = NumberFormat(number_tag, reader=reader)
@@ -5171,7 +5192,7 @@ def test_forking_after_a_style_copy_does_not_affect_the_source_cell(writable_rea
 def _own_style_tag(reader, cell):
     """The cell's own <style:style> element, exactly as save() will
     serialise it."""
-    return reader._find_style(cell.style_name, family="table-cell")
+    return reader._catalog.find_style(cell.style_name, family="table-cell")
 
 
 def _assert_parent_is_usable(reader, tag):

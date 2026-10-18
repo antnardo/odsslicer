@@ -279,7 +279,7 @@ def test_a_touched_settings_part_is_written_back(workbook, tmp_path):
     item = _config_item(book.settings_data, "VisibleAreaTop")
     assert item is not None, "TEST.ods is expected to record a visible area"
     item.text = "4242"
-    book._touched_part("settings.xml")
+    book._package.touch("settings.xml")
 
     _saved(book, tmp_path)
 
@@ -287,11 +287,11 @@ def test_a_touched_settings_part_is_written_back(workbook, tmp_path):
 
 
 def test_a_write_into_the_settings_said_of_its_element_is_written_back(workbook, tmp_path):
-    # `_touched_tag` finds the part an element belongs to by its tree's root
+    # `_Package.touch_tag` finds the part an element belongs to by its tree's root
     book = ODSReader(workbook)
     item = _config_item(book.settings_data, "VisibleAreaTop")
     item.text = "4242"
-    book._touched_tag(item)
+    book._package.touch_tag(item)
 
     after = _saved(book, tmp_path)
 
@@ -303,7 +303,7 @@ def test_a_settings_element_taken_out_of_its_tree_belongs_to_no_part(workbook, t
     book = ODSReader(workbook)
     item = _config_item(book.settings_data, "VisibleAreaTop")
     item.getparent().remove(item)
-    book._touched_tag(item)  # detached: its root is itself
+    book._package.touch_tag(item)  # detached: its root is itself
 
     after = _saved(book, tmp_path)
 
@@ -315,7 +315,7 @@ def test_a_settings_part_written_back_says_what_it_said(fixture, tmp_path):
     before = _members(fixture)
     book = ODSReader(fixture)
     book.settings_data  # noqa: B018 - parsed, then serialised with nothing changed in it
-    book._touched_part("settings.xml")
+    book._package.touch("settings.xml")
 
     after = _saved(book, tmp_path)
 
@@ -339,7 +339,7 @@ def test_a_settings_part_with_other_prefixes_is_read_and_written_with_its_own(wo
     item = _config_item(book.settings_data, "VisibleAreaTop")
     assert item is not None
     item.text = "4242"
-    book._touched_tag(item)
+    book._package.touch_tag(item)
 
     after = _saved(book, tmp_path)
 
@@ -352,10 +352,10 @@ def test_a_settings_part_with_other_prefixes_is_read_and_written_with_its_own(wo
 
 def test_a_touched_styles_part_is_written_back(workbook, tmp_path):
     book = ODSReader(workbook)
-    style = book._find_style("Default")
+    style = book._catalog.find_style("Default")
     assert style is not None, "TEST.ods is expected to carry a Default cell style"
     style.set(qn("style:display-name"), "touched by the test")
-    book._touched_part("styles.xml")
+    book._package.touch("styles.xml")
 
     after = _saved(book, tmp_path)
 
@@ -371,7 +371,7 @@ def test_a_touched_settings_part_is_created_for_a_file_that_had_none(tmp_path):
     settings.find(qn("office:settings")).append(
         new("config:config-item-set", {"config:name": "ooo:view-settings"})
     )
-    book._touched_part("settings.xml")
+    book._package.touch("settings.xml")
 
     after = _saved(book, tmp_path)
 
@@ -434,7 +434,7 @@ def test_a_padded_number_format_in_content_xml_keeps_its_padding_through_a_save(
 
     assert len(PADDED_NUMBER_TEXT.findall(after["content.xml"])) == 2
     reread = ODSReader(tmp_path / "saved.ods")
-    texts = reread._find_number_style("NPAD").iter(qn("number:text"))
+    texts = reread._catalog.find_number_style("NPAD").iter(qn("number:text"))
     assert [text(element) for element in texts] == ["   ", "   "]
 
 
@@ -443,7 +443,7 @@ def test_a_styles_part_written_back_keeps_its_padded_number_formats(name, expect
     # copying `styles.xml` through hid the loss; once something writes to
     # it, the tree is serialised and has to hold the padding itself
     book = ODSReader(FIXTURES_DIR / "wild" / name)
-    book._touched_part("styles.xml")
+    book._package.touch("styles.xml")
 
     after = _saved(book, tmp_path)
 
@@ -464,7 +464,7 @@ def test_a_save_without_an_edit_changes_nothing_in_meaning(fixture, tmp_path):
 def test_a_styles_part_written_back_says_what_it_said(fixture, tmp_path):
     before = _members(fixture)
     book = ODSReader(fixture)
-    book._touched_part("styles.xml")  # serialised from its tree, with nothing changed in it
+    book._package.touch("styles.xml")  # serialised from its tree, with nothing changed in it
 
     after = _saved(book, tmp_path)
 
@@ -490,7 +490,7 @@ def test_parsing_keeps_every_run_of_whitespace_whatever_the_element():
 # ---------------------------------------------------------------------------
 #
 # The parts `save()` copies through are only serialised once something records
-# a write to their tree (`_touched_part`, `_touched_tag`). A write that forgot
+# a write to their tree (`_Package.touch`, `_Package.touch_tag`). A write that forgot
 # to would be silently lost on save: these tests hold each path that can reach
 # such a tree. A chart's content has its own tests (test_odsslicer.py, "a chart
 # follows..."). `settings.xml` has no writer in the library yet: the tests

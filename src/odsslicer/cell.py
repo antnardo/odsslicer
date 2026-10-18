@@ -40,10 +40,8 @@ from odsslicer.xmltree import (
     children,
     clone,
     descendants,
-    elements,
     following,
     insert_before,
-    name_of,
     new,
     paragraph_text,
     preceding,
@@ -56,7 +54,6 @@ from odsslicer.xmltree import (
     unwrap,
     wrap_contents,
 )
-from odsslicer.xmlutils import _ensure_style_child
 
 if TYPE_CHECKING:
     from odsslicer.numberformat import NumberFormat
@@ -80,21 +77,6 @@ _DATA_STYLE_NAME = qn("style:data-style-name")
 _TEXT_P = qn("text:p")
 _CELL_TAGS = tuple(qn(name) for name in TAG_CELL)
 _COVERED_CELL = qn("table:covered-table-cell")
-
-
-def _data_style_name(reader: "ODSReader", name: "str | None") -> "str | None":
-    """The name of the number format the cell style `name` gives a cell,
-    following its parents."""
-    visited: set[str] = set()
-    while name and name not in visited:
-        visited.add(name)
-        style = reader._find_style(name, family="table-cell")
-        if style is None:
-            return None
-        if _DATA_STYLE_NAME in style.attrib:
-            return cast(str, style.get(_DATA_STYLE_NAME))
-        name = style.get(qn("style:parent-style-name"))
-    return None
 
 
 def _is_broadcastable_scalar(value: object) -> bool:
@@ -721,15 +703,8 @@ class Cell:
         kept per number format, a column of times asking it for every cell."""
         if self.sheet is None or self.sheet.reader is None:
             return False
-        reader = self.sheet.reader
-        name = _data_style_name(reader, self._style_name())
-        if name is None:
-            return False
-        if name not in reader._elapsed_formats:
-            tag = reader._find_number_style(name)
-            elapsed = tag is not None and tag.get(qn("number:truncate-on-overflow")) == "false"
-            reader._elapsed_formats[name] = elapsed
-        return reader._elapsed_formats[name]
+        catalog = self.sheet.reader._catalog
+        return catalog.counts_elapsed_time(catalog.data_style_name(self._style_name()))
 
     def _read_by_format(self) -> None:
         """Read a time value again once the cell's format has changed, as
@@ -762,7 +737,7 @@ class Cell:
                 if col < seen:
                     name = definition.get(qn("table:default-cell-style-name"))
                     break
-        return _data_style_name(cast("ODSReader", reader), name)
+        return cast("ODSReader", reader)._catalog.data_style_name(name)
 
     def _format_template_candidates(
         self, fmt: "str | None", raw_attr: str, *, same_format: bool = False
@@ -922,21 +897,14 @@ class Cell:
 
         The cell gets a style shared by every cell whose style it was, plus
         the format - not one of its own, of which a column of dates would
-        make a thousand; a later write to its style forks one as usual."""
+        make a thousand (`_StyleCatalog.date_formatted_style`); a later
+        write to its style forks one as usual."""
         if self.sheet is None or self.sheet.reader is None:
             return
         if self._resolved_number_format(value) is not None:
             return
-        reader = self.sheet.reader
-        source = self._style_name()
-        key = (source, reader._default_date_format(kind))
-        name = reader._date_formatted_styles.get(key)
-        if name is None:
-            tag = reader._new_style_tag("table-cell", self._OWN_STYLE_PREFIX)
-            self._copy_resolved_style_into(tag, source)
-            tag.set(_DATA_STYLE_NAME, key[1])
-            name = reader._date_formatted_styles[key] = cast(str, tag.get(qn("style:name")))
-        self.cell.set(_STYLE_NAME, name)
+        catalog = self.sheet.reader._catalog
+        self.cell.set(_STYLE_NAME, catalog.date_formatted_style(self._style_name(), kind))
         self._own_style_name = None
 
     def _render_display_from_number_format(self, new_value: object) -> "str | None":
@@ -1118,8 +1086,6 @@ class Cell:
             return own
         return self.sheet._column_default_cell_style(self.col)
 
-    _OWN_STYLE_PREFIX = "ocs"
-
     def _ensure_own_style(self) -> etree._Element:
         """This cell's own, uniquely-owned automatic style tag - safe to
         mutate in place without affecting any other cell, even one that
@@ -1128,7 +1094,7 @@ class Cell:
 
         The first call forks one off the cell's current style (if any),
         carrying over everything that style resolves to (see
-        `_copy_resolved_style_into`), so every already-resolved property
+        `_StyleCatalog.fork_cell_style`), so every already-resolved property
         keeps applying except the ones a later write explicitly overrides;
         further calls on this same `Cell` (e.g. setting several properties
         one after another) reuse that same forked style instead of forking
@@ -1142,71 +1108,16 @@ class Cell:
             raise RuntimeError(f"cell {self.address} has no owning ODSReader and cannot be styled")
         current_name = self.cell.get(_STYLE_NAME)
         if self._own_style_name is not None and current_name == self._own_style_name:
-            tag = reader._find_style(current_name, family="table-cell")
+            tag = reader._catalog.find_style(current_name, family="table-cell")
             if tag is not None:
                 return tag
-        tag = reader._new_style_tag("table-cell", self._OWN_STYLE_PREFIX)
         # a cell with no style of its own shows with its column's: the fork
         # has to carry that one, or the cell would lose the column's format
-        self._copy_resolved_style_into(tag, self._style_name())
+        tag = reader._catalog.fork_cell_style(self._style_name())
         new_name = cast(str, tag.get(qn("style:name")))
         self.cell.set(_STYLE_NAME, new_name)
         self._own_style_name = new_name
         return tag
-
-    # `<style:style>` children whose attributes merge along the inheritance
-    # chain (a nearer style overriding one attribute must not drop the
-    # others); any other child - `style:map`, carrying conditional formats -
-    # is taken whole from the nearest style that has one.
-    _STYLE_PROPERTY_TAGS = frozenset(
-        qn(name)
-        for name in ("style:text-properties", "style:table-cell-properties", "style:paragraph-properties")
-    )
-
-    def _copy_resolved_style_into(self, tag: etree._Element, current_name: "str | None") -> None:
-        """Fill a freshly forked style tag with everything `current_name`
-        currently resolves to.
-
-        The obvious implementation - pointing the fork at the old style via
-        `style:parent-style-name` - writes a file no spreadsheet renders as
-        the library reads it back: only *named* styles (`styles.xml`) are
-        addressable ancestors, and LibreOffice silently falls back to
-        `Default` when `style:parent-style-name` names an automatic style
-        (issue #1). A cell's style is almost always an automatic one, so the
-        fork has to carry the properties itself: walk up to the nearest
-        named ancestor - which becomes the fork's real parent - and copy
-        every automatic style passed on the way, farthest first so a nearer
-        style wins, exactly as `CellStyle` resolves them on read.
-        """
-        reader = self.sheet.reader
-        automatic: list[etree._Element] = []
-        seen: set[str | None] = set()
-        current = reader._find_style(current_name, family="table-cell")
-        while current is not None:
-            name = current.get(qn("style:name"))
-            if name in seen:
-                break  # a malformed file could cycle; resolve what we have
-            seen.add(name)
-            if next(current.iterancestors(qn("office:styles")), None) is not None:
-                # a named style: a parent link to it does hold, and keeping
-                # the link (rather than copying) preserves its own updates
-                tag.set(qn("style:parent-style-name"), cast(str, name))
-                break
-            automatic.append(current)
-            parent = current.get(qn("style:parent-style-name"))
-            current = reader._find_style(parent, family="table-cell") if parent else None
-        for source in reversed(automatic):
-            if _DATA_STYLE_NAME in source.attrib:  # the number format
-                tag.set(_DATA_STYLE_NAME, cast(str, source.get(_DATA_STYLE_NAME)))
-            for element in elements(source):
-                if element.tag in self._STYLE_PROPERTY_TAGS:
-                    properties = _ensure_style_child(tag, name_of(element))
-                    for key, value in element.attrib.items():
-                        properties.set(key, value)
-                else:
-                    for previous in list(tag.iterchildren(element.tag)):
-                        remove(previous)  # this nearer style replaces them
-                    tag.append(clone(element))
 
     @property
     def is_merge_master(self) -> bool:

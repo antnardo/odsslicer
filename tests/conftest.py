@@ -176,7 +176,7 @@ def ods_with_sheet(path, table_xml, styles_xml=""):
     for element in _fragment(table_xml):
         table.append(element)
     for element in _fragment(styles_xml):
-        reader._automatic_styles().append(element)
+        reader._catalog.automatic_styles().append(element)
     reader.save(path)
     return path
 

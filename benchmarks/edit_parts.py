@@ -74,7 +74,11 @@ def _apply(reader: object, edit: str) -> bool:
         reader.rename_sheet(sheet.name, sheet.name + " renamed")  # type: ignore[attr-defined]
     elif edit == "touch_settings":
         reader.settings_data  # type: ignore[attr-defined]  # noqa: B018
-        reader._touched_part("settings.xml")  # type: ignore[attr-defined]
+        package = getattr(reader, "_package", None)
+        if package is not None:
+            package.touch("settings.xml")
+        else:  # a version before 1.0's audit, part B4, where the reader held the parts
+            reader._touched_part("settings.xml")  # type: ignore[attr-defined]
     return True
 
 

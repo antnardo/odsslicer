@@ -198,7 +198,7 @@ class NumberFormat:
             apply_name = style_map.get(qn("style:apply-style-name"))
             target = None
             if reader is not None and apply_name and apply_name not in _seen:
-                target_tag = reader._find_number_style(apply_name)
+                target_tag = reader._catalog.find_number_style(apply_name)
                 if target_tag is not None:
                     target = NumberFormat(target_tag, reader=reader, _seen=_seen)
             self.conditions.append((condition, target))
@@ -264,10 +264,11 @@ class NumberFormat:
             font_color=font_color,
             elapsed=elapsed,
         )
+        catalog = reader._catalog
         # the locale is looked up for a percentage alone: it walks styles.xml
-        affixes = _percent_affixes(*reader._document_locale()) if family == "percentage" else ("", "")
-        tag = _number_format_element(spec, reader._new_style_name("N"), affixes)
-        reader._automatic_styles().append(tag)
+        affixes = _percent_affixes(*catalog.document_locale()) if family == "percentage" else ("", "")
+        tag = _number_format_element(spec, catalog.new_style_name("N"), affixes)
+        catalog.automatic_styles().append(tag)
         return cls(tag, reader=reader)
 
     def add_condition(self, condition: str, target: "NumberFormat") -> None:
@@ -286,7 +287,7 @@ class NumberFormat:
         self._tag.append(style_map)
         # a format a named cell style uses lives in `styles.xml`, which
         # save() copies through unless told something wrote to it
-        self._reader._touched_tag(self._tag)
+        self._reader._package.touch_tag(self._tag)
         self.conditions.append((condition, target))
 
     def __repr__(self) -> str:

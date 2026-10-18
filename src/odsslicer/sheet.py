@@ -31,10 +31,10 @@ from odsslicer.formulas import (
     _insertion_remap,
     _quote_odf_sheet_name,
     _Remap,
-    _remap_odf_formula_references,
     _shift_odf_formula,
     _unquote_odf_sheet_name,
 )
+from odsslicer.references import _References
 from odsslicer.styles import ColumnStyle, RowStyle, TableStyle
 from odsslicer.xmltree import (
     NAMESPACES,
@@ -52,7 +52,6 @@ from odsslicer.xmltree import (
     rename,
     unset,
 )
-from odsslicer.xmlutils import _ensure_style_child, _is_forked_style_name
 
 if TYPE_CHECKING:
     from odsslicer.reader import ODSReader
@@ -1598,13 +1597,9 @@ class Sheet:
             _give_back(definitions[after:], attr, count)
 
     def _read_charts_first(self) -> None:
-        """Parse the content of the document's charts, if not done yet,
-        before a structural edit changes anything: a chart's part that is
-        not well-formed raises `MalformedDocumentError` with the sheet as it
-        was, rather than once the edit is halfway through (see
-        `ODSReader._read_objects`)."""
-        if self.reader is not None:
-            self.reader._read_objects()
+        """Parse the content of the document's charts before a structural
+        edit changes anything (see `_References.read_first`)."""
+        _References(self.reader).read_first()
 
     def _remap_formula_references(self, remap: _Remap) -> None:
         """After a structural edit of this sheet (rows or columns deleted or
@@ -1621,17 +1616,7 @@ class Sheet:
         `ODSReader` (nothing else to scan). One full-document sweep per call
         - which is why `delete_rows` batches N rows into one call.
         """
-        if self.reader is None:
-            return
-        for sheet in self.reader.sheets:
-            for row in sheet.rows:
-                for cell in row:
-                    if cell._formula is None:
-                        continue
-                    adjusted = _remap_odf_formula_references(cell._formula, self.name, sheet.name, remap)
-                    if adjusted != cell._formula:
-                        cell._write_formula(adjusted)
-        self.reader._remap_drawing_references(self.name, remap)
+        _References(self.reader).remap(self.name, remap)
 
     def __repr__(self) -> str:
         return f"Sheet(name='{self.name}', size[rows, cols]={self.size})"
@@ -1646,7 +1631,7 @@ class Sheet:
 
     def _table_style_tag(self) -> "etree._Element | None":
         """The `<style:style>` this sheet's `table:style-name` names now."""
-        return self.reader._find_style(self.table.get(_STYLE_NAME), family="table")
+        return self.reader._catalog.find_style(self.table.get(_STYLE_NAME), family="table")
 
     def row_style(self, row: int) -> "RowStyle | None":
         """The resolved, writable `RowStyle` for logical row `row` (see
@@ -1659,7 +1644,7 @@ class Sheet:
     def _row_style_tag(self, row: int) -> "etree._Element | None":
         """The `<style:style>` logical row `row`'s `table:style-name` names now."""
         row_tag = self.rows[row][0].cell.getparent()
-        return self.reader._find_style(row_tag.get(_STYLE_NAME), family="table-row")
+        return self.reader._catalog.find_style(row_tag.get(_STYLE_NAME), family="table-row")
 
     # what may hold `<table:table-column>` elements, and what comes after them
 
@@ -1737,61 +1722,32 @@ class Sheet:
         column `col` names now, `None` if none covers it."""
         col_tag = self._find_column_tag(col)
         return (
-            self.reader._find_style(col_tag.get(_STYLE_NAME), family="table-column")
+            self.reader._catalog.find_style(col_tag.get(_STYLE_NAME), family="table-column")
             if col_tag is not None
             else None
         )
 
-    def _fork_style(
-        self, current_name: "str | None", family: str, prefix: str, props_tag_name: str
-    ) -> etree._Element:
-        """The single, uniquely-owned automatic style (see
-        `Cell._ensure_own_style` for the cell-level equivalent) behind one
-        row/column/sheet's `table:style-name`.
-
-        Unlike cell styles, row/column/sheet styles don't meaningfully use
-        `style:parent-style-name` inheritance in practice (see `RowStyle`/
-        `ColumnStyle`/`TableStyle`), so forking instead copies the current
-        style's properties over verbatim - otherwise a later write of just
-        one property (e.g. `.height`) would silently lose whatever else
-        (e.g. `.visible`) the previously-shared style carried, since these
-        are resolved from one single style tag rather than a chain."""
-        if _is_forked_style_name(current_name, prefix):
-            # a fork lives in the automatic styles of `content.xml`, and only
-            # a tag from there is written to in place: a style of
-            # `styles.xml` that happens to bear such a name is forked like
-            # any other, since save() copies that part through untouched
-            name, style_family = qn("style:name"), qn("style:family")
-            for tag in children(self.reader._automatic_styles(), "style:style"):
-                if tag.get(name) == current_name and tag.get(style_family) == family:
-                    return tag
-        old_tag = self.reader._find_style(current_name, family=family) if current_name else None
-        tag = self.reader._new_style_tag(family, prefix)
-        if old_tag is not None:
-            old_props = child(old_tag, props_tag_name)
-            if old_props is not None:
-                props = _ensure_style_child(tag, props_tag_name)
-                for key, value in old_props.attrib.items():
-                    props.set(key, value)
-        return tag
-
     def _ensure_row_style(self, row: int) -> etree._Element:
         self._unrepeat_row(row)
         row_tag = self.rows[row][0].cell.getparent()
-        tag = self._fork_style(row_tag.get(_STYLE_NAME), "table-row", "ors", "style:table-row-properties")
+        tag = self.reader._catalog.fork_sheet_part_style(
+            row_tag.get(_STYLE_NAME), "table-row", "ors", "style:table-row-properties"
+        )
         row_tag.set(_STYLE_NAME, tag.attrib[qn("style:name")])
         return tag
 
     def _ensure_column_style(self, col: int) -> etree._Element:
         col_tag = self._unrepeat_column_tag(col)
-        tag = self._fork_style(
+        tag = self.reader._catalog.fork_sheet_part_style(
             col_tag.get(_STYLE_NAME), "table-column", "ocos", "style:table-column-properties"
         )
         col_tag.set(_STYLE_NAME, tag.attrib[qn("style:name")])
         return tag
 
     def _ensure_table_style(self) -> etree._Element:
-        tag = self._fork_style(self.table.get(_STYLE_NAME), "table", "ots", "style:table-properties")
+        tag = self.reader._catalog.fork_sheet_part_style(
+            self.table.get(_STYLE_NAME), "table", "ots", "style:table-properties"
+        )
         self.table.set(_STYLE_NAME, tag.attrib[qn("style:name")])
         return tag
 

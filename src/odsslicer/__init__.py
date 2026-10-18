@@ -34,8 +34,9 @@ from odsslicer.libreoffice import (
     recalculate,
 )
 from odsslicer.numberformat import NumberFormat
+from odsslicer.package import EncryptedDocumentError, MalformedDocumentError
 from odsslicer.properties import DocumentProperties
-from odsslicer.reader import EncryptedDocumentError, MalformedDocumentError, ODSReader
+from odsslicer.reader import ODSReader
 from odsslicer.sheet import Sheet
 from odsslicer.styles import Border, CellStyle, ColumnStyle, RowStyle, TableStyle
 

@@ -375,7 +375,7 @@ class TestSearch:
     def test_naive_getroottree_of_a_removed_element_is_still_its_documents(self):
         # an element taken out of its tree stays in the same lxml document:
         # `getroottree()` answers that document's root, not the element.
-        # Finding which part a write went to (`ODSReader._touched_tag`)
+        # Finding which part a write went to (`_Package.touch_tag`)
         # climbs `getparent()` instead, as bs4's `parent` does
         root = lxml_fragment("<text:span><text:span/></text:span>").getparent()
         inner = root[0][0]
