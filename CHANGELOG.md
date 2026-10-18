@@ -7,6 +7,17 @@ version (until 1.0, the API could change between minor versions).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A sheet is indexed by any integer, as numpy is**: `sheet[np.int64(2), 0]`, `sheet[0, Column.B]`
+  for an `IntEnum`, anything `operator.index` takes, where only a plain `int` was accepted and the
+  rest raised `ValueError` - a loop over `np.arange(n)` could not read a sheet. `True` and `False`
+  are still refused: they are not positions. Reading one cell by plain ints is also a little
+  faster, decided first.
+- **A selection of several cells read as one says what to do instead**: `.value` and `.cell` on
+  it raise `TypeError` naming `.to_list()` and `.to_numpy()`, and `to_vector()` on more than one
+  column raises `ValueError`, where both failed on a bare `assert`.
+
 ## [1.0.0] — 2026-10-18
 
 odsslicer 1.0 reads and writes every part of the package with lxml alone: BeautifulSoup is gone.

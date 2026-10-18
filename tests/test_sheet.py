@@ -1,9 +1,12 @@
 """Sheet: indexing the grid, and the shape of what it gives past the data."""
 
+import enum
+
+import numpy as np
 import pytest
 from lxml import etree
 
-from odsslicer import ArrayValues, Sheet
+from odsslicer import ArrayValues, ODSReader, Sheet
 
 
 def test_text_and_numeric_indexes_give_the_same_cells(sheet1):
@@ -130,3 +133,42 @@ def test_a_row_of_an_empty_sheet_keeps_its_two_dimensions(reader):
     assert selection.dimension == 2
     assert selection.size == (1, 0)
     assert selection.to_list() == [[]]
+
+
+class _Column(enum.IntEnum):
+    B = 1
+
+
+class TestIndexing:
+    """What `Sheet.__getitem__` takes for a position."""
+
+    @pytest.fixture()
+    def sheet(self):
+        sheet = ODSReader.new().sheet("Sheet1")
+        sheet["B1"].value = 7
+        sheet["B2"].value = 8
+        return sheet
+
+    @pytest.mark.parametrize(
+        "key",
+        [(0, 1), (np.int64(0), np.int64(1)), (np.int32(0), 1), (0, _Column.B), (np.uint8(0), np.intp(1))],
+        ids=["int", "numpy-int64", "numpy-int32", "int-enum", "numpy-unsigned"],
+    )
+    def test_an_integer_of_any_kind_gives_the_cell(self, sheet, key):
+        assert sheet[key].value == 7
+
+    @pytest.mark.parametrize("row", [1, np.int64(1)], ids=["int", "numpy-int64"])
+    def test_an_integer_of_any_kind_gives_the_row(self, sheet, row):
+        assert sheet[row].to_list() == [None, 8]
+
+    def test_numpy_slice_bounds_give_the_cells(self, sheet):
+        assert sheet[np.int64(0) : np.int64(2), np.int64(1)].to_list() == [[7], [8]]
+
+    @pytest.mark.parametrize(
+        "key",
+        [(True, 1), (0, False), True, (0, 1.5), (0, "B")],
+        ids=["bool-row", "bool-col", "bool", "float", "str-col"],
+    )
+    def test_what_is_no_position_is_refused(self, sheet, key):
+        with pytest.raises(ValueError, match="cannot index a sheet"):
+            sheet[key]

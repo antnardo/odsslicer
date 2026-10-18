@@ -132,7 +132,11 @@ class ArrayValues:
 
     @property
     def cell(self) -> "Cell":
-        assert self.dimension == 0
+        if self.dimension != 0:
+            raise TypeError(
+                f"a selection of {self.size} cells has no single cell or value - "
+                "read it with .to_list() or .to_numpy(), or index one cell"
+            )
         return self.array
 
     def to_list(self) -> Any:
@@ -145,7 +149,8 @@ class ArrayValues:
         raise ValueError(f"a selection cannot be {self.dimension} levels deep")
 
     def to_vector(self) -> "ArrayValues":
-        assert self.dimension == 2 and self.size[1] == 1
+        if self.dimension != 2 or self.size[1] != 1:
+            raise ValueError(f"to_vector() takes a single column, not a selection of {self.size} cells")
         return ArrayValues([row[0] for row in self.array])
 
     def __eq__(self, array: Any) -> bool:

@@ -30,8 +30,9 @@ and a sheet's grid is never in two places.
 """
 
 import logging
+import operator
 from collections.abc import Iterable, Iterator
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, NoReturn, SupportsIndex, cast
 
 from lxml import etree
 
@@ -59,6 +60,25 @@ __all__ = ["Sheet"]
 logger = logging.getLogger("odsslicer")
 
 _TABLE_NAME = qn("table:name")
+
+
+# what `Sheet.__getitem__` takes as it is, without `_as_index`
+_PLAIN = (int, slice)
+
+
+def _as_index(position: object) -> object:
+    """`position` as `Sheet.__getitem__` tells it apart: a plain `int` for
+    anything that stands for one - numpy's integers, an `IntEnum`, what
+    `operator.index` takes - so that `sheet[np.int64(2), 0]` reads like
+    `sheet[2, 0]`, as numpy itself does. `True` and `False` are not
+    positions, however `int` sees them. Anything else comes back as it is,
+    for the caller to accept or refuse."""
+    if isinstance(position, bool) or type(position) in (int, str, slice):
+        return position
+    try:
+        return operator.index(cast(SupportsIndex, position))
+    except TypeError:
+        return position
 
 
 class Sheet:
@@ -505,29 +525,45 @@ class Sheet:
             for i in range(*self._unslice(rows, row=True))
         ]
 
-    def __getitem__(self, address: "str | int | tuple[Any, ...] | slice") -> Any:
+    def __getitem__(self, address: object) -> Any:
         """Row first, column second, as in numpy and as the data is laid out:
         `sheet[0, 1]`, `sheet[0]`, `sheet[:, 1]`, `sheet[0:3, 1:4]`, or a text
         address read by `_parse_address` - `sheet["B1"]`, `sheet["B1:D3"]`.
         A `Cell` for one position, an `ArrayValues` of them otherwise."""
+        if type(address) is tuple and len(address) == 2:
+            rows_address, cols_address = address
+            # one cell by plain ints, the common case, decided first and with
+            # no call: this runs once per cell read through indexing
+            if type(rows_address) is int and type(cols_address) is int:
+                return self._cell(rows_address, cols_address)
+            if type(rows_address) not in _PLAIN or type(cols_address) not in _PLAIN:
+                rows_address, cols_address = _as_index(rows_address), _as_index(cols_address)
+                if type(rows_address) is int and type(cols_address) is int:
+                    return self._cell(rows_address, cols_address)
+            return self._select(address, rows_address, cols_address)
         if type(address) is str:
-            address = _parse_address(address, self.n_rows)
+            parsed = _parse_address(address, self.n_rows)
+            if type(parsed) is tuple:
+                return self[parsed]
+            address = parsed
+        elif type(address) not in _PLAIN:
+            address = _as_index(address)
         if type(address) is int:
             return ArrayValues(self._row(address))
         if type(address) is slice:
             return ArrayValues([self._row(i) for i in range(*self._unslice(address, row=True))])
-        if type(address) is tuple and len(address) == 2:
-            rows_address, cols_address = address
-            if type(rows_address) is int and type(cols_address) is int:
-                return self._cell(rows_address, cols_address)
-            if type(rows_address) is int and type(cols_address) is slice:
-                return ArrayValues(
-                    [self._cell(rows_address, j) for j in range(*self._unslice(cols_address, col=True))]
-                )
-            if type(rows_address) is slice and type(cols_address) is int:
-                return ArrayValues(self._cells(rows_address, slice(cols_address, cols_address + 1)))
-            if type(rows_address) is slice and type(cols_address) is slice:
-                return ArrayValues(self._cells(rows_address, cols_address))
+        raise ValueError(f"cannot index a sheet with {address!r}: expected an address, an index or a slice")
+
+    def _select(self, address: object, rows_address: object, cols_address: object) -> "ArrayValues":
+        """`sheet[rows, cols]` when one of them at least is a slice."""
+        if type(rows_address) is int and type(cols_address) is slice:
+            return ArrayValues(
+                [self._cell(rows_address, j) for j in range(*self._unslice(cols_address, col=True))]
+            )
+        if type(rows_address) is slice and type(cols_address) is int:
+            return ArrayValues(self._cells(rows_address, slice(cols_address, cols_address + 1)))
+        if type(rows_address) is slice and type(cols_address) is slice:
+            return ArrayValues(self._cells(rows_address, cols_address))
         raise ValueError(f"cannot index a sheet with {address!r}: expected an address, an index or a slice")
 
     def __iter__(self) -> Iterator[list[Cell]]:

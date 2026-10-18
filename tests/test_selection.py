@@ -135,3 +135,15 @@ def test_selection_writes_read_back_after_a_save(writable_reader, tmp_path):
     for row in range(19, 25):
         assert reread[row, 0].formula == f"of:=[.$A{row}]+1"
     assert reread["C1:C3"].to_list() == [[1], [2], [3]]
+
+
+def test_a_selection_of_several_cells_has_no_single_value():
+    sheet = ODSReader.new().sheet("Sheet1")
+    with pytest.raises(TypeError, match=r"to_list\(\)"):
+        _ = sheet[0:2, 0].value
+
+
+def test_to_vector_refuses_more_than_one_column():
+    sheet = ODSReader.new().sheet("Sheet1")
+    with pytest.raises(ValueError, match="single column"):
+        sheet[0:2, 0:2].to_vector()
