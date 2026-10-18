@@ -332,36 +332,28 @@ propriétés obscures, peu utilisées, et le paquet n'a pas d'utilisateurs à m�
 
 ### Pour démarrer (état au 2026-10-18)
 
-**Où en est-on : la 1.0 est prête à publier.** Les six étapes du plan sont faites. La 0.16.1
-est publiée (`master`, tag `v0.16.1`) ; la branche de la 1.0, `claude/lxml-study`, porte les
-étapes 0, 1 et 5 ; **l'étape 6, la dernière, est faite** sur `claude/lxml-step6`, partie d'elle,
-à relire et fusionner : le chemin chaud (`Sheet.load` plus lent qu'en 0.16 n'est plus vrai, rien
-ne l'est), les noms comparés par URI, la mesure complète (DOCS.md, section 12, refaite) et la
-documentation de la 1.0 (CHANGELOG « Unreleased » écrit comme les notes de la 1.0, DOCS.md
-section 15 avec « Upgrading from 0.x »). Le détail est dans le plan, étape 6.
+**Où en est-on : la 1.0 se termine par un audit de son API publique, avant de la figer.** Les six
+étapes du plan sont faites, sur `claude/lxml-study`, la branche de la 1.0. L'audit avant la 1.0
+(section du même nom, plus bas) se fait par parties, chacune dans une branche partie de la 1.0 :
+**la partie A, l'API publique, est faite** sur `claude/audit-a`, à relire et fusionner dans
+`claude/lxml-study`. **Prochaine : B1, `CellStyle` sans état double.**
 
 **Ce qui reste à décider pour publier** :
 
-- **La fusion et le tag** : `claude/lxml-step6` dans `claude/lxml-study`, puis la branche
-  rebasée sur `master` (v0.16.1 : rien n'est venu depuis) et fusionnée ; le tag `v1.0.0` et la
-  release GitHub, que `publish.yml` envoie sur PyPI. La version vient du tag (setuptools-scm),
+- **La fusion et le tag** : les parties de l'audit dans `claude/lxml-study`, puis la branche
+  rebasée sur `master` (depuis v0.16.1, un seul commit, de test, déjà dans la branche) et
+  fusionnée ; le tag `v1.0.0` et la release GitHub, que `publish.yml` envoie sur PyPI. La version vient du tag (setuptools-scm),
   rien à éditer ; seul le titre « [Unreleased] » du CHANGELOG devient « [1.0.0] — date ».
 - **Le classificateur** `Development Status :: 4 - Beta` : passer à `5 - Production/Stable`
   avec la 1.0, ou non.
 - **Python 3.14** : toutes les mesures de l'étape 6 sont faites sous 3.14, que ni la matrice de
   la CI ni les classificateurs ne nomment (3.10 à 3.13).
-- **`<loext:text>` dans les formats de nombre** : les composants d'un format (`number:text`,
-  `number:number`…) sont encore comparés par nom local (`local_name`, `styles.py`), parce que
-  LibreOffice écrit `<loext:text>` parmi eux (307 des 2 112 vrais fichiers de l'auteur, 27 du
-  corpus de LibreOffice, toujours dans des `number:number-style` à caractère de remplissage), et
-  l'affiche comme du texte : par URI, ce texte disparaîtrait du texte affiché inféré à
-  l'écriture (`_render_number_from_format`). Trancher : garder le nom local là, ou comparer
-  à `{qn("number:text"), qn("loext:text")}` explicitement.
-- **Les dépendants** : aucun code de `pylocalmodules` n'utilise plus une échappatoire de la 0.x
+- **Les dépendants** : plus aucun code de `pylocalmodules` n'utilise une échappatoire de la 0.x
   (`attrs`, une recherche bs4, `EMPTY_CELL_BS`), sauf trois scripts de reproduction archivés
-  dans `promotion/fiches/bancs/odsslicer/corrections-2026-09-27/` (`cell.attrs`, une recherche
-  bs4) ; avant de monter `~/Envs/main` en 1.0, relancer les suites de devoir_utils, copiedouble
-  et compta contre elle (`uv run --frozen --with 'odsslicer==1.0.0'`).
+  dans `promotion/fiches/bancs/odsslicer/corrections-2026-09-27/` ; mais l'audit, partie A, casse
+  compta, devoir_utils, copiedouble et sncf-ods (la liste est dans « Audit avant la 1.0 »). Les
+  migrer, puis, avant de monter `~/Envs/main` en 1.0, relancer leurs suites contre elle
+  (`uv run --frozen --with 'odsslicer==1.0.0'`).
 
 **Ce qui vient après la 1.0** : les autres pistes de cette feuille de route, aucune n'attendant
 plus la bascule — les plages nommées et les références 3D dans la syntaxe des formules
@@ -821,8 +813,8 @@ peuvent sortir en 0.15.x ; 0 et 1 changent le type d'une échappatoire (`meta_da
      local n'est plus pris pour une ligne, un groupe, une colonne ou une cellule couverte — ce
      que fait LibreOffice (vérifié par conversion en CSV : il saute un `<x:table-row>`, la 0.16.1
      le lisait comme une ligne). Aucun tel élément dans les 2 112 vrais fichiers de l'auteur ni
-     les 611 du corpus de LibreOffice (`benchmarks/namespace_scan.py`). **Sauf les
-     formats de nombre**, laissés au nom local : voir « Pour démarrer », `<loext:text>`.
+     les 611 du corpus de LibreOffice (`benchmarks/namespace_scan.py`). Les formats de nombre,
+     laissés au nom local à cette étape, sont passés par URI à l'audit (partie A, point 6).
    - *Un `Cell` par position* (`6a0e1dc`) : `load` en construisait 120 013 pour 50 005 cellules
      (les gardes de largeur, de lignes vides et de colonnes vides, puis la grille).
      `_holds_content` lit désormais l'élément (type de valeur, `office:value`, formule, paragraphe
@@ -894,6 +886,56 @@ s'ouvrir réparé en silence ; un fichier aux préfixes non standard se lit ; un
 préfixe d'OpenFormula du document ; un saut de ligne écrit en référence dans un attribut survit à
 l'enregistrement ; un élément d'un autre espace de noms au nom local d'une ligne ou d'une colonne
 n'en est plus une (étape 6).
+
+### Audit avant la 1.0
+
+Avant de figer l'API par la 1.0 (une rupture attend ensuite la 2.0), l'auteur en a relu chaque
+recoin, et validé point par point ce qui casse. Le travail se fait par parties, chacune dans sa
+branche, partie de `claude/lxml-study`.
+
+**Partie A — l'API publique : faite le 2026-10-18** (`claude/audit-a`, un commit par point, puis
+la documentation ; à relire et fusionner). Chaque rupture a sa ligne dans le CHANGELOG et son avant/après dans
+DOCS.md, section 15 (« Upgrading from 0.x ») :
+
+1. *Une seule entrée publique* : `odsslicer.classes`, la couche de compatibilité de l'époque du
+   module unique, est retiré ; `odsslicer` réexporte toute l'API (`Sheet`, `Cell`, `ArrayValues`,
+   `string_address`, `string_to_col` en plus), et plus rien d'interne (`EMPTY_CELL`, `TAG_CELL`,
+   `RE_STRING_CELL`, `MAX_REPEAT_*`). Docstring du paquet réécrite en anglais.
+2. *Les 12 accesseurs doublons de `Sheet` retirés* (`get_row`, `get_rows`, `get_cell`,
+   `get_cells`, `get_row_slice`, `get_col`, `get_cols`, `empty_row`, `empty_col`, `address`,
+   `string_address`, `string_to_col`) : `sheet[...]` et les fonctions d'`addresses` font la même
+   chose. L'analyseur d'adresses est `addresses._parse_address`, qui dit ce qui ne va pas — et
+   corrige au passage `"A0"` (lu comme la colonne A de la dernière ligne), `"A:B1"` (lu `"A:B"`),
+   `"1:B2"` (lu `"1:2"`), `"A1:B"` (`TypeError`).
+3. *Les booléens nommés obligatoires* (`ODSReader(..., *, verbose)`, `new`, `save`,
+   `export_content_xml`, `sort`, `NumberFormat.create`, `recalculate`, `Sheet(...)`, et les
+   privés de `cell.py`) ; ruff `FBT` ajouté aux règles, `FBT003` ignoré dans les tests seuls
+   (`find_all(True)` de bs4, `np.bool_(True)`).
+4. *Lancer LibreOffice, en public* : `find_libreoffice()`, `libreoffice_command(profile)`,
+   `libreoffice_environment(environ=None)`, dont `recalculate` se sert lui-même ; DOCS.md
+   section 7, « Running LibreOffice yourself ». devoir_utils (`ponderer_notes_reference.py`,
+   `tests/test_notes_ods.py`) appelle encore les anciens privés : à migrer de son côté.
+5. *Les constantes mortes retirées* (`MAX_ROWS_PER_SHEET`, `MAX_COLS_PER_SHEET`,
+   `MAX_CELLS_PER_SHEET`, `MAX_CHARS_PER_CELL`, `MAX_SHEETS`), les commentaires de
+   `constants.py` réécrits.
+6. *`<loext:text>` par URI* : les parties d'un format de nombre sont comparées par URI
+   (`styles._FORMAT_PARTS`), `number:text` et `loext:text` explicitement ; le texte affiché
+   inféré à l'écriture ne change pas, un élément d'un espace de noms inconnu n'est plus une
+   partie.
+
+Vérifié à chaque commit : pytest (suite LibreOffice comprise, `-W error::FutureWarning`), mypy,
+ruff, `mutate_layers.py` et `mutate_flags.py` entièrement attrapées. Balayage de 250 vrais
+fichiers contre `claude/lxml-study`, à la fin (557 feuilles, 146 écrits et relus) : zéro partout
+— lecture, grille, écriture-relecture, parties recopiées, erreurs nouvelles (4 illisibles des
+deux côtés).
+
+**Ce qui casse chez l'auteur**, à migrer avant de monter `~/Envs/main` en 1.0 : compta
+(`tests/conftest.py`, `feuille.get_cell(i, j)`), devoir_utils (`notes.string_address(...)` dans
+`notes_ods/` et `scripts/`, les privés de LibreOffice), copiedouble (`get_cell`,
+`string_address`, `sheet.address` dans `overall_export.py`, `capacities.py`, `roster.py`),
+sncf-ods (`Sheet.string_address`).
+
+**Partie B1 — `CellStyle` sans état double** : la prochaine.
 
 ### À décider
 

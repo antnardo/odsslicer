@@ -1633,8 +1633,9 @@ steps 4 and 6, and the audit before 1.0):
 
 ### Upgrading from 0.x
 
-What code written for 0.x has to change, break by break - nothing, if it uses only the high-level
-API. Each pair below is the 0.x line, then its 1.0 equivalent.
+What code written for 0.x has to change, break by break - nothing, if it imports from `odsslicer`,
+indexes sheets with `sheet[...]`, reads and writes cells and styles, and passes flags by name.
+Each pair below is the 0.x line, then its 1.0 equivalent.
 
 **Running LibreOffice** goes through public functions:
 
