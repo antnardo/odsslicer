@@ -113,10 +113,11 @@ def test_format_code_components_refuses_what_has_no_numeric_component(code):
         _format_code_components(code)
 
 
-@pytest.mark.parametrize("tag", sorted(_STANDARD_FORMATS))
-def test_every_standard_format_parses(tag):
-    for code in _STANDARD_FORMATS[tag]:
-        _format_code_components(code)
+@pytest.mark.parametrize(
+    ("tag", "code"), [(tag, code) for tag in sorted(_STANDARD_FORMATS) for code in _STANDARD_FORMATS[tag]]
+)
+def test_every_standard_format_parses(tag, code):
+    _format_code_components(code)
 
 
 def _render(code, value):

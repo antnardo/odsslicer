@@ -1,5 +1,6 @@
 """Sheet: indexing the grid, and the shape of what it gives past the data."""
 
+import pytest
 from lxml import etree
 
 from odsslicer import ArrayValues, Sheet
@@ -104,17 +105,22 @@ def test_uniform_rows_do_not_trigger_warning(monkeypatch, capsys):
     assert "WARNING" not in captured.out
 
 
-def test_reading_a_whole_empty_sheet_gives_an_empty_selection(reader):
+@pytest.mark.parametrize(
+    "index",
+    [(slice(None), slice(None)), slice(None), (slice(0, 0), slice(0, 0))],
+    ids=["[:, :]", "[:]", "[0:0, 0:0]"],
+)
+def test_reading_a_whole_empty_sheet_gives_an_empty_selection(reader, index):
     # regression: an empty list was taken for a single cell (dimension 0), so
     # reading every cell of a sheet with no rows - what a plain scan over a
     # workbook does - crashed with AttributeError on a real file
     s = reader.sheet("SheetEmpty")
     assert s.size == (0, 0)
-    for selection in (s[:, :], s[:], s[0:0, 0:0]):
-        assert selection.dimension == 1
-        assert selection.size == (0,)
-        assert selection.to_list() == []
-        assert selection.to_numpy().shape == (0,)
+    selection = s[index]
+    assert selection.dimension == 1
+    assert selection.size == (0,)
+    assert selection.to_list() == []
+    assert selection.to_numpy().shape == (0,)
 
 
 def test_a_row_of_an_empty_sheet_keeps_its_two_dimensions(reader):

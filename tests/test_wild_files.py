@@ -109,11 +109,16 @@ def test_sheets_load_at_their_expected_sizes(wild_readers, name):
         assert reader.sheet(sheet_name).size == size
 
 
-@pytest.mark.parametrize("name", WILD_FILES)
-def test_spot_values(wild_readers, name):
-    _, spots = EXPECTED[name]
-    for sheet_name, (row, col), value in spots:
-        assert wild_readers[name].sheet(sheet_name)[row, col].value == value
+SPOTS = [(name, *spot) for name in WILD_FILES for spot in EXPECTED[name][1]]
+
+
+@pytest.mark.parametrize(
+    ("name", "sheet_name", "position", "value"),
+    SPOTS,
+    ids=[f"{name}-{sheet}-{row},{col}" for name, sheet, (row, col), _ in SPOTS],
+)
+def test_a_spot_value_reads_as_expected(wild_readers, name, sheet_name, position, value):
+    assert wild_readers[name].sheet(sheet_name)[position].value == value
 
 
 @pytest.mark.parametrize("name", WILD_FILES)

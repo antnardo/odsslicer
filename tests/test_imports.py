@@ -95,9 +95,7 @@ def test_every_module_declares_its_public_names(name):
     assert not [public for public in declared if public.startswith("_")]
 
 
-def test_the_package_exports_every_modules_public_names():
-    # but xmltree's: its `qn` is imported from it, to search the escape hatches
-    exported = set(_declared_all("__init__"))
-    for name in MODULES:
-        if name not in ("__init__", "xmltree"):
-            assert set(_declared_all(name)) <= exported, name
+# but xmltree's: its `qn` is imported from it, to search the escape hatches
+@pytest.mark.parametrize("name", [name for name in MODULES if name not in ("__init__", "xmltree")])
+def test_the_package_exports_the_modules_public_names(name):
+    assert set(_declared_all(name)) <= set(_declared_all("__init__"))

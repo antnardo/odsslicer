@@ -392,7 +392,8 @@ def test_cell_style_reads_font_underline_strikethrough_and_rotation():
     assert style.rotation == 90
 
 
-def test_cell_style_border_shorthand_applies_to_every_side():
+@pytest.mark.parametrize("side", ["top", "bottom", "left", "right"])
+def test_cell_style_border_shorthand_applies_to_every_side(side):
     # real value taken from tests/TEST.ods's styles.xml (the unused "Note"
     # built-in style: fo:border="0.74pt solid #808080")
     from odsslicer import CellStyle
@@ -416,11 +417,10 @@ def test_cell_style_border_shorthand_applies_to_every_side():
     class StubReader:
         _catalog = StubCatalog()
 
-    style = CellStyle(StubReader(), "ce1")
-    for border in (style.border_top, style.border_bottom, style.border_left, style.border_right):
-        assert border.width == "0.74pt"
-        assert border.style == "solid"
-        assert border.color == "#808080"
+    border = getattr(CellStyle(StubReader(), "ce1"), f"border_{side}")
+    assert border.width == "0.74pt"
+    assert border.style == "solid"
+    assert border.color == "#808080"
 
 
 def test_cell_style_border_specific_side_overrides_shorthand():
