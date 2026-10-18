@@ -9,14 +9,14 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from lxml import etree
 
-from .dateformats import _default_format_code, _format_code_components
-from .fileutils import _replacing
-from .formulas import _Remap, _remap_range_list, _rename_odf_formula_sheet, _rename_range_list
-from .libreoffice import _recalculate_file
-from .properties import DocumentProperties
-from .sheet import Sheet
-from .styles import _NUMBER_STYLE_TAGS, NumberFormat
-from .xmltree import (
+from odsslicer.dateformats import _default_format_code, _format_code_components
+from odsslicer.fileutils import _replacing
+from odsslicer.formulas import _Remap, _remap_range_list, _rename_odf_formula_sheet, _rename_range_list
+from odsslicer.libreoffice import _recalculate_file
+from odsslicer.properties import DocumentProperties
+from odsslicer.sheet import Sheet
+from odsslicer.styles import _NUMBER_STYLE_TAGS, NumberFormat
+from odsslicer.xmltree import (
     NAMESPACES,
     child,
     children,
@@ -32,7 +32,7 @@ from .xmltree import (
     serialize,
     text,
 )
-from .xmlutils import _encrypted_parts
+from odsslicer.xmlutils import _encrypted_parts
 
 logger = logging.getLogger("odsslicer")
 

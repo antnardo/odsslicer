@@ -6,7 +6,7 @@ import bisect
 import re
 from collections.abc import Callable
 
-from .addresses import string_address, string_to_col
+from odsslicer.addresses import string_address, string_to_col
 
 _FORMULA_LANGUAGE_PREFIX = re.compile(r"^[A-Za-z][\w.-]*:=")
 

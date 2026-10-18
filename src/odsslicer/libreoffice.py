@@ -18,7 +18,7 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
-from .fileutils import _replacement
+from odsslicer.fileutils import _replacement
 
 __all__ = [
     "LIBREOFFICE_COMMAND",

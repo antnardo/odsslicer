@@ -15,16 +15,16 @@ from typing import TYPE_CHECKING, Any, cast
 
 from lxml import etree
 
-from .addresses import _parse_address, string_address
-from .cell import ArrayValues, Cell
-from .constants import (
+from odsslicer.addresses import _parse_address, string_address
+from odsslicer.cell import ArrayValues, Cell
+from odsslicer.constants import (
     EMPTY_CELL,
     MAX_REPEAT_COLS,
     MAX_REPEAT_ROWS,
     TAG_CELL,
 )
-from .datetimes import _comparable
-from .formulas import (
+from odsslicer.datetimes import _comparable
+from odsslicer.formulas import (
     _PIVOT_DATA_FUNCTIONS,
     _SHEET_QUALIFIED_RE,
     _deletion_remap,
@@ -35,8 +35,8 @@ from .formulas import (
     _shift_odf_formula,
     _unquote_odf_sheet_name,
 )
-from .styles import ColumnStyle, RowStyle, TableStyle
-from .xmltree import (
+from odsslicer.styles import ColumnStyle, RowStyle, TableStyle
+from odsslicer.xmltree import (
     NAMESPACES,
     child,
     children,
@@ -52,10 +52,10 @@ from .xmltree import (
     rename,
     unset,
 )
-from .xmlutils import _ensure_style_child, _is_forked_style_name
+from odsslicer.xmlutils import _ensure_style_child, _is_forked_style_name
 
 if TYPE_CHECKING:
-    from .reader import ODSReader
+    from odsslicer.reader import ODSReader
 
 logger = logging.getLogger("odsslicer")
 

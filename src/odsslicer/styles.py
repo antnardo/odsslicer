@@ -14,16 +14,16 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, Protocol, TypeVar, cas
 
 from lxml import etree
 
-from .dateformats import _STANDARD_FORMATS
-from .datenames import _date_names
-from .datetimes import _ONE_DAY, _as_datetime, _as_timedelta, _clock_parts
-from .xmltree import attributes, child, elements, insert_before, new, qn, set_text, text, unset
-from .xmlutils import _ensure_style_child
+from odsslicer.dateformats import _STANDARD_FORMATS
+from odsslicer.datenames import _date_names
+from odsslicer.datetimes import _ONE_DAY, _as_datetime, _as_timedelta, _clock_parts
+from odsslicer.xmltree import attributes, child, elements, insert_before, new, qn, set_text, text, unset
+from odsslicer.xmlutils import _ensure_style_child
 
 if TYPE_CHECKING:
-    from .cell import Cell
-    from .reader import ODSReader
-    from .sheet import Sheet
+    from odsslicer.cell import Cell
+    from odsslicer.reader import ODSReader
+    from odsslicer.sheet import Sheet
 
 
 _NUMBER_STYLE_TAGS = [

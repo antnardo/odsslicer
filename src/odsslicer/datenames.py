@@ -23,7 +23,7 @@ ISO 8601, as does a document with no language.
 
 from dataclasses import dataclass
 
-from .dateformats import _STANDARD_FORMATS
+from odsslicer.dateformats import _STANDARD_FORMATS
 
 # language -> the days of the week, Sunday first, in full and abbreviated;
 # the months in full and abbreviated; the same next to a day - "|"-separated

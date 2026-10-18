@@ -17,9 +17,9 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 from lxml import etree
 
-from .addresses import string_address
-from .constants import EMPTY_CELL, FORMATS, TAG_CELL
-from .datetimes import (
+from odsslicer.addresses import string_address
+from odsslicer.constants import EMPTY_CELL, FORMATS, TAG_CELL
+from odsslicer.datetimes import (
     _as_datetime,
     _as_timedelta,
     _duration_text,
@@ -28,14 +28,14 @@ from .datetimes import (
     _parse_date_value,
     _parse_time_value,
 )
-from .formulas import (
+from odsslicer.formulas import (
     _expand_formula_template,
     _friendly_formula,
     _normalize_odf_formula,
     _shift_odf_formula,
 )
-from .styles import CellStyle, _render_date_time_from_format, _render_number_from_format
-from .xmltree import (
+from odsslicer.styles import CellStyle, _render_date_time_from_format, _render_number_from_format
+from odsslicer.xmltree import (
     child,
     children,
     clone,
@@ -56,12 +56,12 @@ from .xmltree import (
     unwrap,
     wrap_contents,
 )
-from .xmlutils import _ensure_style_child
+from odsslicer.xmlutils import _ensure_style_child
 
 if TYPE_CHECKING:
-    from .reader import ODSReader
-    from .sheet import Sheet
-    from .styles import NumberFormat
+    from odsslicer.reader import ODSReader
+    from odsslicer.sheet import Sheet
+    from odsslicer.styles import NumberFormat
 
 # The attributes a cell is read from, by namespace URI: `Cell.__init__` runs
 # once per cell of a sheet being loaded, where `qn`'s lookup would add up

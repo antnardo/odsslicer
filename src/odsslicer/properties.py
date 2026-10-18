@@ -13,10 +13,10 @@ from typing import TYPE_CHECKING
 
 from lxml import etree
 
-from .xmltree import children, new, qn, remove, set_text, text
+from odsslicer.xmltree import children, new, qn, remove, set_text, text
 
 if TYPE_CHECKING:
-    from .reader import ODSReader
+    from odsslicer.reader import ODSReader
 
 
 _META_NAME = qn("meta:name")

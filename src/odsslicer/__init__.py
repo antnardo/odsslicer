@@ -23,20 +23,20 @@ search the XML escape hatches with (`reader.data`, `sheet.table`,
 an example.
 """
 
-from .addresses import string_address, string_to_col
-from .cell import ArrayValues, Cell, Comment
-from .constants import FORMATS
-from .libreoffice import (
+from odsslicer.addresses import string_address, string_to_col
+from odsslicer.cell import ArrayValues, Cell, Comment
+from odsslicer.constants import FORMATS
+from odsslicer.libreoffice import (
     LIBREOFFICE_COMMAND,
     find_libreoffice,
     libreoffice_command,
     libreoffice_environment,
     recalculate,
 )
-from .properties import DocumentProperties
-from .reader import EncryptedDocumentError, MalformedDocumentError, ODSReader
-from .sheet import Sheet
-from .styles import Border, CellStyle, ColumnStyle, NumberFormat, RowStyle, TableStyle
+from odsslicer.properties import DocumentProperties
+from odsslicer.reader import EncryptedDocumentError, MalformedDocumentError, ODSReader
+from odsslicer.sheet import Sheet
+from odsslicer.styles import Border, CellStyle, ColumnStyle, NumberFormat, RowStyle, TableStyle
 
 __all__ = [
     "FORMATS",

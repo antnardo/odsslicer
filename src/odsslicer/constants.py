@@ -5,8 +5,8 @@ blank cell a position past the sheet reads from, and the thresholds past which
 from collections.abc import Callable
 from typing import Any
 
-from .datetimes import _parse_date_value, _parse_time_value
-from .xmltree import new
+from odsslicer.datetimes import _parse_date_value, _parse_time_value
+from odsslicer.xmltree import new
 
 TAG_CELL = ["table:table-cell", "table:covered-table-cell"]
 # what a position past the sheet reads from: a blank cell, in no document -

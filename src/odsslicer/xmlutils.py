@@ -5,7 +5,7 @@ import re
 
 from lxml import etree
 
-from .xmltree import child, new
+from odsslicer.xmltree import child, new
 
 
 def _encrypted_parts(manifest: bytes) -> set[str]:
