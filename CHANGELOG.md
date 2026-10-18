@@ -39,6 +39,9 @@ underneath and those few names; DOCS.md, section 15, gives the 1.0 equivalent of
   `ArrayValues`, `string_address` and `string_to_col` too. The internals it re-exported are no
   longer public: `EMPTY_CELL_BS` (the element a position past the sheet reads from), `TAG_CELL`,
   `RE_STRING_CELL`, `MAX_REPEAT_ROWS` and `MAX_REPEAT_COLS`.
+- **`MAX_ROWS_PER_SHEET`, `MAX_COLS_PER_SHEET`, `MAX_CELLS_PER_SHEET`, `MAX_CHARS_PER_CELL` and
+  `MAX_SHEETS`**, which `odsslicer.classes` re-exported and nothing used: LibreOffice's limits,
+  which odsslicer never checked.
 
 ### Changed
 

@@ -1559,7 +1559,9 @@ steps 4 and 6, and the audit before 1.0):
   from the time the package was one file, is removed. `odsslicer` exports every public name,
   `Sheet`, `Cell`, `ArrayValues`, `string_address` and `string_to_col` among them; the internals
   `odsslicer.classes` re-exported (`EMPTY_CELL_BS`, `TAG_CELL`, `RE_STRING_CELL`,
-  `MAX_REPEAT_ROWS`, `MAX_REPEAT_COLS`) are no longer public.
+  `MAX_REPEAT_ROWS`, `MAX_REPEAT_COLS`) are no longer public, and the limits it re-exported and
+  nothing used (`MAX_ROWS_PER_SHEET`, `MAX_COLS_PER_SHEET`, `MAX_CELLS_PER_SHEET`,
+  `MAX_CHARS_PER_CELL`, `MAX_SHEETS`) are gone.
 
 - **`Sheet`'s duplicate accessors are removed.** `get_row`, `get_rows`, `get_cell`, `get_cells`,
   `get_row_slice`, `get_col`, `get_cols`, `empty_row` and `empty_col` did what indexing does;
@@ -1731,6 +1733,15 @@ position says as much:
 cell = sheet["Z1000"]
 cell.cell is EMPTY_CELL_BS                                  # 0.x: past the sheet's extent
 cell.row >= sheet.n_rows or cell.col >= sheet.n_cols        # 1.0
+```
+
+`MAX_ROWS_PER_SHEET`, `MAX_COLS_PER_SHEET`, `MAX_CELLS_PER_SHEET`, `MAX_CHARS_PER_CELL` and
+`MAX_SHEETS`, LibreOffice's limits, which `odsslicer.classes` re-exported and odsslicer never
+used, are gone:
+
+```python
+from odsslicer.classes import MAX_ROWS_PER_SHEET    # 0.x
+MAX_ROWS_PER_SHEET = 2**20                          # 1.0: a constant of your own
 ```
 
 **`Sheet`'s duplicate accessors** are removed: index the sheet. Each 0.x accessor returned a

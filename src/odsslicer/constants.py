@@ -1,4 +1,6 @@
-"""Shared constants: ODF cell-type conversions, size limits, sentinel objects."""
+"""Shared constants: ODF cell-type conversions, the cell element names, the
+blank cell a position past the sheet reads from, and the thresholds past which
+`Sheet.load` leaves the trailing filler of a sheet out of its grid."""
 
 from collections.abc import Callable
 from typing import Any
@@ -11,15 +13,17 @@ TAG_CELL = ["table:table-cell", "table:covered-table-cell"]
 # writing there grows the sheet first (`Cell._prepare_for_write`)
 EMPTY_CELL = new("table:table-cell")
 
-# https://wiki.documentfoundation.org/Faq/Calc/022
-MAX_ROWS_PER_SHEET = 2**20  # way too big for python
-MAX_COLS_PER_SHEET = 2**10  # AMJ (can be handled here)
-MAX_CELLS_PER_SHEET = 2**30
-MAX_CHARS_PER_CELL = 2**15  # ? needs updating
-MAX_SHEETS = 10_000
-
-MAX_REPEAT_ROWS = 1_000  # Above this : if row contains one ampty cell : discarded
-MAX_REPEAT_COLS = 10  # idem but for every row (much more complicated to detect)
+# Applications write past the data to declare a sheet's full size, or to format
+# whole rows and columns: a run of a million empty rows at the bottom, empty
+# cells repeated to the 16,384th column. Unrolled, they would be millions of
+# `Cell`s. `Sheet.load` leaves out of the grid, and keeps in the file, a run of
+# more than MAX_REPEAT_ROWS repeated empty rows after the last row holding
+# data, and a repeated empty cell wider than MAX_REPEAT_ROWS at the end of a
+# row; and more than MAX_REPEAT_COLS columns empty in every row at the right,
+# which LibreOffice writes as far as the last formatted column. Fewer stay
+# in the grid, as blank rows and columns a sheet may mean.
+MAX_REPEAT_ROWS = 1_000
+MAX_REPEAT_COLS = 10
 
 FORMATS: "dict[str | None, Callable[[Any], Any]]" = {
     "string": str,
