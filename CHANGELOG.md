@@ -7,6 +7,8 @@ version (until 1.0, the API could change between minor versions).
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-10-18
+
 odsslicer 1.0 reads and writes every part of the package with lxml alone: BeautifulSoup is gone.
 It also settles the public API before freezing it: one place to import it from, `odsslicer`;
 no duplicate accessors on `Sheet`; flags and a pivot table's fields passed by name; a new number
@@ -871,7 +873,8 @@ typed cell values (text, number, percentage, currency, date, time, boolean), for
 repeated and merged cells handled, plus basic value writing (`cell.value = ...`,
 `ODSReader.save()`).
 
-[Unreleased]: https://github.com/antnardo/odsslicer/compare/v0.16.1...HEAD
+[Unreleased]: https://github.com/antnardo/odsslicer/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/antnardo/odsslicer/compare/v0.16.1...v1.0.0
 [0.16.1]: https://github.com/antnardo/odsslicer/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/antnardo/odsslicer/compare/v0.15.1...v0.16.0
 [0.15.1]: https://github.com/antnardo/odsslicer/compare/v0.15.0...v0.15.1
