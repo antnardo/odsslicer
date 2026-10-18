@@ -484,11 +484,11 @@ class _SheetPartStyle:
 
     def _current_tag(self) -> "etree._Element | None":
         """The style the owner points at now."""
-        raise NotImplementedError
+        raise NotImplementedError(f"{type(self).__name__} does not say which style its owner points at")
 
     def _own_tag(self) -> etree._Element:
         """The owner's own style, forked on first use."""
-        raise NotImplementedError
+        raise NotImplementedError(f"{type(self).__name__} does not say how its owner gets a style of its own")
 
     def _style_tag(self) -> "etree._Element | None":
         return self._current_tag() if self._owned() else self._tag

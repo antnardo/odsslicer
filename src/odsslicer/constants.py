@@ -48,5 +48,5 @@ FORMATS: "dict[str | None, Callable[[Any], Any]]" = {
     # ODF stores booleans as the strings "true"/"false" (office:boolean-value);
     # plain `bool(s)` would treat "false" as truthy since it's a non-empty string.
     "boolean": lambda s: None if s is None else s == "true",
-    None: lambda x: None,
+    None: lambda _: None,
 }

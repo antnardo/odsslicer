@@ -247,7 +247,9 @@ def _insertion_remap(
     stretches it (only the end moves), inserting at or above its first row
     moves it whole, inserting just below its last row leaves it alone."""
 
-    def remap(row: int, col: int, edge: "str | None" = None) -> "tuple[int, int] | None":
+    # `_edge` only to be a `_Remap`: an insertion deletes no cell, so where a
+    # range ends never changes where it goes
+    def remap(row: int, col: int, _edge: "str | None" = None) -> "tuple[int, int] | None":
         if at_row is not None and row >= at_row:
             row += count
         if at_col is not None and col >= at_col:

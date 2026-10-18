@@ -134,7 +134,7 @@ def timed_inside_bs4(fn: Callable[..., object], *args: object) -> tuple[dict[str
 
         return wrapper
 
-    def collecting(phase: str, info: dict[str, int]) -> None:
+    def collecting(phase: str, _info: dict[str, int]) -> None:
         if phase == "start":
             state["gc_t0"] = time.perf_counter()
         else:
