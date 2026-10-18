@@ -821,7 +821,7 @@ value cleared — it shows blank until a real spreadsheet application recalculat
 
 ## 6. Pivot tables
 
-`Sheet.create_pivot_table(source, target, rows=..., columns=..., values=..., name=...)` writes
+`Sheet.create_pivot_table(source, target, *, rows=..., columns=..., values=..., name=...)` writes
 a pivot table's ODF definition ("data pilot table" in ODF terms) — same philosophy as
 formulas: `odsslicer` describes what to compute, a real spreadsheet application computes it:
 
@@ -1598,6 +1598,9 @@ steps 4 and 6, and the audit before 1.0):
   of its nine parameters: the same fields, in the same order, in an immutable record that checks
   itself when it is made (`ValueError` for a currency without its symbol, say) and can be kept
   and reused. `components` may still be given as a list; the spec keeps it as a tuple.
+- **`Sheet.create_pivot_table` takes its fields by name**: `rows`, `columns`, `values` and `name`
+  are keyword-only, after `source` and `target`. Four lists and a dict in a row said nothing of
+  which was which at the call.
 - **`Cell.attrs` and `Sheet.attrs` are removed.** They were the element's own attribute
   dictionary, with the file's prefixed keys, and writing to them bypassed everything the library
   keeps consistent. Their one common use has a property of its own: `cell.attrs.get("table:style-name")`
@@ -1705,6 +1708,15 @@ NumberFormat.create(table, NumberFormatSpec("time", components=[("hours", "long"
 The old call raises `TypeError` - the family alone, `NumberFormat.create(table, "number")`,
 with a message saying to wrap it in a `NumberFormatSpec`. A spec is checked when it is made
 and is immutable, so one can be built once and given to `create` for several documents.
+
+**`Sheet.create_pivot_table`** takes `rows`, `columns`, `values` and `name` by name; by position
+they raise `TypeError`:
+
+```python
+sheet.create_pivot_table("A1:C5", "E1", ["Category"], ["Region"], {"Amount": "sum"})   # 0.x
+sheet.create_pivot_table("A1:C5", "E1", rows=["Category"], columns=["Region"],
+                         values={"Amount": "sum"})                                   # 1.0
+```
 
 **`Cell.attrs` and `Sheet.attrs`.** What they were read for has a property:
 

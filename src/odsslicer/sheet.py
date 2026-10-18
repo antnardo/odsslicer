@@ -236,6 +236,7 @@ class Sheet:
         self,
         source: str,
         target: str,
+        *,
         rows: "list[str] | None" = None,
         columns: "list[str] | None" = None,
         values: "dict[str, str] | None" = None,
@@ -253,7 +254,9 @@ class Sheet:
         name to an aggregation function - `"sum"`, `"average"`,
         `"count"`, `"countnums"` (count of numeric values only),
         `"max"`, `"min"`, `"product"`, `"stdev"`, `"stdevp"`, `"var"`,
-        `"varp"`. `name` defaults to `f"DataPilotTable{n}"`.
+        `"varp"`. `name` defaults to `f"DataPilotTable{n}"`. All four are
+        passed by name: `create_pivot_table("A1:C100", "E1",
+        rows=["Category"], values={"Amount": "sum"})`.
 
         odsslicer writes only the pivot's ODF definition - there's no
         calculation engine, same as for formulas. Unlike a formula

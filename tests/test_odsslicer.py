@@ -7003,6 +7003,14 @@ def test_create_pivot_table_unknown_field_raises(writable_reader):
         s.create_pivot_table("A1:C5", "E1", rows=["NoSuchField"])
 
 
+def test_create_pivot_table_fields_by_position_raise_type_error(writable_reader):
+    s = writable_reader.sheet("SheetEmpty")
+    _fill_pivot_source(s)
+    with pytest.raises(TypeError):
+        s.create_pivot_table("A1:C5", "E1", ["Category"], None, {"Amount": "sum"})
+    assert _find_pivot_table(writable_reader, "DataPilotTable1") is None
+
+
 def test_create_pivot_table_unknown_function_raises(writable_reader):
     s = writable_reader.sheet("SheetEmpty")
     _fill_pivot_source(s)
