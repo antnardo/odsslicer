@@ -13,9 +13,9 @@ from odsslicer.dateformats import _default_format_code, _format_code_components
 from odsslicer.fileutils import _replacing
 from odsslicer.formulas import _Remap, _remap_range_list, _rename_odf_formula_sheet, _rename_range_list
 from odsslicer.libreoffice import _recalculate_file
+from odsslicer.numberformat import _NUMBER_STYLE_TAGS, NumberFormat
 from odsslicer.properties import DocumentProperties
 from odsslicer.sheet import Sheet
-from odsslicer.styles import _NUMBER_STYLE_TAGS, NumberFormat
 from odsslicer.xmltree import (
     NAMESPACES,
     child,

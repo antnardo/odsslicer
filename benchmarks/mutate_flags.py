@@ -43,7 +43,7 @@ MUTATIONS = [
     # the flags
     (
         "flag: a condition added to a number format of styles.xml",
-        "styles.py",
+        "numberformat.py",
         "        self._reader._touched_tag(self._tag)\n",
         "        pass\n",
     ),

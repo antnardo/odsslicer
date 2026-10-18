@@ -164,7 +164,7 @@ MUTATIONS = [
     # the code on the layer: an element with no children is false in lxml
     (
         "NumberFormat: `or` between two children",
-        "styles.py",
+        "numberformat.py",
         '        number_tag = child(tag, "number:number")\n        if number_tag is None:\n'
         '            number_tag = child(tag, "number:boolean")\n',
         '        number_tag = child(tag, "number:number") or child(tag, "number:boolean")\n',

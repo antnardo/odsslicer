@@ -59,9 +59,9 @@ from odsslicer.xmltree import (
 from odsslicer.xmlutils import _ensure_style_child
 
 if TYPE_CHECKING:
+    from odsslicer.numberformat import NumberFormat
     from odsslicer.reader import ODSReader
     from odsslicer.sheet import Sheet
-    from odsslicer.styles import NumberFormat
 
 # The attributes a cell is read from, by namespace URI: `Cell.__init__` runs
 # once per cell of a sheet being loaded, where `qn`'s lookup would add up

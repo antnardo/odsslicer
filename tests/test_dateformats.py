@@ -6,12 +6,13 @@ import datetime as dt
 import pytest
 from lxml import etree
 
+from odsslicer import NumberFormat
 from odsslicer.dateformats import (
     _STANDARD_FORMATS,
     _default_format_code,
     _format_code_components,
 )
-from odsslicer.styles import NumberFormat, _render_date_time_from_format
+from odsslicer.styles import _render_date_time_from_format
 from odsslicer.xmltree import NAMESPACES
 
 _DMY = [("day", "long"), ("text", "/"), ("month", "long"), ("text", "/")]
