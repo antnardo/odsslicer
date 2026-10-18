@@ -7,6 +7,18 @@ still change between minor versions.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A string cell's `office:string-value` is read, and dropped when the cell is written.** ODF
+  lets a string cell carry its value in that attribute rather than in its paragraphs - a formula's
+  cached result, mostly - and LibreOffice shows the attribute over the paragraphs whenever it
+  does not recalculate. odsslicer read the paragraphs only, and writing a value or a formula left
+  the attribute in place: LibreOffice went on showing the old value over the new one. Found on a
+  pseudonymized gradebook whose cells read the pseudonym in odsslicer and the real name in
+  LibreOffice; 6,622 cells of 33 of 250 real files swept carry an attribute that disagrees with
+  their paragraphs, all of them formulas. `cell.value` and `cell.text` now give the attribute, and
+  writing a value or a formula removes it.
+
 ## [0.16.1] — 2026-10-17
 
 ### Fixed

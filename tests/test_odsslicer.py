@@ -703,6 +703,37 @@ class TestLoadingWideSheets:
         assert widths == {1002}
 
 
+_STRING_VALUE_CELL = (
+    '<table:table-cell office:value-type="string" office:string-value="A">'
+    "<text:p>B</text:p></table:table-cell>"
+)
+
+
+class TestStringValue:
+    """A string cell carrying its value in `office:string-value`, which
+    LibreOffice shows over the cell's paragraphs."""
+
+    def test_reading_gives_the_attribute_over_the_paragraph(self, tmp_path):
+        sheet = ODSReader(ods_with_sheet(tmp_path / "sv.ods", table_row(_STRING_VALUE_CELL))).sheet("Sheet1")
+        assert (sheet["A1"].value, sheet["A1"].text) == ("A", "A")
+
+    def test_writing_a_value_leaves_only_what_was_written(self, tmp_path):
+        r = ODSReader(ods_with_sheet(tmp_path / "sv.ods", table_row(_STRING_VALUE_CELL)))
+        r.sheet("Sheet1")["A1"].value = "C"
+        out = tmp_path / "out.ods"
+        r.save(out)
+        cell = saved_table(out).find("table:table-cell")
+        assert "office:string-value" not in cell.attrs
+        assert ODSReader(out).sheet("Sheet1")["A1"].value == "C"
+
+    def test_writing_a_formula_drops_the_attribute_too(self, tmp_path):
+        r = ODSReader(ods_with_sheet(tmp_path / "sv.ods", table_row(_STRING_VALUE_CELL)))
+        r.sheet("Sheet1")["A1"].formula = "=1+1"
+        out = tmp_path / "out.ods"
+        r.save(out)
+        assert "office:string-value" not in saved_table(out).find("table:table-cell").attrs
+
+
 class TestEncodedWhitespace:
     """Spaces, tabs and line breaks ODF writes as elements (issue #27)."""
 

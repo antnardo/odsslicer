@@ -350,6 +350,9 @@ class Cell:
         "office:date-value",
         "office:time-value",
         "office:boolean-value",
+        # a string's value when it is not the paragraph's text - left behind,
+        # it would go on showing in LibreOffice over what was written
+        "office:string-value",
     )
 
     def __init__(self, cell: Tag, row: int = 0, col: int = 0, sheet: "Sheet | None" = None) -> None:
@@ -379,6 +382,13 @@ class Cell:
         # several children (spans...) - nor `get_text()`, which drops the
         # spaces, tabs and line breaks ODF writes as elements (issue #27).
         self.text: str | None = "\n".join(paragraph_text(p) for p in paragraphs) if paragraphs else None
+        # A string cell may carry its value in `office:string-value` rather
+        # than in its paragraphs - a formula's cached result, what some
+        # producers write - and LibreOffice then shows that, over the
+        # paragraphs: so does odsslicer, value and text alike.
+        string_value = self.attrs.get("office:string-value") if self.format == "string" else None
+        if string_value is not None:
+            self.text = string_value
         # A value its declared type cannot be read from - a malformed date, a
         # type no reader knows (KeyError) - must not take the whole sheet
         # down with it: the cell reads as its displayed text instead, and
