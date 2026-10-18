@@ -335,10 +335,12 @@ propriétés obscures, peu utilisées, et le paquet n'a pas d'utilisateurs à m�
 **Où en est-on : la 1.0 se termine par un audit de son API publique, avant de la figer.** Les six
 étapes du plan sont faites, sur `claude/lxml-study`, la branche de la 1.0. L'audit avant la 1.0
 (section du même nom, plus bas) se fait par parties, chacune dans une branche partie de la 1.0 :
-**la partie A, l'API publique, est faite** sur `claude/audit-a`, et **la partie B1, les styles
-sans état double**, sur `claude/audit-b1` : toutes deux à relire et fusionner dans
-`claude/lxml-study`. **Prochaine : B2–B5, le découpage de ce qui est trop long** — `Sheet`,
-`Cell`, `ODSReader`, et les fonctions longues.
+**la partie A, l'API publique**, et **la partie B1, les styles sans état double**, sont dans
+`claude/lxml-study` ; **les parties B2–B5, le découpage de ce qui était trop long** (`Sheet`,
+`Cell`, `ODSReader`, les fonctions longues), sont faites sur `claude/audit-b2`, à relire et
+fusionner. **Prochaine : la partie C**, sur ce découpage — les tests répartis en un fichier par
+module, `__all__` dans les modules qui n'en déclarent pas encore, les docstrings minces des
+modules que B2–B5 n'ont pas touchés.
 
 **Ce qui reste à décider pour publier** :
 
@@ -356,6 +358,15 @@ sans état double**, sur `claude/audit-b1` : toutes deux à relire et fusionner 
   compta, devoir_utils, copiedouble et sncf-ods (la liste est dans « Audit avant la 1.0 »). Les
   migrer, puis, avant de monter `~/Envs/main` en 1.0, relancer leurs suites contre elle
   (`uv run --frozen --with 'odsslicer==1.0.0'`).
+- **Ce que B2–B5 proposent de casser, sans l'avoir fait** (la 1.0 est le moment) :
+  `NumberFormat.create` garde ses 9 paramètres, que `_NumberFormatSpec` regroupe déjà en
+  interne — la spécification pourrait devenir publique, `NumberFormat.create(reader, spec)` ;
+  `Sheet.create_pivot_table` garde les 6 siens — `rows`, `columns`, `values`, `name` pourraient
+  devenir nommés obligatoires, ou un `PivotFields` public ; `Sheet.name` est encore une copie de
+  `table:name`, que `rename_sheet` tient à jour des deux côtés — une propriété comme `stylename`
+  la supprimerait, mais `sheet.name = ...` lèverait. Changé sans rupture : `Sheet.size`,
+  `Sheet.stylename`, et les octets des parties sur `ODSReader` (`content`, `styles`…) sont des
+  propriétés en lecture seule.
 
 **Ce qui vient après la 1.0** : les autres pistes de cette feuille de route, aucune n'attendant
 plus la bascule — les plages nommées et les références 3D dans la syntaxe des formules
@@ -364,7 +375,8 @@ plus la bascule — les plages nommées et les références 3D dans la syntaxe d
 le texte enrichi partiel, puis les non-couverts (validation, filtres, volets figés, protection,
 plans), avec la contrainte qu'impose leur régénération (« Relecture de DOCS.md du
 2026-10-01 », et « La contrainte à respecter si l'on régénère `styles.xml` et `settings.xml` ») ; la réécriture de `Sheet.load` avec des tests dédiés
-(« Vers 1.0 — consolidation », point 1), qui a gagné à l'étape 6 un filet de plus. Et la mémoire,
+(« Vers 1.0 — consolidation », point 1), qui a gagné à l'étape 6 un filet de plus, et à l'audit
+(B2) des étapes nommées, `loading._GridLoader`. Et la mémoire,
 devenue la seule limite : un `Cell` par position (environ 1,7 Ko par cellule, ouverture et
 chargement compris).
 
@@ -974,6 +986,97 @@ Vérifié : pytest (1 429 tests, suite LibreOffice comprise), mypy, ruff, `mutat
 `claude/lxml-study` à zéro partout (4 illisibles des deux côtés), `edit_parts.py` sans écart sur
 les fixtures, et toutes les propriétés de style lues sur 88 503 cellules de 69 fichiers
 identiques entre les deux versions.
+
+**Parties B2–B5 — découper ce qui était trop gros : faites le 2026-10-18** (`claude/audit-b2`, à
+relire et fusionner). `Sheet` (1 865 lignes, sept responsabilités), `Cell` (1 343 lignes avec
+`ArrayValues` et `Comment`) et `ODSReader` (858 lignes, quatre responsabilités) sont découpés en
+modules internes d'une responsabilité chacun, sans rien changer de l'API publique
+(`odsslicer.__all__`, méthodes, propriétés, signatures, docstrings). La forme est la même
+partout : une classe d'aide qui reçoit la `Sheet` (ou le paquet) et fait une chose, créée à
+chaque appel puisqu'elle ne garde aucun état ; des fonctions de module pour ce qui ne touche que
+des éléments. Aucun mixin : aucun souci n'a besoin de tout l'état de `Sheet`, seulement de sa
+grille (`rows`, `n_rows`, `n_cols`) et de son élément (`table`). Chaque module dit dans sa
+docstring ce qu'il fait et pourquoi il est à part, déclare `__all__` (vide quand rien n'y est
+public, comme `fileutils`), et les imports sont absolus (ruff `TID252`).
+
+La carte des modules, du bas vers le haut (un module n'importe, à l'exécution, que des modules
+au-dessus de lui dans cette liste ; `tests/test_imports.py` vérifie qu'il n'y a pas de cycle et
+que `__init__.py` ne contient que des imports) :
+
+| module | lignes | responsabilité | importe (à l'exécution) |
+| --- | --- | --- | --- |
+| `xmltree`, `addresses`, `datetimes`, `dateformats`, `fileutils` | — | inchangés | — |
+| `numberformat` | 410 | les formats de nombre : `NumberFormat`, et `_NumberFormatSpec` d'où `create` construit l'élément | `dateformats`, `xmltree` |
+| `values` | 165 | une valeur entre Python et ODF : `_plain_value`, `_Encoded` (type, attribut, texte, valeur relue, sorte de format de date) | `datetimes`, `xmltree` |
+| `selection` | 152 | `ArrayValues` | — |
+| `comment` | 124 | `Comment` | `xmltree` |
+| `package` | 284 | le zip : parties en octets et en arbres, `touch`/`touch_tag`, `write` ; les deux erreurs publiques | `fileutils`, `xmltree`, `xmlutils` |
+| `styles` | 635 | les vues de style (`CellStyle`, `RowStyle`…), sans les formats de nombre ni le rendu | `numberformat`, `xmltree`, `xmlutils` |
+| `gridxml` | 390 | le XML d'une feuille sans `Cell` : répétitions, lignes, cellules, ce qui est au-delà de la grille | `constants`, `xmltree` |
+| `references` | 78 | formules et dessins de tout le document qui suivent une édition ou un renommage | `formulas` |
+| `pivots` | 153 | la définition d'un tableau croisé, ses champs en `_PivotFields` | `addresses`, `formulas`, `xmltree` |
+| `catalog` | 356 | trouver un style dans les deux parties, en créer (forks de cellule, de ligne, de colonne, de feuille ; formats de date) | `package`, `numberformat`… |
+| `drawings` | 162 | graphiques et formes, et les adresses qu'ils tiennent (une boucle pour décaler et renommer, il y en avait deux copies) | `package`, `formulas` |
+| `columns` | 155 | les définitions de colonnes, par colonne logique | `gridxml` |
+| `unrolling` | 106 | donner à une position de la grille un élément à elle (`_Unroller`), les suites de lignes répétées | `gridxml` |
+| `display` | 571 | le texte affiché d'une valeur écrite : par l'exemple (`_DisplayText`) ou par le format (`_render_*_from_format`) | `columns`, `numberformat`, `datenames`… |
+| `copying` | 153 | copier et trier, partageant `_CellContent` | `columns`, `formulas` |
+| `merges` | 168 | les cellules fusionnées (`_Merges`) | `gridxml`, `unrolling` |
+| `cell` | 692 | `Cell` : lecture, écriture en place, style, fusion, note, lien | `display`, `values`, `styles`… |
+| `loading` | 341 | construire la grille (`_GridLoader`) : où elle finit, sa largeur, les `Cell`, le rognage | `cell`, `gridxml`, `unrolling` |
+| `growth` | 141 | agrandir la grille, et ce que le fichier tient au-delà | `cell`, `gridxml`, `unrolling` |
+| `structure` | 274 | insérer et supprimer lignes et colonnes, en étapes nommées | `growth`, `merges`, `references`… |
+| `sheet` | 520 | `Sheet` : l'API et ses docstrings, l'indexation, `materialize_cell`, ce que cellules et vues demandent à leur feuille | toutes les aides de feuille |
+| `reader` | 393 | `ODSReader` : les feuilles, `save`, les propriétés ; compose `_Package`, `_StyleCatalog`, `_Drawings` | `package`, `catalog`, `drawings`, `sheet`… |
+
+Ce qui a changé en passant, en simplifiant plutôt qu'en ajoutant :
+
+1. *Deux états doubles de `Sheet`* : `stylename` était une copie prise au chargement, qu'une
+   écriture de `sheet.style` laissait périmée, et `size` une troisième copie de `n_rows` et
+   `n_cols` que chaque édition devait remettre ; ce sont des propriétés. `Sheet._is_merge_master`
+   doublait `Cell.is_merge_master` : retiré.
+2. *Une seule façon de forker un style* : `Cell` et `Sheet` avaient chacun la leur ; le catalogue
+   les tient (`fork_cell_style`, `fork_sheet_part_style`, `date_formatted_style`).
+3. *Une valeur qu'une cellule ne peut pas tenir lève avant qu'on la touche* : elle levait une fois
+   les attributs de valeur retirés.
+4. *Le rendu par le format* (`_render_number_from_format`, `_render_date_time_from_format`) passe
+   de `styles` à `display`, avec l'inférence par l'exemple : les deux répondent à la même
+   question, qu'aucune vue de style ne pose.
+
+Fonctions raccourcies (B5), complexité ruff avant → après (`C901`, `PLR0912`, `PLR0915`,
+`PLR0913` ; 28 relevés avant, 2 après) : `Sheet.load` 28 → `_GridLoader` en sept étapes ;
+`NumberFormat.create` 19 et 9 paramètres → `_NumberFormatSpec` (vérifiée à la création) et
+`_number_format_element`, une étape par famille (la signature publique garde ses 9 paramètres) ;
+`_render_date_time_from_format` 18 → `_DateTimeLayout`, `_shown_fields`, `_ComponentRenderer`, et
+`_elapsed_fields` rend un `_ElapsedFields` figé au lieu d'un `SimpleNamespace` ; `Sheet.sort`
+15, `delete_rows` 15, `insert_rows` 14, `delete_column` 11, `merge` 11 → des méthodes d'étape ;
+`Cell.value` 12 (54 instructions) → `_encoded` et `_DisplayText.of` ; `Cell.__init__` 12 → 9 (une
+table des attributs de valeur par type) ; `_plain_value` 12 → sa part numpy à part ;
+`xmltree.set_paragraph_text` 12 → `_encoded_whitespace`, `_write_after` ; les 6 paramètres de
+`_normalize_row_width` → un `_RowMeasure` figé, ceux de `styles._flag` → 5 (`_line` pour le
+barré). Restent les signatures publiques de `NumberFormat.create` (9) et
+`Sheet.create_pivot_table` (6) : voir « Ce qui reste à décider ».
+
+Vitesse, contre `claude/lxml-study`, en alternant les versions : `bench.py` à 10 000 et
+100 000 lignes, deux tours, sans écart mesurable (chargement de la feuille 93–97 ms contre
+97–98 ms, et 1 037–1 043 ms contre 1 038–1 067 ms ; écriture de 1 000 cellules, suppression,
+copie, enregistrement à l'identique) ; `time_open.py` sur NotesReference.ods 9,2 ms des deux
+côtés. Une écriture prépare deux objets de plus (`_Encoded`, `_DisplayText`), 0,5 µs sur 6 :
+`_plain_value` reconnaît désormais `str`, `int` et `float` par leur type avant les vérifications
+numpy et `numbers`, qui coûtaient davantage (400 → 80 ns), et 1 000 flottants s'écrivent comme
+avant (7,5–7,7 ms des deux côtés sur un classeur de 10 000 lignes) ; le tri de 1 000 lignes reste
+un peu plus lent (29,5–30,7 ms contre 29,0–29,7 ms, un `_CellContent` par cellule), 200 dates
+un peu plus rapides (111–114 contre 115–118 ms).
+
+Vérifié à chaque commit : pytest (1 431 tests, suite LibreOffice comprise), mypy, ruff ;
+`mutate_layers.py` (41) et `mutate_flags.py` (14 : les deux mutations des boucles de décalage et
+de renommage des graphiques n'en font plus qu'une, la boucle étant unique) entièrement attrapées,
+aucune périmée. Comportement : balayage de 250 vrais fichiers contre `claude/lxml-study`
+(écriture sur 150) à zéro partout — lecture, grille, écriture-relecture, parties recopiées,
+erreurs nouvelles (4 illisibles des deux côtés) ; `edit_parts.py` sans écart sur les 8
+fixtures (48 éditions) et sur les 614 fichiers du corpus de LibreOffice (3 366 éditions, 59 777
+parties identiques à l'octet, 24 erreurs identiques des deux côtés, un fichier au-delà de
+`--timeout 120`).
 
 ### À décider
 

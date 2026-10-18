@@ -99,6 +99,13 @@ underneath and those few names; DOCS.md, section 15, gives the 1.0 equivalent of
   what any other wrote, the style the cell shows with now, and a conditional number format
   against the cell's value now. `RowStyle`, `ColumnStyle` and `TableStyle` copied theirs the
   same way, and read their row's, column's or sheet's current style too.
+- **`Sheet.stylename` names the sheet's style as it is now**: it was a copy taken on loading,
+  which a write through `sheet.style` (`.tab_color`, `.visible`) left naming the style the sheet
+  had before. It reads the sheet's element, as `Sheet.size` reads the grid's extent; neither can
+  be assigned any more.
+- **A value no cell can hold raises before the cell changes**: `cell.value = [1, 2]` raised
+  `TypeError` once the cell had lost its value attributes, and a cell past the sheet had grown
+  it.
 - **A malformed address raises `ValueError` saying what is wrong**: `sheet["A0"]` read the cell in
   column A of the last row, `sheet["0"]` the last row, `sheet["A:B1"]` columns A and B, `sheet["1:B2"]` rows 1 and 2, and `sheet["A1:B"]` raised
   `TypeError`; an address that was none of the accepted forms raised `ValueError` without a
