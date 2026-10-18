@@ -1069,8 +1069,7 @@ class Cell:
         """
         if self.sheet is None or self.sheet.reader is None:
             return None
-        name = self._style_name()
-        return CellStyle(self.sheet.reader, name, value=self._value, cell=self)
+        return CellStyle(self.sheet.reader, self._style_name(), cell=self)
 
     @style.setter
     def style(self, other: "CellStyle | Cell | str | None") -> None:

@@ -1642,9 +1642,11 @@ class Sheet:
         - see `TableStyle`), or `None` if there's no owning `ODSReader`."""
         if self.reader is None:
             return None
-        name = self.table.get(_STYLE_NAME)
-        tag = self.reader._find_style(name, family="table") if name else None
-        return TableStyle(tag, sheet=self)
+        return TableStyle(sheet=self)
+
+    def _table_style_tag(self) -> "etree._Element | None":
+        """The `<style:style>` this sheet's `table:style-name` names now."""
+        return self.reader._find_style(self.table.get(_STYLE_NAME), family="table")
 
     def row_style(self, row: int) -> "RowStyle | None":
         """The resolved, writable `RowStyle` for logical row `row` (see
@@ -1652,10 +1654,12 @@ class Sheet:
         owning `ODSReader`."""
         if self.reader is None or row >= self.n_rows:
             return None
+        return RowStyle(sheet=self, row=row)
+
+    def _row_style_tag(self, row: int) -> "etree._Element | None":
+        """The `<style:style>` logical row `row`'s `table:style-name` names now."""
         row_tag = self.rows[row][0].cell.getparent()
-        name = row_tag.get(_STYLE_NAME)
-        tag = self.reader._find_style(name, family="table-row") if name else None
-        return RowStyle(tag, sheet=self, row=row)
+        return self.reader._find_style(row_tag.get(_STYLE_NAME), family="table-row")
 
     # what may hold `<table:table-column>` elements, and what comes after them
 
@@ -1724,14 +1728,19 @@ class Sheet:
         """The resolved, writable `ColumnStyle` for logical column `col`
         (see `ColumnStyle`), or `None` if no `<table:table-column>` covers
         it or there's no owning `ODSReader`."""
-        if self.reader is None:
+        if self.reader is None or self._find_column_tag(col) is None:
             return None
+        return ColumnStyle(sheet=self, col=col)
+
+    def _column_style_tag(self, col: int) -> "etree._Element | None":
+        """The `<style:style>` the `<table:table-column>` covering logical
+        column `col` names now, `None` if none covers it."""
         col_tag = self._find_column_tag(col)
-        if col_tag is None:
-            return None
-        name = col_tag.get(_STYLE_NAME)
-        tag = self.reader._find_style(name, family="table-column") if name else None
-        return ColumnStyle(tag, sheet=self, col=col)
+        return (
+            self.reader._find_style(col_tag.get(_STYLE_NAME), family="table-column")
+            if col_tag is not None
+            else None
+        )
 
     def _fork_style(
         self, current_name: "str | None", family: str, prefix: str, props_tag_name: str

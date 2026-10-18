@@ -8,8 +8,9 @@ Border, CellStyle, RowStyle, ColumnStyle, TableStyle."""
 
 import datetime as dt
 import re
+from collections.abc import Callable, Iterator
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Protocol, TypeVar, cast, overload
 
 from lxml import etree
 
@@ -583,12 +584,144 @@ def _border_to_raw(value: "Border | str | None") -> "str | None":
     raise TypeError(f"expected a Border, str, or None, got {type(value)!r}")
 
 
+_TEXT = "style:text-properties"
+_CELL = "style:table-cell-properties"
+_PARAGRAPH = "style:paragraph-properties"
+_ROW = "style:table-row-properties"
+_COLUMN = "style:table-column-properties"
+_TABLE = "style:table-properties"
+
+_Read = TypeVar("_Read")
+_Write = TypeVar("_Write")
+
+
+class _Style(Protocol):
+    """What a `_StyleProperty` reads and writes through: the raw text of an
+    attribute as the style resolves it now, and a write to the style its
+    owner gets a private copy of."""
+
+    def _resolve(self, element: str, attribute: str) -> "str | None": ...
+
+    def _write_attrs(self, element: str, attributes: "dict[str, str | None]") -> None: ...
+
+
+class _StyleProperty(Generic[_Read, _Write]):
+    """One property of a style, declared once: the properties element and
+    the attribute holding it, how the attribute's text reads, and what a
+    value writes back (`None` removes the attribute).
+
+    Until 1.0, a style view's `__init__` resolved every property into an
+    attribute of the object, and each setter wrote the XML and then that
+    copy. Two views of one style diverged as soon as one of them wrote: the
+    other kept reading what the style said when it was made. Read from the
+    XML on every access, a property has no state to keep in step. The price
+    is a walk of the inheritance chain per property read - stopping at the
+    nearest style that sets it - where the copy walked it once per view, for
+    every property, read or not: a view made for three properties costs about
+    twice what it did, one made per property (`cell.style.bold`) less."""
+
+    def __init__(
+        self,
+        element: str,
+        attribute: str,
+        read: "Callable[[str | None], _Read]",
+        write: "Callable[[_Write], str | None]",
+        doc: str,
+    ) -> None:
+        self.element = element
+        self.attribute = attribute
+        self._read = read
+        self._write = write
+        self.__doc__ = doc
+
+    @overload
+    def __get__(self, style: None, owner: type) -> "_StyleProperty[_Read, _Write]": ...
+
+    @overload
+    def __get__(self, style: _Style, owner: type) -> _Read: ...
+
+    def __get__(self, style: "_Style | None", owner: "type | None" = None) -> Any:
+        if style is None:
+            return self
+        return self._read(style._resolve(self.element, self.attribute))
+
+    def __set__(self, style: _Style, value: _Write) -> None:
+        style._write_attrs(self.element, {self.attribute: self._write(value)})
+
+
+def _same(raw: "str | None") -> "str | None":
+    return raw
+
+
+def _text(element: str, attribute: str, doc: str) -> "_StyleProperty[str | None, str | None]":
+    """A property whose value is the attribute's text, `None` when unset."""
+    return _StyleProperty(element, attribute, _same, _same, doc)
+
+
+def _flag(
+    element: str, attribute: str, on: str, off: str, doc: str, *, reads_on: "Callable[[str | None], bool]"
+) -> "_StyleProperty[bool, bool]":
+    """A property that is on or off: `on` or `off` written, `reads_on`
+    telling which the attribute's text is."""
+    return _StyleProperty(element, attribute, reads_on, lambda value: on if value else off, doc)
+
+
+def _equals(expected: str) -> "Callable[[str | None], bool]":
+    return lambda raw: raw == expected
+
+
+def _drawn(raw: "str | None") -> bool:
+    """Whether a line style - an underline's, a strikethrough's - draws one."""
+    return raw not in (None, "none")
+
+
+def _int_or_none(raw: "str | None") -> "int | None":
+    return int(raw) if raw is not None else None
+
+
+def _int_to_raw(value: "int | None") -> "str | None":
+    return None if value is None else str(int(value))
+
+
+def _diagonal(attribute: str, doc: str) -> "_StyleProperty[Border | None, Border | str | None]":
+    return _StyleProperty(_CELL, attribute, _make_border, _border_to_raw, doc)
+
+
+class _BorderSide:
+    """One side of a cell's border. The four are resolved as a unit (see
+    `CellStyle._borders`) and written as one (`CellStyle._write_border_sides`),
+    which a `_StyleProperty`, one attribute at a time, cannot do."""
+
+    def __init__(self, attribute: str, doc: str) -> None:
+        self.attribute = attribute
+        self.__doc__ = doc
+
+    @overload
+    def __get__(self, style: None, owner: type) -> "_BorderSide": ...
+
+    @overload
+    def __get__(self, style: "CellStyle", owner: type) -> "Border | None": ...
+
+    def __get__(self, style: "CellStyle | None", owner: "type | None" = None) -> Any:
+        if style is None:
+            return self
+        return style._borders()[self.attribute]
+
+    def __set__(self, style: "CellStyle", value: "Border | str | None") -> None:
+        style._write_border_sides({self.attribute: value})
+
+
 class CellStyle:
     """Resolved visual formatting and number format behind a cell's
     `table:style-name`. Walks the `style:parent-style-name` inheritance
     chain on read (the nearest style to the cell wins for whichever
     property it sets directly; a property no style in the chain sets is
     `None`). Look up a cell's style via `Cell.style`, not directly.
+
+    A view, not a copy: every property reads the document as it is now, so
+    two views of one cell's style - `a = cell.style`, `b = cell.style` -
+    agree after either writes, and a view of a cell reads the style the cell
+    shows with now, its value too for a conditional number format.
 
     Writable: setting a property (e.g. `cell.style.bold = True`) forks the
     cell its own private automatic style on first use (see
@@ -598,11 +731,11 @@ class CellStyle:
     string (`"0.5pt solid #000000"`), or `None` (explicitly no border on
     that side) - setting any one side re-writes all four explicitly on the
     forked style, carrying the other three over from what's currently
-    resolved (see `CellStyle` border resolution below), so they don't
-    silently fall back to unstyled. `diagonal_bl_tr`/`diagonal_tl_br` take
-    the same three forms, but `None` simply removes the override (falls
-    back to whatever's inherited) - pass the literal string `"none"` to
-    force no diagonal regardless of inheritance.
+    resolved (see `_borders`), so they don't silently fall back to
+    unstyled. `diagonal_bl_tr`/`diagonal_tl_br` take the same three forms,
+    but `None` simply removes the override (falls back to whatever's
+    inherited) - pass the literal string `"none"` to force no diagonal
+    regardless of inheritance.
 
     Not yet writable: `.conditions` (conditional formatting via
     `style:map`) and creating a brand new number format from scratch -
@@ -610,12 +743,6 @@ class CellStyle:
     its style name) already present in the document."""
 
     _BORDER_ATTRS = ("fo:border", "fo:border-top", "fo:border-bottom", "fo:border-left", "fo:border-right")
-    _BORDER_SIDE_ATTRS: ClassVar[dict[str, str]] = {
-        "border_top": "fo:border-top",
-        "border_bottom": "fo:border-bottom",
-        "border_left": "fo:border-left",
-        "border_right": "fo:border-right",
-    }
 
     def __init__(
         self,
@@ -624,286 +751,173 @@ class CellStyle:
         value: object = None,
         cell: "Cell | None" = None,
     ) -> None:
-        self.name = name
+        # a cell's view reads its style's name and its value off the cell, as
+        # they are now: `name` serves a view of no cell, and `value` one
+        # resolving its number format against a value about to be written
+        # (`Cell._resolved_number_format`)
         self._reader = reader
-        self._cell = cell
+        self._name = name
         self._value = value
-        chain = []
+        self._cell = cell
+
+    @property
+    def name(self) -> "str | None":
+        """The name of the style resolved: for a cell's, the one the cell
+        shows with now - its own, else its column's default cell style."""
+        return self._cell._style_name() if self._cell is not None else self._name
+
+    def _chain(self) -> "Iterator[etree._Element]":
+        """The styles this one resolves through, itself first, then each
+        `style:parent-style-name` in turn - a cycle, in a malformed file,
+        cut where it closes. Lazily: a property the nearest style sets
+        looks no parent up."""
         seen = set()
-        current = reader._find_style(name, family="table-cell")
+        current = self._reader._find_style(self.name, family="table-cell")
         while current is not None and current.get(_STYLE_NAME) not in seen:
             seen.add(current.get(_STYLE_NAME))
-            chain.append(current)
+            yield current
             parent = current.get(qn("style:parent-style-name"))
-            current = reader._find_style(parent, family="table-cell") if parent else None
+            current = self._reader._find_style(parent, family="table-cell") if parent else None
 
-        def prop(tag_name: str, attr: str) -> "str | None":
-            qualified = qn(attr)
-            for style in chain:
-                props = child(style, tag_name)
-                if props is not None and qualified in props.attrib:
-                    return cast(str, props.get(qualified))
-            return None
+    def _resolve(self, element: str, attribute: str) -> "str | None":
+        """The text of `attribute` on the `element` properties of the
+        nearest style of the chain setting it, `None` if none does."""
+        qualified = qn(attribute)
+        for style in self._chain():
+            props = child(style, element)
+            if props is not None and qualified in props.attrib:
+                return cast(str, props.get(qualified))
+        return None
 
-        self._bold = prop("style:text-properties", "fo:font-weight") == "bold"
-        self._italic = prop("style:text-properties", "fo:font-style") == "italic"
-        self._underline = prop("style:text-properties", "style:text-underline-style") not in (None, "none")
-        self._strikethrough = prop("style:text-properties", "style:text-line-through-style") not in (
-            None,
-            "none",
-        )
-        self._font_family = prop("style:text-properties", "style:font-name")
-        self._font_color = prop("style:text-properties", "fo:color")
-        self._font_size = prop("style:text-properties", "fo:font-size")
-        self._background_color = prop("style:table-cell-properties", "fo:background-color")
-        self._vertical_align = prop("style:table-cell-properties", "style:vertical-align")
-        self._horizontal_align = prop("style:paragraph-properties", "fo:text-align")
-        rotation = prop("style:table-cell-properties", "style:rotation-angle")
-        self._rotation = int(rotation) if rotation is not None else None
-        self._writing_mode = prop("style:table-cell-properties", "style:writing-mode")
-        self._wrap_text = prop("style:table-cell-properties", "fo:wrap-option") == "wrap"
-        self._shrink_to_fit = prop("style:table-cell-properties", "style:shrink-to-fit") == "true"
-        self._protection = prop("style:table-cell-properties", "style:cell-protect")
-        self._text_position = prop("style:text-properties", "style:text-position")
-        self._diagonal_bl_tr = _make_border(prop("style:table-cell-properties", "style:diagonal-bl-tr"))
-        self._diagonal_tl_br = _make_border(prop("style:table-cell-properties", "style:diagonal-tl-br"))
+    def _borders(self) -> "dict[str, Border | None]":
+        """The four sides of the border, by attribute (`"fo:border-top"`...).
 
-        # Borders are resolved as a unit from the nearest style that defines
-        # *any* border info (rather than merging per-side across inheritance
-        # levels): within that one style, a specific side (fo:border-top...)
-        # overrides the fo:border shorthand for that side, exactly as ODF
-        # itself resolves it within a single style declaration.
-        self._border_top = self._border_bottom = self._border_left = self._border_right = None
-        for style in chain:
-            cell_props = child(style, "style:table-cell-properties")
+        Borders are resolved as a unit from the nearest style that defines
+        *any* border info (rather than merging per-side across inheritance
+        levels): within that one style, a specific side (fo:border-top...)
+        overrides the fo:border shorthand for that side, exactly as ODF
+        itself resolves it within a single style declaration."""
+        sides = self._BORDER_ATTRS[1:]
+        for style in self._chain():
+            cell_props = child(style, _CELL)
             if cell_props is None or not any(qn(a) in cell_props.attrib for a in self._BORDER_ATTRS):
                 continue
             shorthand = cell_props.get(qn("fo:border"))
-            self._border_top = _make_border(cell_props.get(qn("fo:border-top"), shorthand))
-            self._border_bottom = _make_border(cell_props.get(qn("fo:border-bottom"), shorthand))
-            self._border_left = _make_border(cell_props.get(qn("fo:border-left"), shorthand))
-            self._border_right = _make_border(cell_props.get(qn("fo:border-right"), shorthand))
-            break
+            return {side: _make_border(cell_props.get(qn(side), shorthand)) for side in sides}
+        return dict.fromkeys(sides)
 
-        # raw, flattened property dicts as an escape hatch for anything not
-        # surfaced above - base style first, so a nearer style overrides it.
-        # Keyed with the specification's prefixes, whatever the file binds
-        # (`xmltree.attributes`)
-        self.cell_properties: dict[str, str] = {}
-        self.text_properties: dict[str, str] = {}
-        for style in reversed(chain):
-            cell_props = child(style, "style:table-cell-properties")
-            if cell_props is not None:
-                self.cell_properties.update(attributes(cell_props))
-            text_props = child(style, "style:text-properties")
-            if text_props is not None:
-                self.text_properties.update(attributes(text_props))
-
-        data_style = qn("style:data-style-name")
-        data_style_name = next((s.get(data_style) for s in chain if s.get(data_style)), None)
-        self._number_format = None
-        if data_style_name:
-            number_tag = reader._find_number_style(data_style_name)
-            if number_tag is not None:
-                base_format = NumberFormat(number_tag, reader=reader)
-                self._number_format = base_format.resolve(value) if value is not None else base_format
+    def _flattened(self, element: str) -> dict[str, str]:
+        """Every attribute of the `element` properties along the chain, the
+        nearest style's winning - keyed with the specification's prefixes,
+        whatever the file binds (`xmltree.attributes`)."""
+        flattened: dict[str, str] = {}
+        for style in reversed(list(self._chain())):
+            props = child(style, element)
+            if props is not None:
+                flattened.update(attributes(props))
+        return flattened
 
     def _require_cell(self) -> None:
         if self._cell is None:
             raise RuntimeError(f"style {self.name!r} has no owning Cell and cannot be written to")
 
-    def _write_attr(self, props_tag_name: str, attr: str, raw_value: "str | None") -> None:
-        """Set (or, if `raw_value` is `None`, remove) one attribute on this
-        cell's own automatic style."""
+    def _write_attrs(self, element: str, attributes: "dict[str, str | None]") -> None:
+        """Set each of `attributes` on the `element` properties of this
+        cell's own automatic style - removing one whose value is `None`."""
         self._require_cell()
         tag = self._cell._ensure_own_style()
-        if raw_value is None:
-            props = child(tag, props_tag_name)
-            if props is not None:
-                unset(props, qn(attr))
-            return
-        _ensure_style_child(tag, props_tag_name).set(qn(attr), raw_value)
+        props = child(tag, element)
+        for attribute, raw in attributes.items():
+            if raw is None:
+                if props is not None:
+                    unset(props, qn(attribute))
+            else:
+                if props is None:
+                    props = _ensure_style_child(tag, element)
+                props.set(qn(attribute), raw)
 
     def _write_border_sides(self, updates: "dict[str, Border | str | None]") -> None:
         """Set 1+ of the 4 border sides, carrying the other (currently
-        resolved) sides along explicitly - see the class docstring."""
+        resolved) sides along explicitly - see the class docstring. They are
+        read before the cell's style is forked: the fork merges its
+        ancestors attribute by attribute, where borders resolve as a unit."""
         self._require_cell()
+        sides = {**self._borders(), **updates}
         tag = self._cell._ensure_own_style()
-        values: dict[str, Border | str | None] = {
-            "border_top": self._border_top,
-            "border_bottom": self._border_bottom,
-            "border_left": self._border_left,
-            "border_right": self._border_right,
-        }
-        values.update(updates)
-        props = _ensure_style_child(tag, "style:table-cell-properties")
+        props = _ensure_style_child(tag, _CELL)
         unset(props, qn("fo:border"))
-        for key, value in values.items():
+        for side, value in sides.items():
             raw = _border_to_raw(value)
-            props.set(qn(self._BORDER_SIDE_ATTRS[key]), raw if raw is not None else "none")
-            setattr(self, f"_{key}", _make_border(raw))
+            props.set(qn(side), raw if raw is not None else "none")
 
-    @property
-    def bold(self) -> bool:
-        return self._bold
-
-    @bold.setter
-    def bold(self, value: bool) -> None:
-        self._write_attr("style:text-properties", "fo:font-weight", "bold" if value else "normal")
-        self._bold = bool(value)
-
-    @property
-    def italic(self) -> bool:
-        return self._italic
-
-    @italic.setter
-    def italic(self, value: bool) -> None:
-        self._write_attr("style:text-properties", "fo:font-style", "italic" if value else "normal")
-        self._italic = bool(value)
+    bold = _flag(_TEXT, "fo:font-weight", "bold", "normal", "Bold text.", reads_on=_equals("bold"))
+    italic = _flag(_TEXT, "fo:font-style", "italic", "normal", "Italic text.", reads_on=_equals("italic"))
+    strikethrough = _flag(
+        _TEXT,
+        "style:text-line-through-style",
+        "solid",
+        "none",
+        "Struck-through text: a solid line written, any line style but `none` read.",
+        reads_on=_drawn,
+    )
+    font_family = _text(_TEXT, "style:font-name", "The font, by its `style:font-face` name.")
+    font_color = _text(_TEXT, "fo:color", 'The text\'s color, `"#rrggbb"`.')
+    font_size = _text(_TEXT, "fo:font-size", 'The text\'s size, with its unit: `"10pt"`.')
+    text_position = _text(
+        _TEXT,
+        "style:text-position",
+        'Raised or lowered text: `"super 58%"`, `"sub 58%"` - see `superscript`/`subscript`.',
+    )
+    background_color = _text(_CELL, "fo:background-color", 'The cell\'s background, `"#rrggbb"`.')
+    vertical_align = _text(_CELL, "style:vertical-align", '`"top"`, `"middle"`, `"bottom"` or `"automatic"`.')
+    writing_mode = _text(_CELL, "style:writing-mode", 'The direction of the text: `"lr-tb"`, `"tb-rl"`...')
+    protection = _text(
+        _CELL, "style:cell-protect", '`"protected"`, `"none"`, `"formula-hidden"`... when the sheet is.'
+    )
+    horizontal_align = _text(_PARAGRAPH, "fo:text-align", '`"start"`, `"center"`, `"end"`, `"justify"`...')
+    rotation = _StyleProperty(
+        _CELL, "style:rotation-angle", _int_or_none, _int_to_raw, "The text's rotation, in degrees."
+    )
+    wrap_text = _flag(
+        _CELL, "fo:wrap-option", "wrap", "no-wrap", "Text wrapped within the cell.", reads_on=_equals("wrap")
+    )
+    shrink_to_fit = _flag(
+        _CELL,
+        "style:shrink-to-fit",
+        "true",
+        "false",
+        "Text shrunk to fit the cell.",
+        reads_on=_equals("true"),
+    )
+    diagonal_bl_tr = _diagonal("style:diagonal-bl-tr", "The diagonal line from bottom left to top right.")
+    diagonal_tl_br = _diagonal("style:diagonal-tl-br", "The diagonal line from top left to bottom right.")
+    border_top = _BorderSide("fo:border-top", "The top side of the border.")
+    border_bottom = _BorderSide("fo:border-bottom", "The bottom side of the border.")
+    border_left = _BorderSide("fo:border-left", "The left side of the border.")
+    border_right = _BorderSide("fo:border-right", "The right side of the border.")
 
     @property
     def underline(self) -> bool:
-        return self._underline
+        """Underlined text: written as a solid line in the text's color,
+        three attributes a `_StyleProperty` - one attribute - cannot set;
+        any line style but `none` reads as underlined."""
+        return _drawn(self._resolve(_TEXT, "style:text-underline-style"))
 
     @underline.setter
     def underline(self, value: bool) -> None:
-        self._require_cell()
-        tag = self._cell._ensure_own_style()
-        props = _ensure_style_child(tag, "style:text-properties")
-        if value:
-            props.set(qn("style:text-underline-style"), "solid")
-            props.set(qn("style:text-underline-width"), "auto")
-            props.set(qn("style:text-underline-color"), "font-color")
-        else:
-            props.set(qn("style:text-underline-style"), "none")
-            unset(props, qn("style:text-underline-width"))
-            unset(props, qn("style:text-underline-color"))
-        self._underline = bool(value)
-
-    @property
-    def strikethrough(self) -> bool:
-        return self._strikethrough
-
-    @strikethrough.setter
-    def strikethrough(self, value: bool) -> None:
-        self._write_attr(
-            "style:text-properties", "style:text-line-through-style", "solid" if value else "none"
+        self._write_attrs(
+            _TEXT,
+            {
+                "style:text-underline-style": "solid" if value else "none",
+                "style:text-underline-width": "auto" if value else None,
+                "style:text-underline-color": "font-color" if value else None,
+            },
         )
-        self._strikethrough = bool(value)
-
-    @property
-    def font_family(self) -> "str | None":
-        return self._font_family
-
-    @font_family.setter
-    def font_family(self, value: "str | None") -> None:
-        self._write_attr("style:text-properties", "style:font-name", value)
-        self._font_family = value
-
-    @property
-    def font_color(self) -> "str | None":
-        return self._font_color
-
-    @font_color.setter
-    def font_color(self, value: "str | None") -> None:
-        self._write_attr("style:text-properties", "fo:color", value)
-        self._font_color = value
-
-    @property
-    def font_size(self) -> "str | None":
-        return self._font_size
-
-    @font_size.setter
-    def font_size(self, value: "str | None") -> None:
-        self._write_attr("style:text-properties", "fo:font-size", value)
-        self._font_size = value
-
-    @property
-    def background_color(self) -> "str | None":
-        return self._background_color
-
-    @background_color.setter
-    def background_color(self, value: "str | None") -> None:
-        self._write_attr("style:table-cell-properties", "fo:background-color", value)
-        self._background_color = value
-
-    @property
-    def vertical_align(self) -> "str | None":
-        return self._vertical_align
-
-    @vertical_align.setter
-    def vertical_align(self, value: "str | None") -> None:
-        self._write_attr("style:table-cell-properties", "style:vertical-align", value)
-        self._vertical_align = value
-
-    @property
-    def horizontal_align(self) -> "str | None":
-        return self._horizontal_align
-
-    @horizontal_align.setter
-    def horizontal_align(self, value: "str | None") -> None:
-        self._write_attr("style:paragraph-properties", "fo:text-align", value)
-        self._horizontal_align = value
-
-    @property
-    def rotation(self) -> "int | None":
-        return self._rotation
-
-    @rotation.setter
-    def rotation(self, value: "int | None") -> None:
-        self._write_attr(
-            "style:table-cell-properties", "style:rotation-angle", None if value is None else str(int(value))
-        )
-        self._rotation = None if value is None else int(value)
-
-    @property
-    def writing_mode(self) -> "str | None":
-        return self._writing_mode
-
-    @writing_mode.setter
-    def writing_mode(self, value: "str | None") -> None:
-        self._write_attr("style:table-cell-properties", "style:writing-mode", value)
-        self._writing_mode = value
-
-    @property
-    def wrap_text(self) -> bool:
-        return self._wrap_text
-
-    @wrap_text.setter
-    def wrap_text(self, value: bool) -> None:
-        self._write_attr("style:table-cell-properties", "fo:wrap-option", "wrap" if value else "no-wrap")
-        self._wrap_text = bool(value)
-
-    @property
-    def shrink_to_fit(self) -> bool:
-        return self._shrink_to_fit
-
-    @shrink_to_fit.setter
-    def shrink_to_fit(self, value: bool) -> None:
-        self._write_attr("style:table-cell-properties", "style:shrink-to-fit", "true" if value else "false")
-        self._shrink_to_fit = bool(value)
-
-    @property
-    def protection(self) -> "str | None":
-        return self._protection
-
-    @protection.setter
-    def protection(self, value: "str | None") -> None:
-        self._write_attr("style:table-cell-properties", "style:cell-protect", value)
-        self._protection = value
-
-    @property
-    def text_position(self) -> "str | None":
-        return self._text_position
-
-    @text_position.setter
-    def text_position(self, value: "str | None") -> None:
-        self._write_attr("style:text-properties", "style:text-position", value)
-        self._text_position = value
 
     @property
     def superscript(self) -> bool:
-        return (self._text_position or "").startswith("super")
+        """Text raised as an exponent - `text_position` starting `super`."""
+        return (self.text_position or "").startswith("super")
 
     @superscript.setter
     def superscript(self, value: bool) -> None:
@@ -911,67 +925,40 @@ class CellStyle:
 
     @property
     def subscript(self) -> bool:
-        return (self._text_position or "").startswith("sub")
+        """Text lowered as an index - `text_position` starting `sub`."""
+        return (self.text_position or "").startswith("sub")
 
     @subscript.setter
     def subscript(self, value: bool) -> None:
         self.text_position = "sub 58%" if value else None
 
     @property
-    def diagonal_bl_tr(self) -> "Border | None":
-        return self._diagonal_bl_tr
-
-    @diagonal_bl_tr.setter
-    def diagonal_bl_tr(self, value: "Border | str | None") -> None:
-        raw = _border_to_raw(value)
-        self._write_attr("style:table-cell-properties", "style:diagonal-bl-tr", raw)
-        self._diagonal_bl_tr = _make_border(raw)
+    def cell_properties(self) -> dict[str, str]:
+        """Every attribute of `style:table-cell-properties`, flattened along
+        the chain - an escape hatch for what no property surfaces, keyed
+        `"fo:background-color"`. A copy: writing to it changes nothing."""
+        return self._flattened(_CELL)
 
     @property
-    def diagonal_tl_br(self) -> "Border | None":
-        return self._diagonal_tl_br
-
-    @diagonal_tl_br.setter
-    def diagonal_tl_br(self, value: "Border | str | None") -> None:
-        raw = _border_to_raw(value)
-        self._write_attr("style:table-cell-properties", "style:diagonal-tl-br", raw)
-        self._diagonal_tl_br = _make_border(raw)
-
-    @property
-    def border_top(self) -> "Border | None":
-        return self._border_top
-
-    @border_top.setter
-    def border_top(self, value: "Border | str | None") -> None:
-        self._write_border_sides({"border_top": value})
-
-    @property
-    def border_bottom(self) -> "Border | None":
-        return self._border_bottom
-
-    @border_bottom.setter
-    def border_bottom(self, value: "Border | str | None") -> None:
-        self._write_border_sides({"border_bottom": value})
-
-    @property
-    def border_left(self) -> "Border | None":
-        return self._border_left
-
-    @border_left.setter
-    def border_left(self, value: "Border | str | None") -> None:
-        self._write_border_sides({"border_left": value})
-
-    @property
-    def border_right(self) -> "Border | None":
-        return self._border_right
-
-    @border_right.setter
-    def border_right(self, value: "Border | str | None") -> None:
-        self._write_border_sides({"border_right": value})
+    def text_properties(self) -> dict[str, str]:
+        """Every attribute of `style:text-properties`, flattened like
+        `cell_properties`."""
+        return self._flattened(_TEXT)
 
     @property
     def number_format(self) -> "NumberFormat | None":
-        return self._number_format
+        """The `NumberFormat` the cell shows with, `None` if the chain names
+        none: a conditional one resolved against the cell's value (see
+        `NumberFormat.resolve`). Assign an existing `NumberFormat`, or its
+        name, to change it; `None` removes the cell's own."""
+        data_style = qn("style:data-style-name")
+        name = next((s.get(data_style) for s in self._chain() if s.get(data_style)), None)
+        tag = self._reader._find_number_style(name)
+        if tag is None:
+            return None
+        base = NumberFormat(tag, reader=self._reader)
+        value = self._value if self._value is not None or self._cell is None else self._cell._value
+        return base.resolve(value) if value is not None else base
 
     @number_format.setter
     def number_format(self, fmt: "NumberFormat | str | None") -> None:
@@ -979,7 +966,6 @@ class CellStyle:
         tag = self._cell._ensure_own_style()
         if fmt is None:
             unset(tag, qn("style:data-style-name"))
-            self._number_format = None
             self._cell._read_by_format()
             return
         if isinstance(fmt, NumberFormat):
@@ -988,11 +974,9 @@ class CellStyle:
             name = fmt
         else:
             raise TypeError(f"number_format must be a NumberFormat, str, or None, got {type(fmt)!r}")
-        number_tag = self._cell.sheet.reader._find_number_style(name)
-        if number_tag is None:
+        if self._cell.sheet.reader._find_number_style(name) is None:
             raise ValueError(f"no number format named {name!r} exists in this document")
         tag.set(qn("style:data-style-name"), cast(str, name))
-        self._number_format = NumberFormat(number_tag, reader=self._cell.sheet.reader)
         self._cell._read_by_format()
 
     def __repr__(self) -> str:
@@ -1002,7 +986,66 @@ class CellStyle:
         )
 
 
-class RowStyle:
+class _SheetPartStyle:
+    """What `RowStyle`, `ColumnStyle` and `TableStyle` share: one style
+    element, no inheritance chain. A view with an owner reads the style its
+    row, column or sheet points at now - a write through another view forks
+    it one of its own - and one without reads the element it was given."""
+
+    # what the error of a write with no owner names
+    _OWNER: ClassVar[str]
+
+    def __init__(self, tag: "etree._Element | None" = None, sheet: "Sheet | None" = None) -> None:
+        self._tag = tag
+        self._sheet = sheet
+
+    def _owned(self) -> bool:
+        return self._sheet is not None
+
+    def _current_tag(self) -> "etree._Element | None":
+        """The style the owner points at now."""
+        raise NotImplementedError
+
+    def _own_tag(self) -> etree._Element:
+        """The owner's own style, forked on first use."""
+        raise NotImplementedError
+
+    def _style_tag(self) -> "etree._Element | None":
+        return self._current_tag() if self._owned() else self._tag
+
+    @property
+    def name(self) -> "str | None":
+        """The name of the style, `None` for no style."""
+        tag = self._style_tag()
+        return tag.get(_STYLE_NAME) if tag is not None else None
+
+    def _resolve(self, element: str, attribute: str) -> "str | None":
+        tag = self._style_tag()
+        props = child(tag, element) if tag is not None else None
+        return props.get(qn(attribute)) if props is not None else None
+
+    def _write_attrs(self, element: str, attributes: "dict[str, str | None]") -> None:
+        """Set each of `attributes` on the owner's own style - removing one
+        whose value is `None`."""
+        if not self._owned():
+            raise RuntimeError(f"style {self.name!r} has no owning {self._OWNER} and cannot be written to")
+        props = _ensure_style_child(self._own_tag(), element)
+        for attribute, raw in attributes.items():
+            if raw is None:
+                unset(props, qn(attribute))
+            else:
+                props.set(qn(attribute), raw)
+
+
+def _visible(raw: "str | None") -> bool:
+    return raw in (None, "visible")
+
+
+def _visibility(value: bool) -> str:  # noqa: FBT001 - the value, not a flag
+    return "visible" if value else "collapse"
+
+
+class RowStyle(_SheetPartStyle):
     """Resolved `<style:style style:family="table-row">` behind a row's
     `table:style-name` - no inheritance chain (rows don't meaningfully use
     `style:parent-style-name` in practice). Look up via
@@ -1014,70 +1057,50 @@ class RowStyle:
     style already had (all 3 properties come from one single style tag,
     not a chain, so nothing here is resolved independently)."""
 
-    def __init__(
-        self, tag: "etree._Element | None", sheet: "Sheet | None" = None, row: "int | None" = None
-    ) -> None:
-        self._sheet = sheet
-        self._row = row
-        self.name = tag.get(_STYLE_NAME) if tag is not None else None
-        props = child(tag, "style:table-row-properties") if tag is not None else None
-        self._height = props.get(qn("style:row-height")) if props is not None else None
-        self._optimal_height = props is not None and props.get(qn("style:use-optimal-row-height")) == "true"
-        self._visible = props is None or props.get(qn("table:visibility"), "visible") == "visible"
+    _OWNER = "Sheet/row"
 
-    def _require_owner(self) -> None:
-        if self._sheet is None or self._row is None:
-            raise RuntimeError(f"style {self.name!r} has no owning Sheet/row and cannot be written to")
+    def __init__(
+        self, tag: "etree._Element | None" = None, sheet: "Sheet | None" = None, row: "int | None" = None
+    ) -> None:
+        super().__init__(tag, sheet)
+        self._row = row
+
+    def _owned(self) -> bool:
+        return self._sheet is not None and self._row is not None
+
+    def _current_tag(self) -> "etree._Element | None":
+        return self._sheet._row_style_tag(cast(int, self._row))
+
+    def _own_tag(self) -> etree._Element:
+        return self._sheet._ensure_row_style(cast(int, self._row))
+
+    optimal_height = _flag(
+        _ROW,
+        "style:use-optimal-row-height",
+        "true",
+        "false",
+        "The row's height follows its content.",
+        reads_on=_equals("true"),
+    )
+    visible = _StyleProperty(
+        _ROW, "table:visibility", _visible, _visibility, "The row is shown: hidden when `False`."
+    )
 
     @property
     def height(self) -> "str | None":
-        return self._height
+        """The row's height, with its unit: `"0.452cm"`. Setting it turns
+        `optimal_height` off, or the content would size the row again."""
+        return self._resolve(_ROW, "style:row-height")
 
     @height.setter
     def height(self, value: "str | None") -> None:
-        self._require_owner()
-        props = _ensure_style_child(
-            self._sheet._ensure_row_style(cast(int, self._row)), "style:table-row-properties"
-        )
-        if value is None:
-            unset(props, qn("style:row-height"))
-        else:
-            props.set(qn("style:row-height"), value)
-        props.set(qn("style:use-optimal-row-height"), "false")
-        self._height = value
-        self._optimal_height = False
-
-    @property
-    def optimal_height(self) -> bool:
-        return self._optimal_height
-
-    @optimal_height.setter
-    def optimal_height(self, value: bool) -> None:
-        self._require_owner()
-        props = _ensure_style_child(
-            self._sheet._ensure_row_style(cast(int, self._row)), "style:table-row-properties"
-        )
-        props.set(qn("style:use-optimal-row-height"), "true" if value else "false")
-        self._optimal_height = bool(value)
-
-    @property
-    def visible(self) -> bool:
-        return self._visible
-
-    @visible.setter
-    def visible(self, value: bool) -> None:
-        self._require_owner()
-        props = _ensure_style_child(
-            self._sheet._ensure_row_style(cast(int, self._row)), "style:table-row-properties"
-        )
-        props.set(qn("table:visibility"), "visible" if value else "collapse")
-        self._visible = bool(value)
+        self._write_attrs(_ROW, {"style:row-height": value, "style:use-optimal-row-height": "false"})
 
     def __repr__(self) -> str:
         return f"RowStyle(name={self.name!r}, height={self.height!r})"
 
 
-class ColumnStyle:
+class ColumnStyle(_SheetPartStyle):
     """Resolved `<style:style style:family="table-column">` behind a
     column's `table:style-name` - no inheritance chain. Look up via
     `Sheet.column_style(col)`, not directly.
@@ -1086,54 +1109,41 @@ class ColumnStyle:
     automatic style on first use (see `Sheet._ensure_column_style`),
     carrying over whatever the column's current style already had."""
 
+    _OWNER = "Sheet/column"
+
     def __init__(
-        self, tag: "etree._Element | None", sheet: "Sheet | None" = None, col: "int | None" = None
+        self, tag: "etree._Element | None" = None, sheet: "Sheet | None" = None, col: "int | None" = None
     ) -> None:
-        self._sheet = sheet
+        super().__init__(tag, sheet)
         self._col = col
-        self.name = tag.get(_STYLE_NAME) if tag is not None else None
-        props = child(tag, "style:table-column-properties") if tag is not None else None
-        self._width = props.get(qn("style:column-width")) if props is not None else None
-        self._visible = props is None or props.get(qn("table:visibility"), "visible") == "visible"
 
-    def _require_owner(self) -> None:
-        if self._sheet is None or self._col is None:
-            raise RuntimeError(f"style {self.name!r} has no owning Sheet/column and cannot be written to")
+    def _owned(self) -> bool:
+        return self._sheet is not None and self._col is not None
 
-    @property
-    def width(self) -> "str | None":
-        return self._width
+    def _current_tag(self) -> "etree._Element | None":
+        return self._sheet._column_style_tag(cast(int, self._col))
 
-    @width.setter
-    def width(self, value: "str | None") -> None:
-        self._require_owner()
-        props = _ensure_style_child(
-            self._sheet._ensure_column_style(cast(int, self._col)), "style:table-column-properties"
-        )
-        if value is None:
-            unset(props, qn("style:column-width"))
-        else:
-            props.set(qn("style:column-width"), value)
-        self._width = value
+    def _own_tag(self) -> etree._Element:
+        return self._sheet._ensure_column_style(cast(int, self._col))
 
-    @property
-    def visible(self) -> bool:
-        return self._visible
-
-    @visible.setter
-    def visible(self, value: bool) -> None:
-        self._require_owner()
-        props = _ensure_style_child(
-            self._sheet._ensure_column_style(cast(int, self._col)), "style:table-column-properties"
-        )
-        props.set(qn("table:visibility"), "visible" if value else "collapse")
-        self._visible = bool(value)
+    width = _text(_COLUMN, "style:column-width", 'The column\'s width, with its unit: `"2.258cm"`.')
+    visible = _StyleProperty(
+        _COLUMN, "table:visibility", _visible, _visibility, "The column is shown: hidden when `False`."
+    )
 
     def __repr__(self) -> str:
         return f"ColumnStyle(name={self.name!r}, width={self.width!r})"
 
 
-class TableStyle:
+def _displayed(raw: "str | None") -> bool:
+    return raw != "false"
+
+
+def _display(value: bool) -> str:  # noqa: FBT001 - the value, not a flag
+    return "true" if value else "false"
+
+
+class TableStyle(_SheetPartStyle):
     """Resolved `<style:style style:family="table">` behind a sheet's
     `table:style-name` - no inheritance chain. Look up via `Sheet.style`,
     not directly.
@@ -1143,41 +1153,18 @@ class TableStyle:
     `Sheet._ensure_table_style`), carrying over whatever the sheet's
     current style already had."""
 
-    def __init__(self, tag: "etree._Element | None", sheet: "Sheet | None" = None) -> None:
-        self._sheet = sheet
-        self.name = tag.get(_STYLE_NAME) if tag is not None else None
-        props = child(tag, "style:table-properties") if tag is not None else None
-        self._tab_color = props.get(qn("table:tab-color")) if props is not None else None
-        self._visible = props is None or props.get(qn("table:display"), "true") != "false"
+    _OWNER = "Sheet"
 
-    def _require_owner(self) -> None:
-        if self._sheet is None:
-            raise RuntimeError(f"style {self.name!r} has no owning Sheet and cannot be written to")
+    def _current_tag(self) -> "etree._Element | None":
+        return self._sheet._table_style_tag()
 
-    @property
-    def tab_color(self) -> "str | None":
-        return self._tab_color
+    def _own_tag(self) -> etree._Element:
+        return self._sheet._ensure_table_style()
 
-    @tab_color.setter
-    def tab_color(self, value: "str | None") -> None:
-        self._require_owner()
-        props = _ensure_style_child(self._sheet._ensure_table_style(), "style:table-properties")
-        if value is None:
-            unset(props, qn("table:tab-color"))
-        else:
-            props.set(qn("table:tab-color"), value)
-        self._tab_color = value
-
-    @property
-    def visible(self) -> bool:
-        return self._visible
-
-    @visible.setter
-    def visible(self, value: bool) -> None:
-        self._require_owner()
-        props = _ensure_style_child(self._sheet._ensure_table_style(), "style:table-properties")
-        props.set(qn("table:display"), "true" if value else "false")
-        self._visible = bool(value)
+    tab_color = _text(_TABLE, "table:tab-color", 'The color of the sheet\'s tab, `"#rrggbb"`.')
+    visible = _StyleProperty(
+        _TABLE, "table:display", _displayed, _display, "The sheet is shown: hidden when `False`."
+    )
 
     def __repr__(self) -> str:
         return f"TableStyle(name={self.name!r}, tab_color={self.tab_color!r})"

@@ -1145,6 +1145,11 @@ a column formatted as a whole; with neither, it returns a `CellStyle` with every
 `None`/`False`, which a write turns into a real one — carrying the column's formatting over.
 A `Border` has `.width`/`.style`/`.color`; ODF's literal `"none"` resolves to `None`.
 
+A `CellStyle` is a view of the document, not a copy of it: each property is read from the XML
+when asked for, so a style kept in a variable reads what another view wrote since, and follows
+the style the cell shows with now, its value too for a conditional format. The same goes for
+`RowStyle`, `ColumnStyle` and `TableStyle`.
+
 ### Writing cell styles
 
 Every property above (except `.conditions` on number formats, see below) is writable:

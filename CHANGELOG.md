@@ -91,6 +91,14 @@ underneath and those few names; DOCS.md, section 15, gives the 1.0 equivalent of
 
 ### Fixed
 
+- **Two views of one style no longer disagree.** `CellStyle` resolved every property when it was
+  made and kept a copy, which each setter updated after writing the XML: `a = cell.style;
+  b = cell.style; b.bold = True` left `a.bold` at `False`, and `a` kept naming the style the
+  cell had before `b` forked it its own. Each property is now read from the XML when asked for,
+  declared once - its element, its attribute, how it reads and how it writes - so a view reads
+  what any other wrote, the style the cell shows with now, and a conditional number format
+  against the cell's value now. `RowStyle`, `ColumnStyle` and `TableStyle` copied theirs the
+  same way, and read their row's, column's or sheet's current style too.
 - **A malformed address raises `ValueError` saying what is wrong**: `sheet["A0"]` read the cell in
   column A of the last row, `sheet["0"]` the last row, `sheet["A:B1"]` columns A and B, `sheet["1:B2"]` rows 1 and 2, and `sheet["A1:B"]` raised
   `TypeError`; an address that was none of the accepted forms raised `ValueError` without a
