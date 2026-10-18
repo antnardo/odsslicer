@@ -24,7 +24,8 @@ an example.
 """
 
 from odsslicer.addresses import string_address, string_to_col
-from odsslicer.cell import ArrayValues, Cell, Comment
+from odsslicer.cell import Cell
+from odsslicer.comment import Comment
 from odsslicer.constants import FORMATS
 from odsslicer.libreoffice import (
     LIBREOFFICE_COMMAND,
@@ -37,6 +38,7 @@ from odsslicer.numberformat import NumberFormat
 from odsslicer.package import EncryptedDocumentError, MalformedDocumentError
 from odsslicer.properties import DocumentProperties
 from odsslicer.reader import ODSReader
+from odsslicer.selection import ArrayValues
 from odsslicer.sheet import Sheet
 from odsslicer.styles import Border, CellStyle, ColumnStyle, RowStyle, TableStyle
 

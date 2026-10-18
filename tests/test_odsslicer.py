@@ -70,7 +70,7 @@ from odsslicer import (
 from odsslicer.addresses import _parse_address
 from odsslicer.columns import _column_default_cell_style
 from odsslicer.constants import TAG_CELL
-from odsslicer.styles import _render_number_from_format
+from odsslicer.display import _render_number_from_format
 from odsslicer.xmltree import qn
 
 

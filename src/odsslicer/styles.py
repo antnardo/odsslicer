@@ -8,22 +8,15 @@ views of the style elements behind a cell, a row, a column or a sheet, read
 and written through. The number formats a cell style names are
 `numberformat`'s."""
 
-import datetime as dt
 from collections.abc import Callable, Iterator
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Protocol, TypeVar, cast, overload
 
 from lxml import etree
 
-from odsslicer.datenames import _date_names
-from odsslicer.datetimes import _ONE_DAY, _as_datetime, _as_timedelta, _clock_parts
 from odsslicer.numberformat import (
-    _DATE_TIME_COMPONENT_NAMES,
-    _TIME_OF_DAY_COMPONENT_NAMES,
     NumberFormat,
-    _part,
 )
-from odsslicer.xmltree import attributes, child, elements, qn, text, unset
+from odsslicer.xmltree import attributes, child, qn, unset
 from odsslicer.xmlutils import _ensure_style_child
 
 if TYPE_CHECKING:
@@ -35,192 +28,6 @@ if TYPE_CHECKING:
 __all__ = ["Border", "CellStyle", "ColumnStyle", "RowStyle", "TableStyle"]
 
 _STYLE_NAME = qn("style:name")
-
-
-_DATE_TIME_RENDER_LONG = {
-    "day": lambda v: f"{v.day:02d}",
-    "month": lambda v: f"{v.month:02d}",
-    "year": lambda v: f"{v.year:04d}",
-    "hours": lambda v: f"{v.hour:02d}",
-    "minutes": lambda v: f"{v.minute:02d}",
-    "seconds": lambda v: f"{v.second:02d}",
-}
-_DATE_TIME_RENDER_SHORT = {
-    "day": lambda v: str(v.day),
-    "month": lambda v: str(v.month),
-    "year": lambda v: str(v.year % 100),
-    "hours": lambda v: str(v.hour),
-    "minutes": lambda v: str(v.minute),
-    "seconds": lambda v: str(v.second),
-}
-
-
-def _render_number_from_format(number_format: "NumberFormat | None", value: float) -> "str | None":
-    """Render `value` per `number_format`'s own real definition - decimal
-    places, thousands grouping, currency symbol - a genuine read of the
-    document's ODF format rather than a guess from another cell's
-    example (see `Cell._infer_number_display`). `None` if `number_format`
-    isn't a `"number"`/`"percentage"`/`"currency"` family.
-
-    Renders with a plain `.`/`,` (decimal/grouping) convention - the
-    document's actual locale isn't captured by `NumberFormat` - so this
-    is only ever tried as a fallback once no example cell is available to
-    learn the real locale-specific separators from. The rest of the text is
-    the format's own, in its order: the text around a percentage's sign or
-    a currency's symbol, where a space before either was taken for granted,
-    `50 %` for the `50%` of an en-US format (issue #17)."""
-    if number_format is None or number_format.family not in ("number", "percentage", "currency"):
-        return None
-    scale = 100 if number_format.family == "percentage" else 1
-    decimals = number_format.decimal_places or 0
-    rendered = f"{value * scale:,.{decimals}f}" if number_format.grouping else f"{value * scale:.{decimals}f}"
-    parts = []
-    for component in elements(number_format._tag):
-        if _part(component) == "number":
-            parts.append(rendered)
-        elif _part(component) in ("text", "currency-symbol"):
-            parts.append(text(component))
-    return "".join(parts) if rendered in parts else rendered
-
-
-def _render_date_time_from_format(
-    number_format: "NumberFormat | None",
-    value: "dt.date | dt.time | dt.timedelta",
-    family: str,
-) -> "str | None":
-    """Render `value` (a `datetime.date` or `datetime.datetime`, a
-    `datetime.time` or a `datetime.timedelta`) by walking the elements of
-    `number_format` - the ordered layout `.components` exposes on read. `None`
-    if `number_format` isn't a `family` format, has no `.components`, or uses
-    a component this doesn't know how to render (`week-of-year`/`quarter`/
-    `era`) - safer to fall back than to silently drop part of the layout.
-
-    As LibreOffice shows them: a date in a format with a time part reads
-    as its midnight, and a duration wraps around the clock in an ordinary
-    time format (128:45 shows as 08:45) but counts in full, sign included,
-    in an elapsed-time one (`[HH]:MM:SS`, flagged
-    `number:truncate-on-overflow="false"`). Days of the week and textual
-    months are named in the format's language, the document's if it gives
-    none (see `datenames`, issue #16); a language without names gives
-    `None`. Seconds show their decimals, in the locale's separator: rounded,
-    but never carried into the seconds - LibreOffice shows 59.996 as
-    `00:59.99` - except in an elapsed-time format, where the whole duration
-    rounds: `[HH]:MM:SS.00` shows it as `00:01:00.00`. Without decimals,
-    seconds are cut, never rounded."""
-    if number_format is None or number_format.family != family or not number_format.components:
-        return None
-    tag = number_format._tag
-    # `number:format-source="language"`: LibreOffice shows the system's own
-    # short date or date-time instead, whatever the elements - on macOS, the
-    # one set in its regional settings. Nothing here can render that.
-    if tag.get(qn("number:format-source")) == "language":
-        return None
-    children = [component for component in elements(tag) if _part(component) in _DATE_TIME_COMPONENT_NAMES]
-    kinds = {kind for component in children if (kind := _part(component)) is not None}
-    named = any(
-        _part(component) == "day-of-week"
-        or (_part(component) == "month" and component.get(qn("number:textual")) == "true")
-        for component in children
-    )
-    decimals = max(
-        (
-            int(component.get(qn("number:decimal-places"), "0"))
-            for component in children
-            if _part(component) == "seconds"
-        ),
-        default=0,
-    )
-    names = None
-    if named or decimals:
-        language = tag.get(qn("number:language"))
-        locale = (
-            (language, tag.get(qn("number:country")))
-            if language
-            else number_format._reader._catalog.document_locale()
-            if number_format._reader is not None
-            else (None, None)
-        )
-        names = _date_names(*locale)
-        if named and (names is None or not isinstance(value, dt.date)):
-            return None
-    sign, fields, fraction = "", cast(Any, value), 0
-    if isinstance(value, (dt.time, dt.timedelta)):
-        # a time of day too: an elapsed [MM]:SS format shows 02:05:03 as 125:03
-        delta = _as_timedelta(value)
-        if tag.get(qn("number:truncate-on-overflow")) == "false":
-            if decimals:
-                delta = _rounded(delta, decimals)
-            sign, fields = _elapsed_fields(delta, kinds)
-            fraction = abs(delta).microseconds
-        else:
-            fields = (dt.datetime.min + delta % _ONE_DAY).time()
-            fraction = fields.microsecond
-    elif isinstance(value, dt.date) and kinds & _TIME_OF_DAY_COMPONENT_NAMES:
-        fields = _as_datetime(value)
-        fraction = fields.microsecond
-    parts = []
-    for component in children:
-        kind, style = _part(component), component.get(qn("number:style"), "short")
-        if kind == "text":
-            parts.append(text(component))
-        elif kind == "am-pm":
-            parts.append("PM" if fields.hour >= 12 else "AM")
-        elif kind == "hours" and "am-pm" in kinds:  # 13:45 shows as 01:45 PM
-            hour = fields.hour % 12 or 12
-            parts.append(f"{hour:02d}" if style == "long" else str(hour))
-        elif kind == "day-of-week":
-            assert names is not None  # checked above, for a date
-            days = names.days if style == "long" else names.short_days
-            parts.append(days[(fields.weekday() + 1) % 7])  # Sunday first
-        elif kind == "month" and component.get(qn("number:textual")) == "true":
-            assert names is not None
-            if "day" in kinds:  # declined next to a day, in some languages
-                months = names.months_with_day if style == "long" else names.short_months_with_day
-            else:
-                months = names.months if style == "long" else names.short_months
-            parts.append(months[fields.month - 1])
-        elif kind in _DATE_TIME_RENDER_LONG:
-            renderer = _DATE_TIME_RENDER_LONG if style == "long" else _DATE_TIME_RENDER_SHORT
-            parts.append(renderer[kind](fields))
-            places = int(component.get(qn("number:decimal-places"), "0")) if kind == "seconds" else 0
-            if places:
-                separator = names.decimal if names is not None else "."
-                parts.append(separator + _fraction_digits(fraction, places))
-        else:
-            return None
-    return sign + "".join(parts)
-
-
-def _rounded(value: dt.timedelta, places: int) -> dt.timedelta:
-    """`value` rounded half up to `places` decimals of a second, carrying
-    over into the seconds, minutes and hours."""
-    unit = 10 ** (6 - places)
-    microseconds = abs(value) // dt.timedelta(microseconds=1)
-    rounded = (microseconds + unit // 2) // unit * unit
-    return dt.timedelta(microseconds=rounded if value >= dt.timedelta(0) else -rounded)
-
-
-def _fraction_digits(microseconds: int, places: int) -> str:
-    """The `places` digits of a fraction of a second, rounded half up - but
-    cut where rounding would carry into the seconds, which LibreOffice never
-    does in a clock format: 59.996 shows as 59.99."""
-    unit = 10 ** (6 - places)
-    digits = (microseconds + unit // 2) // unit
-    if digits == 10**places:
-        digits = microseconds // unit
-    return f"{digits:0{places}d}"
-
-
-def _elapsed_fields(value: dt.timedelta, kinds: set[str]) -> tuple[str, SimpleNamespace]:
-    """The sign of a duration, and its `.hour`/`.minute`/`.second` as an
-    elapsed-time format shows them: the leading unit - the hours, else the
-    minutes, else the seconds - holds the whole duration, however long."""
-    sign, hours, minutes, seconds, _ = _clock_parts(value)
-    if "hours" not in kinds:
-        hours, minutes = 0, minutes + 60 * hours
-        if "minutes" not in kinds:
-            minutes, seconds = 0, seconds + 60 * minutes
-    return sign, SimpleNamespace(hour=hours, minute=minutes, second=seconds)
 
 
 def _make_border(raw: "str | None") -> "Border | None":

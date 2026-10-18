@@ -141,7 +141,7 @@ class NumberFormat:
     """The `<number:*-style>` behind a cell's `style:data-style-name` - the
     document's own real display format (decimal places, currency symbol,
     date/time layout), as opposed to `odsslicer`'s own learn-by-example
-    heuristic used when *writing* a value (see `Cell._infer_*_display`).
+    heuristic used when *writing* a value (see `display._DisplayText`).
 
     A number style can be conditional (`<style:map style:condition="..."
     style:apply-style-name="...">`, e.g. currency amounts shown in red when

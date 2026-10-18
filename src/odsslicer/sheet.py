@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, cast
 from lxml import etree
 
 from odsslicer.addresses import _parse_address
-from odsslicer.cell import ArrayValues, Cell
+from odsslicer.cell import Cell
 from odsslicer.columns import _column_definition_at, _unrepeat_column_definition
 from odsslicer.constants import EMPTY_CELL
 from odsslicer.copying import _RangeCopy, _RangeSort
@@ -45,6 +45,7 @@ from odsslicer.growth import _Growth
 from odsslicer.loading import _GridLoader
 from odsslicer.merges import _Merges
 from odsslicer.pivots import _PivotFields, _PivotTables
+from odsslicer.selection import ArrayValues
 from odsslicer.structure import _StructureEdits
 from odsslicer.styles import ColumnStyle, RowStyle, TableStyle
 from odsslicer.unrolling import _Unroller

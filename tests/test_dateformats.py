@@ -12,7 +12,7 @@ from odsslicer.dateformats import (
     _default_format_code,
     _format_code_components,
 )
-from odsslicer.styles import _render_date_time_from_format
+from odsslicer.display import _render_date_time_from_format
 from odsslicer.xmltree import NAMESPACES
 
 _DMY = [("day", "long"), ("text", "/"), ("month", "long"), ("text", "/")]
