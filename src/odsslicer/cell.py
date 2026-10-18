@@ -38,7 +38,9 @@ from odsslicer.formulas import (
 from odsslicer.selection import ArrayValues
 from odsslicer.styles import CellStyle
 from odsslicer.values import (
+    _CALCEXT_VALUE_TYPE,
     _RAW_VALUE_ATTRIBUTES,
+    _STRING_VALUE,
     _VALUE,
     _VALUE_ATTRS,
     _VALUE_TYPE,
@@ -115,6 +117,17 @@ class Cell:
         else:
             paragraphs = list(cell.iterchildren(_TEXT_P))
             self.text = "\n".join([paragraph_text(p) for p in paragraphs]) if paragraphs else None
+        # A string cell may carry its value in `office:string-value` rather
+        # than in its paragraphs - a formula's cached result, what some
+        # producers write - and LibreOffice then shows that, over the
+        # paragraphs: so does odsslicer, value and text alike. But for an
+        # error: ODF has no such type, and LibreOffice writes a formula's
+        # error as an empty string marked `calcext:value-type="error"`,
+        # showing its paragraph, "Err:540".
+        if self.format == "string":
+            string_value = cell.get(_STRING_VALUE)
+            if string_value is not None and cell.get(_CALCEXT_VALUE_TYPE) != "error":
+                self.text = string_value
         # A value its declared type cannot be read from - a malformed date, a
         # type no reader knows (KeyError) - must not take the whole sheet
         # down with it: the cell reads as its displayed text instead, and

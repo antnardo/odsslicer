@@ -40,8 +40,11 @@ _DATE_VALUE = qn("office:date-value")
 _TIME_VALUE = qn("office:time-value")
 _BOOLEAN_VALUE = qn("office:boolean-value")
 _CALCEXT_VALUE_TYPE = qn("calcext:value-type")
-#: the attributes a value is written to, every one cleared before a write
-_VALUE_ATTRS = (_VALUE, _DATE_VALUE, _TIME_VALUE, _BOOLEAN_VALUE)
+_STRING_VALUE = qn("office:string-value")
+#: the attributes a value is written to, every one cleared before a write -
+#: a string's value among them: left behind, it would go on showing in
+#: LibreOffice over what was written
+_VALUE_ATTRS = (_VALUE, _DATE_VALUE, _TIME_VALUE, _BOOLEAN_VALUE, _STRING_VALUE)
 #: the attribute holding a value of each type - `office:value` for the others
 _RAW_VALUE_ATTRIBUTES: "dict[str | None, str]" = {
     "date": _DATE_VALUE,

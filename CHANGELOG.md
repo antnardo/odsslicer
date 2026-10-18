@@ -108,6 +108,16 @@ underneath and those few names; DOCS.md, section 15, gives the 1.0 equivalent of
 
 ### Fixed
 
+- **A string cell's `office:string-value` is read, and dropped when the cell is written.** ODF
+  lets a string cell carry its value in that attribute rather than in its paragraphs - a formula's
+  cached result, mostly - and LibreOffice shows the attribute over the paragraphs whenever it
+  does not recalculate. odsslicer read the paragraphs only, and writing a value or a formula left
+  the attribute in place: LibreOffice went on showing the old value over the new one. Found on a
+  pseudonymized gradebook whose cells read the pseudonym in odsslicer and the real name in
+  LibreOffice; a class list holds 18 formulas whose cached string disagrees with their paragraph.
+  `cell.value` and `cell.text` now give the attribute, and writing a value or a formula removes
+  it. A formula's error keeps reading as its paragraph (`Err:540`): ODF has no error type, and
+  LibreOffice writes one as an empty string value marked `calcext:value-type="error"`.
 - **Two views of one style no longer disagree.** `CellStyle` resolved every property when it was
   made and kept a copy, which each setter updated after writing the XML: `a = cell.style;
   b = cell.style; b.bold = True` left `a.bold` at `False`, and `a` kept naming the style the

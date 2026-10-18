@@ -873,6 +873,24 @@ def test_libreoffice_shows_a_rewritten_list_note_as_written(tmp_path, libreoffic
 
 
 @requires_soffice
+def test_libreoffice_shows_a_string_value_as_odsslicer_reads_it_and_drops_it_once_written(tmp_path):
+    cell = (
+        '<table:table-cell office:value-type="string" office:string-value="A">'
+        "<text:p>B</text:p></table:table-cell>"
+    )
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    path = ods_with_sheet(src_dir / "sv.ods", table_row(cell, cell))
+    assert libreoffice_shows(path, tmp_path) == [["A", "A"]]
+    reader = ODSReader(path)
+    sheet = reader.sheet("Sheet1")
+    assert [sheet["A1"].value, sheet["B1"].value] == ["A", "A"]
+    sheet["A1"].value = "C"
+    reader.save()
+    assert libreoffice_shows(path, tmp_path) == [["C", "A"]]
+
+
+@requires_soffice
 def test_libreoffice_shows_encoded_whitespace_as_odsslicer_reads_it(tmp_path):
     # issue #27: <text:s/>, <text:tab/> and <text:line-break/> were dropped
     path = encoded_whitespace_ods(tmp_path / "ws.ods")

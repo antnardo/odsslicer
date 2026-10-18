@@ -608,3 +608,44 @@ class TestHyperlink:
         reread = ODSReader(out).sheet("Sheet1")
         assert reread["C1"].value == "Anthropic"
         assert reread["C1"].hyperlink == "https://anthropic.com"
+
+
+_STRING_VALUE_CELL = (
+    '<table:table-cell office:value-type="string" office:string-value="A">'
+    "<text:p>B</text:p></table:table-cell>"
+)
+
+
+class TestStringValue:
+    """A string cell carrying its value in `office:string-value`, which
+    LibreOffice shows over the cell's paragraphs."""
+
+    def test_reading_gives_the_attribute_over_the_paragraph(self, tmp_path):
+        sheet = ODSReader(ods_with_sheet(tmp_path / "sv.ods", table_row(_STRING_VALUE_CELL))).sheet("Sheet1")
+        assert (sheet["A1"].value, sheet["A1"].text) == ("A", "A")
+
+    def test_a_formula_error_reads_as_libreoffice_shows_it(self, tmp_path):
+        # how LibreOffice writes a formula's error: an empty string value,
+        # marked as an error in its own namespace, the error in the paragraph
+        error = (
+            '<table:table-cell table:formula="of:=1/0" office:value-type="string" office:string-value=""'
+            ' calcext:value-type="error"><text:p>#DIV/0!</text:p></table:table-cell>'
+        )
+        sheet = ODSReader(ods_with_sheet(tmp_path / "err.ods", table_row(error))).sheet("Sheet1")
+        assert (sheet["A1"].value, sheet["A1"].text) == ("#DIV/0!", "#DIV/0!")
+
+    def test_writing_a_value_leaves_only_what_was_written(self, tmp_path):
+        r = ODSReader(ods_with_sheet(tmp_path / "sv.ods", table_row(_STRING_VALUE_CELL)))
+        r.sheet("Sheet1")["A1"].value = "C"
+        out = tmp_path / "out.ods"
+        r.save(out)
+        cell = saved_table(out).find("table:table-cell")
+        assert "office:string-value" not in cell.attrs
+        assert ODSReader(out).sheet("Sheet1")["A1"].value == "C"
+
+    def test_writing_a_formula_drops_the_attribute_too(self, tmp_path):
+        r = ODSReader(ods_with_sheet(tmp_path / "sv.ods", table_row(_STRING_VALUE_CELL)))
+        r.sheet("Sheet1")["A1"].formula = "=1+1"
+        out = tmp_path / "out.ods"
+        r.save(out)
+        assert "office:string-value" not in saved_table(out).find("table:table-cell").attrs
