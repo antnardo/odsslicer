@@ -496,28 +496,42 @@ def set_paragraph_text(paragraph: etree._Element, value: str) -> None:
         if i % 2 == 0:
             pending += piece
             continue
-        if piece == "\t":
-            element = new("text:tab")
-        else:
-            at_start = i == 1 and not pending
-            spaces = len(piece) if at_start else len(piece) - 1
-            if not at_start:
-                pending += " "
-            if spaces == 0:
-                continue
-            element = new("text:s")
-            if spaces > 1:
-                element.set(_C, str(spaces))
-        if pending:
-            if last is None:
-                paragraph.text = pending
-            else:
-                last.tail = pending
-            pending = ""
+        element, pending = _encoded_whitespace(piece, pending, at_start=i == 1 and not pending)
+        if element is None:
+            continue
+        _write_after(paragraph, last, pending)
+        pending = ""
         paragraph.append(element)
         last = element
-    if pending:
-        if last is None:
-            paragraph.text = pending
-        else:
-            last.tail = pending
+    _write_after(paragraph, last, pending)
+
+
+def _encoded_whitespace(piece: str, pending: str, *, at_start: bool) -> "tuple[etree._Element | None, str]":
+    """The element a run of whitespace `piece` of a paragraph is written as,
+    and the text written before it: a tab as `<text:tab/>`; a run of spaces
+    as one space - added to `pending` - and `<text:s/>` for the others, the
+    whole run as `<text:s/>` at the start (`at_start`). `None` for a single
+    space, which is text."""
+    if piece == "\t":
+        return new("text:tab"), pending
+    spaces = len(piece) if at_start else len(piece) - 1
+    if not at_start:
+        pending += " "
+    if spaces == 0:
+        return None, pending
+    element = new("text:s")
+    if spaces > 1:
+        element.set(_C, str(spaces))
+    return element, pending
+
+
+def _write_after(paragraph: etree._Element, last: "etree._Element | None", text: str) -> None:
+    """Write `text` in `paragraph` after `last`, its last element so far -
+    `last`'s tail, the paragraph's text if it has none yet. Nothing for no
+    text."""
+    if not text:
+        return
+    if last is None:
+        paragraph.text = text
+    else:
+        last.tail = text

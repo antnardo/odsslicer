@@ -76,8 +76,8 @@ MUTATIONS = [
     (
         "xmltree.set_paragraph_text writes the text after an element into the paragraph's",
         "xmltree.py",
-        "                last.tail = pending\n",
-        "                paragraph.text = (paragraph.text or '') + pending\n",
+        "        last.tail = text\n",
+        "        paragraph.text = (paragraph.text or '') + text\n",
     ),
     # lxml: text, search, names
     (

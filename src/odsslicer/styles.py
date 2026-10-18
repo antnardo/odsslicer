@@ -141,21 +141,21 @@ def _text(element: str, attribute: str, doc: str) -> "_StyleProperty[str | None,
     return _StyleProperty(element, attribute, _same, _same, doc)
 
 
-def _flag(
-    element: str, attribute: str, on: str, off: str, doc: str, *, reads_on: "Callable[[str | None], bool]"
-) -> "_StyleProperty[bool, bool]":
-    """A property that is on or off: `on` or `off` written, `reads_on`
-    telling which the attribute's text is."""
-    return _StyleProperty(element, attribute, reads_on, lambda value: on if value else off, doc)
-
-
-def _equals(expected: str) -> "Callable[[str | None], bool]":
-    return lambda raw: raw == expected
+def _flag(element: str, attribute: str, on: str, off: str, doc: str) -> "_StyleProperty[bool, bool]":
+    """A property that is on or off: `on` or `off` written, on when the
+    attribute's text is `on`."""
+    return _StyleProperty(element, attribute, lambda raw: raw == on, lambda value: on if value else off, doc)
 
 
 def _drawn(raw: "str | None") -> bool:
     """Whether a line style - an underline's, a strikethrough's - draws one."""
     return raw not in (None, "none")
+
+
+def _line(attribute: str, doc: str) -> "_StyleProperty[bool, bool]":
+    """A line drawn through or under the text: a solid one written, any
+    line style but `none` read as one (see `_drawn`)."""
+    return _StyleProperty(_TEXT, attribute, _drawn, lambda value: "solid" if value else "none", doc)
 
 
 def _int_or_none(raw: "str | None") -> "int | None":
@@ -333,15 +333,11 @@ class CellStyle:
             raw = _border_to_raw(value)
             props.set(qn(side), raw if raw is not None else "none")
 
-    bold = _flag(_TEXT, "fo:font-weight", "bold", "normal", "Bold text.", reads_on=_equals("bold"))
-    italic = _flag(_TEXT, "fo:font-style", "italic", "normal", "Italic text.", reads_on=_equals("italic"))
-    strikethrough = _flag(
-        _TEXT,
+    bold = _flag(_TEXT, "fo:font-weight", "bold", "normal", "Bold text.")
+    italic = _flag(_TEXT, "fo:font-style", "italic", "normal", "Italic text.")
+    strikethrough = _line(
         "style:text-line-through-style",
-        "solid",
-        "none",
         "Struck-through text: a solid line written, any line style but `none` read.",
-        reads_on=_drawn,
     )
     font_family = _text(_TEXT, "style:font-name", "The font, by its `style:font-face` name.")
     font_color = _text(_TEXT, "fo:color", 'The text\'s color, `"#rrggbb"`.')
@@ -361,17 +357,8 @@ class CellStyle:
     rotation = _StyleProperty(
         _CELL, "style:rotation-angle", _int_or_none, _int_to_raw, "The text's rotation, in degrees."
     )
-    wrap_text = _flag(
-        _CELL, "fo:wrap-option", "wrap", "no-wrap", "Text wrapped within the cell.", reads_on=_equals("wrap")
-    )
-    shrink_to_fit = _flag(
-        _CELL,
-        "style:shrink-to-fit",
-        "true",
-        "false",
-        "Text shrunk to fit the cell.",
-        reads_on=_equals("true"),
-    )
+    wrap_text = _flag(_CELL, "fo:wrap-option", "wrap", "no-wrap", "Text wrapped within the cell.")
+    shrink_to_fit = _flag(_CELL, "style:shrink-to-fit", "true", "false", "Text shrunk to fit the cell.")
     diagonal_bl_tr = _diagonal("style:diagonal-bl-tr", "The diagonal line from bottom left to top right.")
     diagonal_tl_br = _diagonal("style:diagonal-tl-br", "The diagonal line from top left to bottom right.")
     border_top = _BorderSide("fo:border-top", "The top side of the border.")
@@ -558,12 +545,7 @@ class RowStyle(_SheetPartStyle):
         return self._sheet._ensure_row_style(cast(int, self._row))
 
     optimal_height = _flag(
-        _ROW,
-        "style:use-optimal-row-height",
-        "true",
-        "false",
-        "The row's height follows its content.",
-        reads_on=_equals("true"),
+        _ROW, "style:use-optimal-row-height", "true", "false", "The row's height follows its content."
     )
     visible = _StyleProperty(
         _ROW, "table:visibility", _visible, _visibility, "The row is shown: hidden when `False`."
