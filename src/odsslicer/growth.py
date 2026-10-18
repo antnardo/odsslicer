@@ -10,6 +10,8 @@ anchored below the data, a formatted cell - stays where it was (issues #6,
 moves a chart anchored there. Both are the one question of what lies past
 the grid, and `_Growth` holds it; the edits of `structure` and the writes of
 `Cell` and `merges` grow the grid through `Sheet.grow_to`.
+
+Nothing here is public (`__all__` is empty): its API is `Sheet.grow_to`.
 """
 
 from typing import TYPE_CHECKING

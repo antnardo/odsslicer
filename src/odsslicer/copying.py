@@ -13,6 +13,9 @@ What a cell holds is a `_CellContent`, the record both read and write; it
 used to be a tuple of three, in two copies of the same comprehension.
 `Sheet.copy` and `Sheet.sort` keep their signatures and docstrings, and
 hand the work to `_RangeCopy` and `_RangeSort`.
+
+Nothing here is public (`__all__` is empty): its API is `Sheet.copy` and
+`Sheet.sort`.
 """
 
 import functools

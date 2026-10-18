@@ -31,11 +31,16 @@ as a `datetime.time` when it lies within a day, and as a `datetime.timedelta`
 otherwise (24 hours or more, or negative): every time value odsslicer could read
 before still reads the same, only those that used to raise come back as
 timedeltas. `_comparable` puts the types such a column mixes on a common scale.
+
+Nothing here is public (`__all__` is empty): a date or a time is read and
+written through `Cell.value`.
 """
 
 import datetime as dt
 import re
 from typing import Any
+
+__all__: list[str] = []
 
 _DATE_VALUE_RE = re.compile(
     r"(?P<year>-?\d{4,})-(?P<month>\d\d)-(?P<day>\d\d)"

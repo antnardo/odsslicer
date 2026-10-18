@@ -28,9 +28,14 @@ whose formats LibreOffice writes with another calendar or other digits
 The formats are written in LibreOffice's own format codes, with its English
 keywords, which the rest of odsslicer turns into the components of a
 `NumberFormat` (see `NumberFormat.create`).
+
+Nothing here is public (`__all__` is empty): the style catalog asks it for the
+format of a date written into a cell with no format.
 """
 
 import re
+
+__all__: list[str] = []
 
 # a date, a date-time, a time of day, by language-COUNTRY: generated from
 # LibreOffice 25.8 (`getStandardFormat` for each type and locale, its

@@ -10,6 +10,9 @@ obtained before the split keeps reading and writing its own position. That
 needs the grid itself - which rows share an element (`_run_in`), which
 `Cell` stands where - and nothing else of the sheet: `_Unroller` takes the
 sheet for its grid, and the cells it repoints.
+
+Nothing here is public (`__all__` is empty): its API is
+`Sheet.materialize_cell`.
 """
 
 from typing import TYPE_CHECKING, cast

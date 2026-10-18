@@ -12,6 +12,9 @@ datetime turns naive, in UTC; a time beyond a day reads back as a
 writes; it now asks here first, so that an unsupported value raises before
 anything is written, and keeps the order of the writes - a date's format
 before its displayed text, which depends on it.
+
+Nothing here is public (`__all__` is empty): what it decides is read and
+written through `Cell.value`.
 """
 
 import datetime as dt

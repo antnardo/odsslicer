@@ -21,6 +21,9 @@ and `styles` the second; both answer one question, which no other part of
 a cell asks. `_DisplayText` takes the cell for its value before the write
 (the first example), its element (where the search for others starts) and
 its number format; the renderers take a `NumberFormat` only.
+
+Nothing here is public (`__all__` is empty): what it writes is read back as
+`Cell.text`.
 """
 
 import datetime as dt

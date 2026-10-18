@@ -9,6 +9,9 @@ written; the whole definition is a `_PivotDefinition`, the record the
 element is built from. `Sheet` did all of it in one method of six
 parameters, reaching into the reader for the document's list of pivot
 tables.
+
+Nothing here is public (`__all__` is empty): its API is
+`Sheet.create_pivot_table`.
 """
 
 from dataclasses import dataclass

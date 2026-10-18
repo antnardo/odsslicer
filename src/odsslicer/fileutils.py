@@ -11,6 +11,9 @@ before the rename - otherwise a power cut could keep the rename but lose the
 data. `save()` writes that file itself, `recalculate()` has LibreOffice write
 it: the temporary file is handed out by name, and nobody holds it open while
 another program writes it.
+
+Nothing here is public (`__all__` is empty): `ODSReader.save` and
+`recalculate` use it.
 """
 
 import contextlib

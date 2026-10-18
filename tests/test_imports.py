@@ -71,3 +71,33 @@ def test_the_package_init_holds_no_logic():
         is_docstring = isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
         is_all = isinstance(node, ast.Assign) and [ast.unparse(t) for t in node.targets] == ["__all__"]
         assert is_docstring or is_all or isinstance(node, ast.ImportFrom), ast.unparse(node)[:60]
+
+
+def _declared_all(name):
+    """The names `name`'s `__all__` lists, read from the source; `None` if
+    it declares none."""
+    for node in ast.parse((PACKAGE / f"{name}.py").read_text()).body:
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        if [ast.unparse(t) for t in targets] == ["__all__"]:
+            return ast.literal_eval(node.value)
+    return None
+
+
+@pytest.mark.parametrize("name", [name for name in MODULES if name != "__init__"])
+def test_every_module_declares_its_public_names(name):
+    declared = _declared_all(name)
+    assert declared is not None, f"{name}.py declares no __all__"
+    assert not [public for public in declared if public.startswith("_")]
+
+
+def test_the_package_exports_every_modules_public_names():
+    # but xmltree's: its `qn` is imported from it, to search the escape hatches
+    exported = set(_declared_all("__init__"))
+    for name in MODULES:
+        if name not in ("__init__", "xmltree"):
+            assert set(_declared_all(name)) <= exported, name

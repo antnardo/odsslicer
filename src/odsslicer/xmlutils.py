@@ -7,6 +7,8 @@ from lxml import etree
 
 from odsslicer.xmltree import child, new
 
+__all__: list[str] = []
+
 
 def _encrypted_parts(manifest: bytes) -> set[str]:
     """The paths `manifest`, a `META-INF/manifest.xml`, declares encrypted:

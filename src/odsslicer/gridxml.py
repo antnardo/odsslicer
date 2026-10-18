@@ -16,6 +16,8 @@ functions that handle the rows a file holds below the grid
 
 Split out of `sheet.py` at 1.0's audit, verbatim but for the methods turned
 functions: none of them needed a `Sheet`.
+
+Nothing here is public (`__all__` is empty): the modules of the sheet call it.
 """
 
 import itertools

@@ -18,6 +18,8 @@ from odsslicer.xmltree import children, new, qn, remove, set_text, text
 if TYPE_CHECKING:
     from odsslicer.reader import ODSReader
 
+__all__ = ["DocumentProperties"]
+
 
 _META_NAME = qn("meta:name")
 _META_VALUE_TYPE = qn("meta:value-type")

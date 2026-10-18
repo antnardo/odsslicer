@@ -8,6 +8,8 @@ from collections.abc import Callable
 
 from odsslicer.addresses import string_address, string_to_col
 
+__all__: list[str] = []
+
 _FORMULA_LANGUAGE_PREFIX = re.compile(r"^[A-Za-z][\w.-]*:=")
 
 # A1-style cell reference, optionally with $ absolute markers on either part

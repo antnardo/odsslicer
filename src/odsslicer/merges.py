@@ -9,6 +9,9 @@ they cover. `Sheet` held it among a dozen others; `_Merges` needs of the
 sheet its grid, `grow_to` (a merge may reach past the grid) and
 `materialize_cell` (a cell about to be covered first gets an element of its
 own), both public, and the unrolling of a merge's master.
+
+Nothing here is public (`__all__` is empty): its API is `Sheet.merge`,
+`Sheet.unmerge` and the merge properties of `Cell`.
 """
 
 from typing import TYPE_CHECKING, Any

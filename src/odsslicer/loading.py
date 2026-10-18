@@ -21,6 +21,9 @@ and the sheet each `Cell` belongs to. The innermost loop, which builds a
 `Cell` per position and runs for every cell of every sheet opened, is kept
 as it was: it is the path a refactoring must not slow down
 (`benchmarks/time_open.py`).
+
+Nothing here is public (`__all__` is empty): its API is `Sheet.load`, which a
+`Sheet` runs when it is made.
 """
 
 import logging

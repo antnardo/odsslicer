@@ -17,6 +17,9 @@ format, the cell styles carrying it, and whether a number format counts time
 in full. A style it finds is looked up afresh every time: an index by name
 would be faster (B1, in ROADMAP.md, measured it) but a cache to keep in step
 with every write.
+
+Nothing here is public (`__all__` is empty): `ODSReader` holds the catalog,
+and every other module reaches it through the reader.
 """
 
 import re

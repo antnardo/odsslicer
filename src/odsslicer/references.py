@@ -9,6 +9,9 @@ and `ODSReader` those of a renaming, each with its own loop, and both handed
 the drawings to the reader. `_References` holds the two sweeps, and the check
 that comes before an edit: a chart that cannot be read must refuse the edit
 before anything moves.
+
+Nothing here is public (`__all__` is empty): the structural edits and
+`ODSReader.rename_sheet` make a `_References`.
 """
 
 from typing import TYPE_CHECKING

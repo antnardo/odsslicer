@@ -11,6 +11,9 @@ charts read before anything changes, merges undone or grown, elements
 unrolled before they are split, the references remapped once the grid is in
 its new shape. `Sheet` held the four edits as methods of up to 15 branches;
 `_StructureEdits` holds them as named steps.
+
+Nothing here is public (`__all__` is empty): its API is `Sheet`'s `insert_*`
+and `delete_*` methods.
 """
 
 from collections.abc import Iterable

@@ -19,11 +19,16 @@ table records a locale apart only where they differ: Austrian German's
 de-CH, `,` in de-DE - is LibreOffice's for each locale. A language the table
 lacks has no names: a date in a format naming days or months then shows in
 ISO 8601, as does a document with no language.
+
+Nothing here is public (`__all__` is empty): `display` reads it to render a
+date.
 """
 
 from dataclasses import dataclass
 
 from odsslicer.dateformats import _STANDARD_FORMATS
+
+__all__: list[str] = []
 
 # language -> the days of the week, Sunday first, in full and abbreviated;
 # the months in full and abbreviated; the same next to a day - "|"-separated

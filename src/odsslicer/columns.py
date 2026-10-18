@@ -10,6 +10,9 @@ methods of its own, next to the grid; a `Cell` asks one for its column's
 default cell style, and a style view for its column's style. These
 functions work on the `<table:table>` element alone, so that each of those
 can ask without a `Sheet`.
+
+Nothing here is public (`__all__` is empty): `Sheet`, `Cell`, the style views
+and the structural edits call it.
 """
 
 from collections.abc import Iterator

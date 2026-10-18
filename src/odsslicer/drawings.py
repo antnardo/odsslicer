@@ -11,6 +11,9 @@ them and rewrote them, alongside everything else it did, until 1.0's audit;
 needs: the elements of `content.xml` recording an address, looked for once.
 Remapping and renaming were two copies of one loop; they are one now,
 `_rewrite`, told what to do with an address.
+
+Nothing here is public (`__all__` is empty): `ODSReader` holds `_Drawings`,
+and `references` has it follow an edit.
 """
 
 from collections.abc import Callable
