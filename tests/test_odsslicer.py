@@ -68,6 +68,7 @@ from odsslicer import (
     xmltree,
 )
 from odsslicer.addresses import _parse_address
+from odsslicer.columns import _column_default_cell_style
 from odsslicer.constants import TAG_CELL
 from odsslicer.styles import _render_number_from_format
 from odsslicer.xmltree import qn
@@ -747,7 +748,7 @@ class TestNamesByNamespace:
             '<table:table-column table:default-cell-style-name="mine"/>' + table_row(text_cell("a"))
         )
         sheet = ODSReader(ods_with_sheet(tmp_path / "foreign.ods", xml)).sheet("Sheet1")
-        assert sheet._column_default_cell_style(0) == "mine"
+        assert _column_default_cell_style(sheet.table, 0) == "mine"
 
 
 # Every shape of cell element `load` decides on, as another application may
@@ -781,7 +782,7 @@ CELL_ELEMENTS = [
 
 @pytest.mark.parametrize("xml", CELL_ELEMENTS)
 def test_holds_content_reads_the_element_as_a_cell_reads_it(xml):
-    from odsslicer.sheet import _holds_content
+    from odsslicer.gridxml import _holds_content
 
     (element,) = _fragment(xml)
     cell = Cell(element)
@@ -3323,7 +3324,9 @@ def test_sorting_across_formatted_columns_compares_each_cell_with_its_column(
         [2.0, dt.date(2022, 3, 8)],
         [3.0, dt.date(2022, 3, 9)],
     ]
-    assert s["B2"].style_name == s._column_default_cell_style(1) != s._column_default_cell_style(0)
+    assert (
+        s["B2"].style_name == _column_default_cell_style(s.table, 1) != _column_default_cell_style(s.table, 0)
+    )
     assert s["B4"].style.bold
     assert [s[r, c].style_name for r, c in ((1, 0), (2, 0), (3, 0), (2, 1))] == [None] * 4
 

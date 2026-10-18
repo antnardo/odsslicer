@@ -184,10 +184,10 @@ MUTATIONS = [
         "        if False:\n",
         ["tests/test_odsslicer.py", "-k", "chart"],
     ),
-    # sheet.py: an element is its namespace and local name, not its local name alone
+    # gridxml.py, columns.py: an element is its namespace and local name, not its local name alone
     (
         "_sheet_rows takes a row of another namespace for a row",
-        "sheet.py",
+        "gridxml.py",
         "    for element in parent.iterchildren(*_ROW_LEVEL):\n        if element.tag == _ROW:\n",
         "    for element in parent.iterchildren(etree.Element):\n"
         '        if etree.QName(element).localname == "table-row":\n',
@@ -195,43 +195,43 @@ MUTATIONS = [
     ),
     (
         "_column_definitions takes a column of another namespace for a column",
-        "sheet.py",
-        "            if name == _COLUMN:\n",
-        '            if etree.QName(element).localname == "table-column":\n',
+        "columns.py",
+        "        if name == _COLUMN:\n",
+        '        if etree.QName(element).localname == "table-column":\n',
         NAMES,
     ),
     # the grid's guards read the element, and say what a `Cell` would say
     (
         "_holds_content forgets the value type",
-        "sheet.py",
+        "gridxml.py",
         "        cell_tag.get(_VALUE_TYPE) is not None\n        or ",
         "        ",
         READ_FROM_ELEMENT,
     ),
     (
         "_holds_content forgets office:value",
-        "sheet.py",
+        "gridxml.py",
         "        or cell_tag.get(_VALUE) is not None\n",
         "",
         READ_FROM_ELEMENT,
     ),
     (
         "_holds_content forgets the formula",
-        "sheet.py",
+        "gridxml.py",
         "        or cell_tag.get(_FORMULA) is not None\n",
         "",
         READ_FROM_ELEMENT,
     ),
     (
         "_holds_content forgets the note",
-        "sheet.py",
+        "gridxml.py",
         '_PARAGRAPH_OR_NOTE = (qn("text:p"), qn("office:annotation"))',
         '_PARAGRAPH_OR_NOTE = (qn("text:p"),)',
         READ_FROM_ELEMENT,
     ),
     (
         "_holds_content looks past the cell's children",
-        "sheet.py",
+        "gridxml.py",
         "next(cell_tag.iterchildren(*_PARAGRAPH_OR_NOTE), None)",
         "next(cell_tag.iterdescendants(*_PARAGRAPH_OR_NOTE), None)",
         READ_FROM_ELEMENT,
@@ -245,7 +245,7 @@ MUTATIONS = [
     ),
     (
         "load copies a repeated time value's first reading",
-        "sheet.py",
+        "loading.py",
         '                            if built.format != "time":\n',
         "                            if True:\n",
         COPIES,
@@ -259,38 +259,38 @@ MUTATIONS = [
     ),
     (
         "sort looks one column's default style up for every column",
-        "sheet.py",
-        "            return column_defaults[cell.col]\n",
-        "            return next(iter(column_defaults.values()))\n",
+        "copying.py",
+        "        return self._column_defaults[cell.col]\n",
+        "        return next(iter(self._column_defaults.values()))\n",
         ["tests/test_odsslicer.py", "-k", "sort"],
     ),
-    # sheet.py: next to a known element, never by index
+    # gridxml.py, growth.py, structure.py: next to a known element, never by index
     (
         "a row grown past the data placed by index",
-        "sheet.py",
+        "growth.py",
         "                insert_after(previous, new_row_tag)\n",
         "                " + _by_index("previous", "new_row_tag", after=True) + "\n",
         POSITIONAL,
     ),
     (
         "a chain of copies placed by index",
-        "sheet.py",
+        "gridxml.py",
         "        insert_after(reference, element)\n        reference = element\n",
         "        " + _by_index("reference", "element", after=True) + "\n        reference = element\n",
         POSITIONAL,
     ),
     (
         "inserted rows placed by index",
-        "sheet.py",
+        "structure.py",
         "                insert_before(before, row_tag)\n",
         "                " + _by_index("before", "row_tag", after=False) + "\n",
         POSITIONAL,
     ),
     (
         "inserted cells placed by index",
-        "sheet.py",
-        "                    insert_before(anchor, new_tag)\n",
-        "                    " + _by_index("anchor", "new_tag", after=False) + "\n",
+        "structure.py",
+        "                insert_before(anchor, new_tag)\n",
+        "                " + _by_index("anchor", "new_tag", after=False) + "\n",
         POSITIONAL,
     ),
 ]

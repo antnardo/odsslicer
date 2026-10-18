@@ -18,6 +18,7 @@ import numpy as np
 from lxml import etree
 
 from odsslicer.addresses import string_address
+from odsslicer.columns import _column_default_cell_style, _column_definitions
 from odsslicer.constants import EMPTY_CELL, FORMATS, TAG_CELL
 from odsslicer.datetimes import (
     _as_datetime,
@@ -732,7 +733,7 @@ class Cell:
                 for cell in tag.itersiblings(*_CELL_TAGS, preceding=True)
             )
             seen = 0
-            for definition in self.sheet._column_definitions(table):
+            for definition in _column_definitions(table):
                 seen += int(definition.get(_COLUMNS_REPEATED, "1"))
                 if col < seen:
                     name = definition.get(qn("table:default-cell-style-name"))
@@ -1084,7 +1085,7 @@ class Cell:
         own = self.cell.get(_STYLE_NAME)
         if own is not None or self.sheet is None:
             return own
-        return self.sheet._column_default_cell_style(self.col)
+        return _column_default_cell_style(self.sheet.table, self.col)
 
     def _ensure_own_style(self) -> etree._Element:
         """This cell's own, uniquely-owned automatic style tag - safe to
@@ -1149,7 +1150,7 @@ class Cell:
             return self
         if not self.is_covered or self.sheet is None:
             return None
-        return self.sheet._find_merge_master(self.row, self.col)
+        return self.sheet._merge_master(self.row, self.col)
 
     @property
     def merge_span(self) -> "tuple[int, int] | None":
